@@ -8,7 +8,6 @@ defmodule Codrift.Diff do
 
   defmodule Line do
     @moduledoc false
-    @typedoc "A single diff line. `type` is `:add`, `:remove`, or `:context`."
     defstruct [:type, :content]
   end
 
@@ -20,6 +19,24 @@ defmodule Codrift.Diff do
   defmodule FileDiff do
     @moduledoc false
     defstruct [:path, :old_path, :hunks, :additions, :deletions]
+  end
+
+  @doc "Serialises a `FileDiff` back to a unified diff patch string for display."
+  def to_unified(%FileDiff{} = f) do
+    header = "--- a/#{f.old_path}\n+++ b/#{f.path}"
+    hunks = Enum.map_join(f.hunks, "\n", &hunk_to_unified/1)
+    "#{header}\n#{hunks}"
+  end
+
+  defp hunk_to_unified(hunk) do
+    lines =
+      Enum.map_join(hunk.lines, "\n", fn
+        %{type: :add, content: c} -> "+" <> c
+        %{type: :remove, content: c} -> "-" <> c
+        %{type: :context, content: c} -> " " <> c
+      end)
+
+    "#{hunk.header}\n#{lines}"
   end
 
   def to_map(%FileDiff{} = f) do

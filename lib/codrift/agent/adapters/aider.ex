@@ -7,7 +7,13 @@ defmodule Codrift.Agent.Adapters.Aider do
   def cmd, do: System.find_executable("aider") || raise("aider not found in PATH")
 
   @impl true
+  def mode, do: :interactive
+
+  @impl true
   def args(_dir), do: ["--no-auto-commits"]
+
+  @impl true
+  def args_continue(dir), do: args(dir)
 
   @impl true
   def env(_dir), do: []

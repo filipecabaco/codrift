@@ -83,13 +83,6 @@ defmodule Codrift.MCP.Handler do
     end
   end
 
-  defp dir_diffs(dir) do
-    case Codrift.Diff.generate(dir) do
-      {:ok, files} -> Enum.map(files, &Codrift.Diff.to_map/1)
-      {:error, _} -> []
-    end
-  end
-
   defp call_tool("list_agents", _args) do
     agents =
       Enum.map(Codrift.AgentSupervisor.list_agents(), fn pid ->
@@ -140,7 +133,39 @@ defmodule Codrift.MCP.Handler do
     end
   end
 
+  defp call_tool("create_initiative", %{"name" => name} = args) do
+    dirs = Map.get(args, "dirs", [])
+
+    case Codrift.Initiative.Store.create(name, dirs) do
+      {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  defp call_tool("add_dir", %{"initiative_id" => id, "dir" => dir}) do
+    expanded = Path.expand(dir)
+
+    case Codrift.Initiative.Store.add_dir(id, expanded) do
+      {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
+      {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+    end
+  end
+
+  defp call_tool("delete_initiative", %{"initiative_id" => id}) do
+    case Codrift.Initiative.Store.delete(id) do
+      :ok -> {:ok, %{"deleted" => id}}
+      {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+    end
+  end
+
   defp call_tool(name, _args), do: {:error, "unknown tool: #{name}"}
+
+  defp dir_diffs(dir) do
+    case Codrift.Diff.generate(dir) do
+      {:ok, files} -> Enum.map(files, &Codrift.Diff.to_map/1)
+      {:error, _} -> []
+    end
+  end
 
   defp adapter_module("claude"), do: Codrift.Agent.Adapters.Claude
   defp adapter_module("aider"), do: Codrift.Agent.Adapters.Aider
@@ -168,6 +193,39 @@ defmodule Codrift.MCP.Handler do
         "name" => "list_initiatives",
         "description" => "List all initiatives",
         "inputSchema" => %{"type" => "object", "properties" => %{}}
+      },
+      %{
+        "name" => "create_initiative",
+        "description" => "Create a new initiative with an optional list of directories",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "name" => %{"type" => "string"},
+            "dirs" => %{"type" => "array", "items" => %{"type" => "string"}}
+          },
+          "required" => ["name"]
+        }
+      },
+      %{
+        "name" => "add_dir",
+        "description" => "Add a directory to an existing initiative (~ is expanded)",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "dir" => %{"type" => "string"}
+          },
+          "required" => ["initiative_id", "dir"]
+        }
+      },
+      %{
+        "name" => "delete_initiative",
+        "description" => "Delete an initiative by ID",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{"initiative_id" => %{"type" => "string"}},
+          "required" => ["initiative_id"]
+        }
       },
       %{
         "name" => "get_diff",

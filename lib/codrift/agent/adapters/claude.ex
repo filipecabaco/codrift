@@ -1,5 +1,11 @@
 defmodule Codrift.Agent.Adapters.Claude do
-  @moduledoc "Agent adapter for the Claude Code CLI (`claude`)."
+  @moduledoc """
+  Agent adapter for the Claude Code CLI (`claude`).
+
+  Uses `:once` mode: each user message spawns a fresh `claude --print`
+  process. Subsequent messages add `--continue` so Claude picks up the
+  conversation history stored in the working directory.
+  """
 
   @behaviour Codrift.Agent
 
@@ -7,7 +13,13 @@ defmodule Codrift.Agent.Adapters.Claude do
   def cmd, do: System.find_executable("claude") || raise("claude CLI not found in PATH")
 
   @impl true
-  def args(_dir), do: ["--no-update-check"]
+  def mode, do: :once
+
+  @impl true
+  def args(_dir), do: ["--print"]
+
+  @impl true
+  def args_continue(_dir), do: ["--print", "--continue"]
 
   @impl true
   def env(_dir), do: []

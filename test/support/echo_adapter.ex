@@ -6,7 +6,13 @@ defmodule Codrift.Test.EchoAdapter do
   def cmd, do: System.find_executable("cat") || "/bin/cat"
 
   @impl true
+  def mode, do: :interactive
+
+  @impl true
   def args(_dir), do: []
+
+  @impl true
+  def args_continue(dir), do: args(dir)
 
   @impl true
   def env(_dir), do: []

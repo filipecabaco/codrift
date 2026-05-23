@@ -61,12 +61,16 @@ Steps 5–8 are blocked until this is resolved.
 | 10 | MCP server | ✅ Done | HTTP+SSE transport, `mix codrift.mcp.install` |
 | 11 | Multi-agent per initiative | ✅ Done | Registry lookup + initiative filter |
 | — | Code quality | ✅ Done | Credo clean, `@doc`/`@moduledoc` throughout |
-| 5 | Pane data structure | ⬜ Pending TUI decision | Extend with `:terminal` pane type |
-| 6 | TUI render loop | 🚫 Blocked | Needs TUI library choice |
-| 7 | Command palette | 🚫 Blocked | Needs TUI layer |
-| 8 | Keybinding layer | 🚫 Blocked | Needs TUI layer |
-| 12 | Terminal pane (PTY) | ⬜ Next up | `ex_pty` + TerminalProcess GenServer |
-| 13 | SQLite memory (vector search) | ⬜ Next up | `ecto_sqlite3` + `sqlite-vec` |
+| 6 | TUI — ex_ratatui shell | ✅ Done | `mix codrift.tui`, sidebar + output + diff panes |
+| 7 | TUI — initiative management | ✅ Done | `n` new, `a` add-dir, `s` start-agent, `d` delete/stop (context), `Ctrl+P` palette |
+| — | MCP initiative tools | ✅ Done | `create_initiative`, `add_dir`, `delete_initiative` |
+| — | Multi-dir sidebar | ✅ Done | initiative → 📁 dir → agent hierarchy |
+| — | Tab 3: Initiative info | ✅ Done | git branch, last commit, agents per dir |
+| — | Claude `--print` fix | ✅ Done | `:once` mode — spawn per message, `--print --continue` |
+| 5 | Pane data structure | ⬜ Next | Add `:terminal` pane type once PTY widget exists |
+| 8 | Keybinding config layer | ⬜ Next | Config-file override, VS Code defaults |
+| 12 | Terminal pane (PTY) | ⬜ Next | `portable-pty` + `tui-term` NIF extension to ex_ratatui |
+| 13 | SQLite memory (vector search) | ⬜ Next | `ecto_sqlite3` + `sqlite-vec` |
 
 ---
 

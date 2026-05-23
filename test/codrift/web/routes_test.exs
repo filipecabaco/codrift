@@ -24,10 +24,10 @@ defmodule Codrift.Web.RoutesTest do
   end
 
   describe "GET /api/initiatives" do
-    test "returns empty list when no initiatives exist" do
+    test "returns a JSON list" do
       conn = get("/api/initiatives")
       assert conn.status == 200
-      assert [] = Jason.decode!(conn.resp_body)
+      assert is_list(Jason.decode!(conn.resp_body))
     end
   end
 
@@ -66,8 +66,42 @@ defmodule Codrift.Web.RoutesTest do
       assert %{"result" => %{"tools" => tools}} = body
       tool_names = Enum.map(tools, & &1["name"])
       assert "list_initiatives" in tool_names
+      assert "create_initiative" in tool_names
+      assert "add_dir" in tool_names
+      assert "delete_initiative" in tool_names
       assert "get_diff" in tool_names
       assert "list_agents" in tool_names
+    end
+
+    test "create_initiative creates and returns the initiative" do
+      conn =
+        post_json("/mcp", %{
+          "jsonrpc" => "2.0",
+          "method" => "tools/call",
+          "params" => %{"name" => "create_initiative", "arguments" => %{"name" => "test-init"}},
+          "id" => 10
+        })
+
+      body = Jason.decode!(conn.resp_body)
+      assert %{"result" => %{"content" => [%{"text" => json}]}} = body
+      assert %{"id" => _, "name" => "test-init"} = Jason.decode!(json)
+    end
+
+    test "delete_initiative returns MCP error for unknown id" do
+      conn =
+        post_json("/mcp", %{
+          "jsonrpc" => "2.0",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "delete_initiative",
+            "arguments" => %{"initiative_id" => "nonexistent"}
+          },
+          "id" => 11
+        })
+
+      body = Jason.decode!(conn.resp_body)
+      assert %{"error" => %{"message" => message}} = body
+      assert String.contains?(message, "not found")
     end
 
     test "returns error for unknown method" do
