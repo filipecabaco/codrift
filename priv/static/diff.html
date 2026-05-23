@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Codrift — Diff View</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+      font-size: 13px;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+    }
+
+    header h1 { font-size: 14px; font-weight: 600; color: #58a6ff; }
+
+    #controls { display: flex; gap: 8px; flex: 1; }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 4px 8px;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-family: inherit;
+      font-size: 12px;
+    }
+
+    button {
+      padding: 4px 12px;
+      background: #238636;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    button:hover { background: #2ea043; }
+
+    #status {
+      font-size: 11px;
+      color: #8b949e;
+      padding: 8px 16px;
+      border-bottom: 1px solid #30363d;
+      min-height: 28px;
+    }
+
+    #live-badge {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #3fb950;
+      margin-right: 6px;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    #diff-container { padding: 16px; }
+
+    .file-block {
+      margin-bottom: 16px;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .file-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      font-size: 12px;
+    }
+
+    .file-path { color: #58a6ff; }
+    .file-stats { color: #8b949e; }
+    .file-stats .add { color: #3fb950; }
+    .file-stats .del { color: #f85149; }
+
+    .hunk-header {
+      padding: 2px 12px;
+      background: #0d419d22;
+      color: #79c0ff;
+      font-size: 11px;
+    }
+
+    .diff-line {
+      display: flex;
+      white-space: pre;
+      line-height: 20px;
+    }
+
+    .diff-line.add { background: #0f4429; }
+    .diff-line.remove { background: #3b1219; }
+    .diff-line.context { background: transparent; }
+
+    .line-sign {
+      width: 16px;
+      flex-shrink: 0;
+      text-align: center;
+      user-select: none;
+      color: #8b949e;
+    }
+
+    .diff-line.add .line-sign { color: #3fb950; }
+    .diff-line.remove .line-sign { color: #f85149; }
+
+    .line-content { padding: 0 12px; flex: 1; overflow-x: auto; }
+
+    #live-log {
+      position: fixed;
+      bottom: 0; right: 0;
+      width: 420px;
+      max-height: 200px;
+      overflow-y: auto;
+      background: #161b22;
+      border-top: 1px solid #30363d;
+      border-left: 1px solid #30363d;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #8b949e;
+      display: none;
+    }
+
+    #live-log.active { display: block; }
+    #live-log .log-line { border-bottom: 1px solid #21262d; padding: 2px 0; }
+    #live-log .log-line.output { color: #e6edf3; }
+    #live-log .log-line.stopped { color: #f85149; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Codrift</h1>
+    <div id="controls">
+      <input type="text" id="initiative-id" placeholder="Initiative ID" />
+      <button onclick="loadDiff()">Load diff</button>
+      <button onclick="toggleLive()" id="live-btn">Watch live</button>
+    </div>
+  </header>
+
+  <div id="status">Enter an initiative ID and click Load diff.</div>
+  <div id="diff-container"></div>
+  <div id="live-log"></div>
+
+  <script>
+    let evtSource = null;
+
+    function loadDiff() {
+      const id = document.getElementById('initiative-id').value.trim();
+      if (!id) return;
+
+      setStatus('Loading diff for ' + id + '…');
+
+      fetch('/api/diff/' + encodeURIComponent(id))
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) { setStatus('Error: ' + data.error); return; }
+          renderDiff(data.diffs || []);
+          setStatus(
+            (data.diffs || []).length + ' file(s) changed — initiative ' + id
+          );
+        })
+        .catch(e => setStatus('Fetch failed: ' + e.message));
+    }
+
+    function renderDiff(diffs) {
+      const container = document.getElementById('diff-container');
+      container.innerHTML = '';
+
+      if (!diffs.length) {
+        container.innerHTML = '<p style="padding:16px;color:#8b949e">No changes.</p>';
+        return;
+      }
+
+      diffs.forEach(file => {
+        const block = document.createElement('div');
+        block.className = 'file-block';
+
+        const header = document.createElement('div');
+        header.className = 'file-header';
+        header.innerHTML =
+          '<span class="file-path">' + escHtml(file.path) + '</span>' +
+          '<span class="file-stats">' +
+            '<span class="add">+' + file.additions + '</span> ' +
+            '<span class="del">-' + file.deletions + '</span>' +
+          '</span>';
+        block.appendChild(header);
+
+        (file.hunks || []).forEach(hunk => {
+          const hh = document.createElement('div');
+          hh.className = 'hunk-header';
+          hh.textContent = hunk.header || '';
+          block.appendChild(hh);
+
+          (hunk.lines || []).forEach(line => {
+            const el = document.createElement('div');
+            el.className = 'diff-line ' + (line.type || 'context');
+
+            const sign = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ';
+            el.innerHTML =
+              '<span class="line-sign">' + sign + '</span>' +
+              '<span class="line-content">' + escHtml(line.content || '') + '</span>';
+            block.appendChild(el);
+          });
+        });
+
+        container.appendChild(block);
+      });
+    }
+
+    function toggleLive() {
+      const id = document.getElementById('initiative-id').value.trim();
+      if (!id) return;
+
+      if (evtSource) {
+        evtSource.close();
+        evtSource = null;
+        document.getElementById('live-btn').textContent = 'Watch live';
+        document.getElementById('live-log').classList.remove('active');
+        setStatus('Live updates stopped.');
+        return;
+      }
+
+      evtSource = new EventSource('/events/initiative/' + encodeURIComponent(id));
+      document.getElementById('live-log').classList.add('active');
+      document.getElementById('live-btn').textContent = 'Stop watching';
+
+      evtSource.addEventListener('connected', e => {
+        const d = JSON.parse(e.data);
+        setStatus(
+          '<span id="live-badge"></span>Live — ' +
+          d.agent_count + ' agent(s) streaming for ' + id
+        );
+      });
+
+      evtSource.addEventListener('output', e => {
+        const d = JSON.parse(e.data);
+        appendLog('output', '[' + d.agent_id.slice(0, 8) + '] ' + d.content);
+      });
+
+      evtSource.addEventListener('stopped', e => {
+        const d = JSON.parse(e.data);
+        appendLog('stopped', 'Agent ' + d.agent_id.slice(0, 8) + ' stopped (exit ' + d.exit_code + ')');
+        loadDiff();
+      });
+
+      evtSource.onerror = () => setStatus('SSE connection error — retrying…');
+    }
+
+    function appendLog(cls, text) {
+      const log = document.getElementById('live-log');
+      const line = document.createElement('div');
+      line.className = 'log-line ' + cls;
+      line.textContent = text;
+      log.appendChild(line);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function setStatus(html) {
+      document.getElementById('status').innerHTML = html;
+    }
+
+    function escHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    document.getElementById('initiative-id').addEventListener('keydown', e => {
+      if (e.key === 'Enter') loadDiff();
+    });
+  </script>
+</body>
+</html>

@@ -109,6 +109,6 @@ defmodule Codrift.AgentProcessTest do
 
     output = AgentProcess.recent_output(pid, 2_000)
     assert length(output) <= 1_000
-    assert length(output) > 0
+    assert output != []
   end
 end

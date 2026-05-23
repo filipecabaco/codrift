@@ -1,4 +1,6 @@
 defmodule Codrift.Agent.Adapters.Claude do
+  @moduledoc "Agent adapter for the Claude Code CLI (`claude`)."
+
   @behaviour Codrift.Agent
 
   @impl true

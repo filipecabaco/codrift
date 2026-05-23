@@ -12,6 +12,10 @@ defmodule Codrift.MixProject do
     ]
   end
 
+  def cli do
+    [preferred_envs: [check: :test]]
+  end
+
   def application do
     [mod: {Codrift, []}, extra_applications: [:logger]]
   end
@@ -21,7 +25,11 @@ defmodule Codrift.MixProject do
 
   defp deps do
     [
-      {:francis, "~> 0.2"}
+      {:francis, "~> 0.2"},
+      # Code quality
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false}
     ]
   end
 end

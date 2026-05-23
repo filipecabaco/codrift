@@ -1,4 +1,5 @@
 defmodule Codrift.Test.EchoAdapter do
+  @moduledoc false
   @behaviour Codrift.Agent
 
   @impl true

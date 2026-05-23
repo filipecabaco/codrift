@@ -1,4 +1,6 @@
 defmodule Codrift.Agent.Adapters.Aider do
+  @moduledoc "Agent adapter for the Aider CLI (`aider`)."
+
   @behaviour Codrift.Agent
 
   @impl true

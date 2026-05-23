@@ -1,15 +1,50 @@
 defmodule Codrift.Diff do
+  @moduledoc """
+  Pure module for generating and parsing git unified diffs.
+
+  Call `generate/2` to shell out to `git diff` and get a list of `FileDiff`
+  structs. Call `parse/1` to parse a raw patch string directly.
+  """
+
   defmodule Line do
+    @moduledoc false
+    @typedoc "A single diff line. `type` is `:add`, `:remove`, or `:context`."
     defstruct [:type, :content]
-    # type: :add | :remove | :context
   end
 
   defmodule Hunk do
+    @moduledoc false
     defstruct [:old_start, :old_count, :new_start, :new_count, :header, :lines]
   end
 
   defmodule FileDiff do
+    @moduledoc false
     defstruct [:path, :old_path, :hunks, :additions, :deletions]
+  end
+
+  def to_map(%FileDiff{} = f) do
+    %{
+      "path" => f.path,
+      "old_path" => f.old_path,
+      "additions" => f.additions,
+      "deletions" => f.deletions,
+      "hunks" => Enum.map(f.hunks, &hunk_to_map/1)
+    }
+  end
+
+  defp hunk_to_map(%Hunk{} = h) do
+    %{
+      "old_start" => h.old_start,
+      "old_count" => h.old_count,
+      "new_start" => h.new_start,
+      "new_count" => h.new_count,
+      "header" => h.header,
+      "lines" => Enum.map(h.lines, &line_to_map/1)
+    }
+  end
+
+  defp line_to_map(%Line{} = l) do
+    %{"type" => Atom.to_string(l.type), "content" => l.content}
   end
 
   @doc """
