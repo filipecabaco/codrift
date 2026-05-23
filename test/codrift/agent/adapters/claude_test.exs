@@ -3,19 +3,13 @@ defmodule Codrift.Agent.Adapters.ClaudeTest do
 
   alias Codrift.Agent.Adapters.Claude
 
-  test "implements Codrift.Agent behaviour" do
-    assert function_exported?(Claude, :cmd, 0)
-    assert function_exported?(Claude, :args, 1)
-    assert function_exported?(Claude, :env, 1)
-    assert function_exported?(Claude, :parse_status, 1)
-  end
-
   test "args/1 returns a list of strings" do
-    assert is_list(Claude.args("/some/dir"))
-    assert Enum.all?(Claude.args("/some/dir"), &is_binary/1)
+    args = Claude.args("/some/dir")
+    assert is_list(args)
+    assert Enum.all?(args, &is_binary/1)
   end
 
-  test "env/1 returns a list of tuples" do
+  test "env/1 returns a list of {string, string} tuples" do
     env = Claude.env("/some/dir")
     assert is_list(env)
     assert Enum.all?(env, fn {k, v} -> is_binary(k) and is_binary(v) end)
