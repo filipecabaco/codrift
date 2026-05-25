@@ -17,20 +17,30 @@ defmodule Codrift.Agent.Adapters.Claude do
   def mode, do: :pty
 
   @impl true
-  def args(_dir, opts) do
-    resume =
-      case opts[:session_id] do
-        nil -> []
-        id -> ["--resume", id]
-      end
+  def args(dir, opts) do
+    # Use --continue when a previous session exists for this directory.
+    # Claude stores sessions at ~/.claude/projects/<dir-encoded>/<uuid>.jsonl;
+    # we check for any .jsonl file rather than tracking IDs ourselves.
+    resume = if has_session?(dir), do: ["--continue"], else: []
 
     dir_arg =
       case opts[:context_dir] do
         nil -> []
-        dir -> ["--add-dir", dir]
+        ctx -> ["--add-dir", ctx]
       end
 
     resume ++ dir_arg
+  end
+
+  # Returns true when ~/.claude/projects/<encoded-dir>/ contains any .jsonl file.
+  defp has_session?(dir) do
+    project_name = String.replace(dir, "/", "-")
+    sessions_dir = Path.expand("~/.claude/projects/#{project_name}")
+
+    case File.ls(sessions_dir) do
+      {:ok, files} -> Enum.any?(files, &String.ends_with?(&1, ".jsonl"))
+      {:error, _} -> false
+    end
   end
 
   @impl true
