@@ -30,5 +30,8 @@ defmodule Codrift.Agent.Adapters.Terminal do
   def env(_dir), do: [{"TERM", "xterm-256color"}, {"COLORTERM", "truecolor"}]
 
   @impl true
-  def parse_status(_output), do: nil
+  # Any output from the shell means it's running and awaiting input.
+  # We can't reliably detect prompt vs running without knowing the user's
+  # PS1, so `:awaiting_input` on any output is the best we can do.
+  def parse_status(_output), do: :awaiting_input
 end

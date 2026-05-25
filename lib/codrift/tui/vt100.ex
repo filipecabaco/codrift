@@ -205,6 +205,19 @@ defmodule Codrift.TUI.VT100 do
       :binary.match(rest, <<0x1B, 0x5C>>) == :nomatch
   end
 
+  # DCS / PM / APC — all terminate with ST (\e\); cap at 1 KB
+  defp incomplete_esc?(<<"\eP", rest::binary>>) when byte_size(rest) < 1024 do
+    :binary.match(rest, <<0x1B, 0x5C>>) == :nomatch
+  end
+
+  defp incomplete_esc?(<<"\e^", rest::binary>>) when byte_size(rest) < 1024 do
+    :binary.match(rest, <<0x1B, 0x5C>>) == :nomatch
+  end
+
+  defp incomplete_esc?(<<"\e_", rest::binary>>) when byte_size(rest) < 1024 do
+    :binary.match(rest, <<0x1B, 0x5C>>) == :nomatch
+  end
+
   defp incomplete_esc?(_), do: false
 
   # ── Byte-level parser ─────────────────────────────────────────────────────
@@ -259,6 +272,21 @@ defmodule Codrift.TUI.VT100 do
     }
 
     process_bytes(reset, rest)
+  end
+
+  # DCS (\eP), PM (\e^), APC (\e_) — string sequences terminated by ST (\e\).
+  # Must be handled BEFORE the generic two-char skip or the body bytes are
+  # rendered as literal text on screen (the "weird chars" artifact).
+  defp process_bytes(screen, <<"\eP", rest::binary>>) do
+    rest |> skip_until_osc_end() |> then(&process_bytes(screen, &1))
+  end
+
+  defp process_bytes(screen, <<"\e^", rest::binary>>) do
+    rest |> skip_until_osc_end() |> then(&process_bytes(screen, &1))
+  end
+
+  defp process_bytes(screen, <<"\e_", rest::binary>>) do
+    rest |> skip_until_osc_end() |> then(&process_bytes(screen, &1))
   end
 
   # Unknown two-char ESC — skip
@@ -709,7 +737,21 @@ defmodule Codrift.TUI.VT100 do
   defp reduce_sgr([3 | rest], style), do: reduce_sgr(rest, add_mod(style, :italic))
   defp reduce_sgr([4 | rest], style), do: reduce_sgr(rest, add_mod(style, :underlined))
   defp reduce_sgr([9 | rest], style), do: reduce_sgr(rest, add_mod(style, :crossed_out))
+  # Attribute-off codes (SGR 21–29): remove individual modifiers.
+  # These are critical — Claude Code uses \e[24m to end hyperlink underlines
+  # rather than a full \e[0m reset, so without these the underline bleeds
+  # into all subsequent text ("weird chars" / underlined words).
+  defp reduce_sgr([21 | rest], style), do: reduce_sgr(rest, rem_mods(style, [:bold]))
   defp reduce_sgr([22 | rest], style), do: reduce_sgr(rest, rem_mods(style, [:bold, :dim]))
+  defp reduce_sgr([23 | rest], style), do: reduce_sgr(rest, rem_mods(style, [:italic]))
+  defp reduce_sgr([24 | rest], style), do: reduce_sgr(rest, rem_mods(style, [:underlined]))
+
+  defp reduce_sgr([25 | rest], style),
+    do: reduce_sgr(rest, rem_mods(style, [:slow_blink, :rapid_blink]))
+
+  defp reduce_sgr([27 | rest], style), do: reduce_sgr(rest, rem_mods(style, [:reversed]))
+  defp reduce_sgr([28 | rest], style), do: reduce_sgr(rest, rem_mods(style, [:hidden]))
+  defp reduce_sgr([29 | rest], style), do: reduce_sgr(rest, rem_mods(style, [:crossed_out]))
   defp reduce_sgr([39 | rest], style), do: reduce_sgr(rest, %{style | fg: nil})
   defp reduce_sgr([49 | rest], style), do: reduce_sgr(rest, %{style | bg: nil})
 
