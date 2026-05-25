@@ -18,9 +18,9 @@ defmodule Codrift.Agent.Adapters.Claude do
 
   @impl true
   def args(_dir, opts) do
-    case opts[:initiative_md_path] do
+    case opts[:context_dir] do
       nil -> []
-      path -> if File.exists?(path), do: ["--append-system-prompt-file", path], else: []
+      dir -> ["--add-dir", dir]
     end
   end
 
@@ -33,6 +33,8 @@ defmodule Codrift.Agent.Adapters.Claude do
   @impl true
   def parse_status(output) do
     cond do
+      # Claude Code's interactive prompt uses ❯ (U+276F) or > as the prompt char.
+      String.contains?(output, "❯") -> :awaiting_input
       String.contains?(output, "> ") -> :awaiting_input
       String.contains?(output, "Running") -> :running
       true -> nil

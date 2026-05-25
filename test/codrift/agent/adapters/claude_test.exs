@@ -7,8 +7,12 @@ defmodule Codrift.Agent.Adapters.ClaudeTest do
     assert :pty = Claude.mode()
   end
 
-  test "args/1 returns empty list (PTY interactive mode, no CLI flags needed)" do
-    assert [] = Claude.args("/some/dir")
+  test "args/2 returns empty list when no context_dir" do
+    assert [] = Claude.args("/some/dir", [])
+  end
+
+  test "args/2 returns --add-dir when context_dir present" do
+    assert ["--add-dir", "/ctx"] = Claude.args("/some/dir", context_dir: "/ctx")
   end
 
   test "args_continue/1 returns empty list (PTY keeps its own session)" do

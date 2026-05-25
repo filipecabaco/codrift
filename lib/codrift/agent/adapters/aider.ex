@@ -13,9 +13,10 @@ defmodule Codrift.Agent.Adapters.Aider do
   def args(_dir, opts) do
     base = ["--no-auto-commits"]
 
-    case opts[:initiative_md_path] do
+    case opts[:context_files] do
       nil -> base
-      path -> if File.exists?(path), do: base ++ ["--read", path], else: base
+      [] -> base
+      files -> base ++ Enum.flat_map(files, &["--read", &1])
     end
   end
 

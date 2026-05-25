@@ -9,10 +9,10 @@ defmodule Codrift.Test.EchoAdapter do
   def mode, do: :interactive
 
   @impl true
-  def args(_dir), do: []
+  def args(_dir, _opts), do: []
 
   @impl true
-  def args_continue(dir), do: args(dir)
+  def args_continue(_dir), do: []
 
   @impl true
   def env(_dir), do: []

@@ -70,7 +70,15 @@ defmodule Codrift.Initiative.Store do
   @impl true
   def init(opts) do
     path = Path.expand(Keyword.get(opts, :path, @default_path))
-    {:ok, %{initiatives: load(path), path: path}}
+    initiatives = load(path)
+    # Ensure CLAUDE.md symlinks exist for all previously-created initiatives
+    # (backfills anything created before this feature was added).
+    Enum.each(initiatives, fn {_id, initiative} ->
+      ctx = context_path(initiative.id)
+      if File.dir?(ctx), do: ensure_claude_md_symlink(ctx)
+    end)
+
+    {:ok, %{initiatives: initiatives, path: path}}
   end
 
   @impl true
@@ -165,6 +173,9 @@ defmodule Codrift.Initiative.Store do
   # Creates initiative.md on first run. If the file already exists (pre-seeded
   # context folder) the user-editable sections are untouched; only the managed
   # dirs block is refreshed.
+  #
+  # Also ensures a CLAUDE.md symlink → initiative.md exists so that Claude Code's
+  # `--add-dir` flag picks up the initiative context as project context.
   defp write_initiative_md(ctx_path, initiative) do
     md = Path.join(ctx_path, "initiative.md")
 
@@ -172,6 +183,19 @@ defmodule Codrift.Initiative.Store do
       update_initiative_md_dirs(initiative)
     else
       File.write!(md, initial_initiative_md(initiative))
+    end
+
+    ensure_claude_md_symlink(ctx_path)
+  end
+
+  # Creates CLAUDE.md as a symlink to initiative.md in `ctx_path` if absent.
+  # Uses a relative target so the symlink stays valid if the whole initiatives
+  # folder is moved.
+  defp ensure_claude_md_symlink(ctx_path) do
+    claude_md = Path.join(ctx_path, "CLAUDE.md")
+
+    unless File.exists?(claude_md) or match?({:ok, _}, File.read_link(claude_md)) do
+      File.ln_s!("initiative.md", claude_md)
     end
   end
 

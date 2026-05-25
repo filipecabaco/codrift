@@ -57,8 +57,14 @@ defmodule Codrift.TUI.Sidebar do
 
     files =
       case File.ls(path) do
-        {:ok, fs} -> fs |> Enum.reject(&String.starts_with?(&1, ".")) |> Enum.sort()
-        {:error, _} -> []
+        {:ok, fs} ->
+          fs
+          |> Enum.reject(&String.starts_with?(&1, "."))
+          |> Enum.reject(&(&1 == "CLAUDE.md"))
+          |> Enum.sort()
+
+        {:error, _} ->
+          []
       end
 
     header = {:context_dir, initiative_id, path, length(dir_agents)}

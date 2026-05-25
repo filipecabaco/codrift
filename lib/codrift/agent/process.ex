@@ -338,16 +338,32 @@ defmodule Codrift.AgentProcess do
   defp once_args(adapter, dir, false), do: adapter.args(dir, [])
   defp once_args(adapter, dir, true), do: adapter.args_continue(dir)
 
-  # Resolves the initiative.md path for the given initiative_id and returns
-  # context opts that adapters use to inject context at startup.
+  # Collects all non-hidden files in the initiative's context folder (excluding
+  # CLAUDE.md, which is a symlink handled via --add-dir) and returns context
+  # opts for adapters:
+  #
+  #   context_dir:   the context folder path (for --add-dir in Claude adapter)
+  #   context_files: list of absolute file paths (for --read in Aider, etc.)
   defp initiative_context_opts(initiative_id) do
-    path =
-      Path.join(
-        Codrift.Initiative.Store.context_path(initiative_id),
-        "initiative.md"
-      )
+    ctx_dir = Codrift.Initiative.Store.context_path(initiative_id)
 
-    if File.exists?(path), do: [initiative_md_path: path], else: []
+    base = if File.dir?(ctx_dir), do: [context_dir: ctx_dir], else: []
+
+    files =
+      case File.ls(ctx_dir) do
+        {:ok, names} ->
+          names
+          |> Enum.reject(&String.starts_with?(&1, "."))
+          |> Enum.reject(&(&1 == "CLAUDE.md"))
+          |> Enum.sort()
+          |> Enum.map(&Path.join(ctx_dir, &1))
+          |> Enum.filter(&File.regular?/1)
+
+        {:error, _} ->
+          []
+      end
+
+    if files == [], do: base, else: base ++ [context_files: files]
   end
 
   defp open_port(adapter, dir, args) do

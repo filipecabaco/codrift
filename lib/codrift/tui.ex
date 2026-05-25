@@ -545,8 +545,40 @@ defmodule Codrift.TUI do
   def handle_info({:restore_agent_size, agent_id, w, h}, state) do
     if agent_id == state.selected_agent_id do
       case AgentSupervisor.find_agent(agent_id) do
-        {:ok, pid} -> AgentProcess.resize(pid, w, h)
-        _ -> :ok
+        {:ok, pid} ->
+          AgentProcess.resize(pid, w, h)
+          # After the restore repaint completes, send \r to force Claude Code to
+          # redraw its input prompt.  This is the "special character" that puts
+          # the cursor at the input line.  Only fires when Claude is at the
+          # prompt (awaiting_input) — harmless no-op otherwise.
+          Process.send_after(self(), {:input_nudge, agent_id}, 100)
+
+        _ ->
+          :ok
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  # Sends \r to Claude Code when it's sitting at the ❯ prompt.
+  # This forces Ink to redraw the input line and positions the cursor correctly.
+  def handle_info({:input_nudge, agent_id}, state) do
+    if agent_id == state.selected_agent_id do
+      screen = Map.get(state.vt100_screens, agent_id)
+
+      if screen && screen.cursor_visible do
+        case AgentSupervisor.find_agent(agent_id) do
+          {:ok, pid} ->
+            status = AgentProcess.status(pid)
+
+            if status.status == :awaiting_input do
+              AgentProcess.send_raw(pid, "\r")
+            end
+
+          _ ->
+            :ok
+        end
       end
     end
 
@@ -1004,8 +1036,12 @@ defmodule Codrift.TUI do
           # Resize the PTY first so any subsequent output arrives at the correct
           # size. Use two-step (w-1 → w) to force Ink's full \e[2J repaint even
           # when dimensions would otherwise be unchanged.
+          # 150 ms gap: gives Claude Code time to finish initializing before the
+          # restore arrives (60 ms was too short for agents still in startup).
+          # A second nudge at 600 ms catches agents that start slowly.
           AgentProcess.resize(pid, max(w - 1, 1), h)
-          Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 60)
+          Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
+          Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
 
           existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
 
@@ -1042,17 +1078,7 @@ defmodule Codrift.TUI do
   defp start_agent_at_cursor(state, adapter) do
     case Enum.at(state.sidebar_entries, state.sidebar_cursor) do
       {:initiative, id, _, _, _, _} ->
-        case Store.get(id) do
-          {:ok, %{dirs: []}} ->
-            # No dirs configured — start at home dir (initiative root)
-            do_start_agent(state, id, Path.expand("~"), adapter)
-
-          {:ok, %{dirs: [dir | _]}} ->
-            do_start_agent(state, id, dir, adapter)
-
-          {:error, :not_found} ->
-            flash_status(state, "Initiative not found")
-        end
+        do_start_agent(state, id, Store.context_path(id), adapter)
 
       {:dir, initiative_id, dir, _} ->
         do_start_agent(state, initiative_id, dir, adapter)
@@ -1592,6 +1618,10 @@ defmodule Codrift.TUI do
   # Find the last full-screen clear anchor in a chunk list and return everything
   # from that chunk onwards.  \e[2J (ED 2) and \ec (RIS) are both "fresh screen"
   # signals — everything after them is a self-contained repaint.
+  #
+  # Returns [] when no clear is found so the caller starts with an empty VT100
+  # screen.  For a just-started agent the clear hasn't arrived yet; the two-step
+  # resize will trigger Claude's full \e[2J repaint which will fill the screen.
   defp chunks_from_last_clear(chunks) do
     clear_pattern = :binary.compile_pattern(["\e[2J", "\ec"])
 
@@ -1601,7 +1631,7 @@ defmodule Codrift.TUI do
       if :binary.match(chunk, clear_pattern) != :nomatch, do: idx, else: last
     end)
     |> case do
-      nil -> chunks
+      nil -> []
       idx -> Enum.drop(chunks, idx)
     end
   end

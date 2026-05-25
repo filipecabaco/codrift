@@ -760,7 +760,11 @@ defmodule Codrift.TUI.VT100 do
 
   # ── CSI parsing ───────────────────────────────────────────────────────────
 
-  defp parse_csi(<<"?", rest::binary>>) do
+  # Private CSI sequences use one of < = > ? (0x3C–0x3F) as the first
+  # parameter byte.  The `?` variants are the most common (DEC private modes);
+  # `<` and `>` appear in the Kitty keyboard protocol and XTVERSION queries.
+  # We parse them all the same way and route them to `apply_private_csi/3`.
+  defp parse_csi(<<prefix::8, rest::binary>>) when prefix in [??, ?<, ?=, ?>] do
     {param_bytes, after_params} = split_csi_numeric(rest, [])
 
     case after_params do
