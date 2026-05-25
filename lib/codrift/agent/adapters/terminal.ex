@@ -21,7 +21,7 @@ defmodule Codrift.Agent.Adapters.Terminal do
   def mode, do: :pty
 
   @impl true
-  def args(_dir), do: []
+  def args(_dir, _opts), do: []
 
   @impl true
   def args_continue(_dir), do: []

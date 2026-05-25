@@ -48,14 +48,23 @@ defmodule Codrift.Agent do
   @doc "Returns the invocation mode. See module docs for the three modes."
   @callback mode() :: :pty | :interactive | :once
 
-  @doc "Returns CLI arguments for the first invocation in the given directory."
-  @callback args(dir :: String.t()) :: [String.t()]
+  @doc """
+  Returns CLI arguments for the first invocation in the given directory.
+
+  `opts` may contain:
+  - `initiative_md_path: path` — absolute path to the initiative's `initiative.md`
+
+  Adapters that understand initiative context (Claude, Aider) should use this to
+  inject context at startup via their native mechanism (`--append-system-prompt`,
+  `--read`, etc.).
+  """
+  @callback args(dir :: String.t(), opts :: keyword()) :: [String.t()]
 
   @doc """
   Returns CLI arguments for continuation turns in `:once` mode.
 
-  Called for the second and subsequent messages instead of `args/1`.
-  Adapters in `:pty` / `:interactive` mode may return the same as `args/1`.
+  Called for the second and subsequent messages instead of `args/2`.
+  Adapters in `:pty` / `:interactive` mode may return the same as `args/2`.
   """
   @callback args_continue(dir :: String.t()) :: [String.t()]
 

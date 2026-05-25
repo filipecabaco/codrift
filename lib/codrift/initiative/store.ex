@@ -7,6 +7,13 @@ defmodule Codrift.Initiative.Store do
   write to a temporary directory).
 
   Pass `name: nil` to start an unnamed instance for test isolation.
+
+  ## Context folders
+
+  Each initiative gets a dedicated context folder at
+  `~/.codrift/initiatives/{id}/` where users can place project context files
+  (READMEs, ticket exports, documentation) to feed to AI agents. The folder
+  is created automatically on `create/2` and removed on `delete/1`.
   """
 
   use GenServer
@@ -15,6 +22,9 @@ defmodule Codrift.Initiative.Store do
 
   @default_path "~/.config/codrift/initiatives.json"
 
+  @doc "Returns the context folder path for an initiative (pure function, no GenServer call)."
+  def context_path(id), do: Path.expand("~/.codrift/initiatives/#{id}")
+
   @doc "Starts the store, optionally accepting `:name` and `:path` opts."
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -22,7 +32,7 @@ defmodule Codrift.Initiative.Store do
     GenServer.start_link(__MODULE__, opts, gen_opts)
   end
 
-  @doc "Creates a new initiative and persists it."
+  @doc "Creates a new initiative, creates its context folder, and persists it."
   def create(name, dirs \\ [], server \\ __MODULE__) do
     GenServer.call(server, {:create, name, dirs})
   end
@@ -47,9 +57,14 @@ defmodule Codrift.Initiative.Store do
     GenServer.call(server, {:remove_dir, id, dir})
   end
 
-  @doc "Deletes an initiative. Returns `{:error, :not_found}` if absent."
+  @doc "Deletes an initiative and removes its context folder. Returns `{:error, :not_found}` if absent."
   def delete(id, server \\ __MODULE__) do
     GenServer.call(server, {:delete, id})
+  end
+
+  @doc "Sets the lifecycle status of an initiative (:planning | :ongoing | :done | :archived)."
+  def set_status(id, status, server \\ __MODULE__) do
+    GenServer.call(server, {:set_status, id, status})
   end
 
   @impl true
@@ -61,6 +76,9 @@ defmodule Codrift.Initiative.Store do
   @impl true
   def handle_call({:create, name, dirs}, _from, state) do
     initiative = Initiative.new(name, dirs)
+    ctx = context_path(initiative.id)
+    File.mkdir_p!(ctx)
+    write_initiative_md(ctx, initiative)
     new_state = put_initiative(state, initiative)
     {:reply, {:ok, initiative}, new_state}
   end
@@ -82,11 +100,15 @@ defmodule Codrift.Initiative.Store do
   end
 
   def handle_call({:add_dir, id, dir}, _from, state) do
-    update_initiative(state, id, fn i -> %{i | dirs: Enum.uniq([dir | i.dirs])} end)
+    result = update_initiative(state, id, fn i -> %{i | dirs: Enum.uniq([dir | i.dirs])} end)
+    with {:reply, {:ok, initiative}, _} <- result, do: update_initiative_md_dirs(initiative)
+    result
   end
 
   def handle_call({:remove_dir, id, dir}, _from, state) do
-    update_initiative(state, id, fn i -> %{i | dirs: List.delete(i.dirs, dir)} end)
+    result = update_initiative(state, id, fn i -> %{i | dirs: List.delete(i.dirs, dir)} end)
+    with {:reply, {:ok, initiative}, _} <- result, do: update_initiative_md_dirs(initiative)
+    result
   end
 
   def handle_call({:delete, id}, _from, state) do
@@ -97,8 +119,13 @@ defmodule Codrift.Initiative.Store do
       {_, initiatives} ->
         new_state = %{state | initiatives: initiatives}
         persist(new_state)
+        safe_rm_context_dir!(context_path(id))
         {:reply, :ok, new_state}
     end
+  end
+
+  def handle_call({:set_status, id, status}, _from, state) do
+    update_initiative(state, id, fn i -> %{i | status: status} end)
   end
 
   defp put_initiative(state, initiative) do
@@ -117,6 +144,103 @@ defmodule Codrift.Initiative.Store do
       :error ->
         {:reply, {:error, :not_found}, state}
     end
+  end
+
+  # Deletes `path` only when it is a direct child of ~/.codrift/initiatives/.
+  # Prevents any possible path-traversal or misconfiguration from touching
+  # project directories that live outside our managed tree.
+  defp safe_rm_context_dir!(path) do
+    base = Path.expand("~/.codrift/initiatives")
+    expanded = Path.expand(path)
+
+    # Must be exactly one level below the base (no traversal, no deleting base itself)
+    unless Path.dirname(expanded) == base do
+      raise "Codrift safety: refusing to delete '#{expanded}' — " <>
+              "expected a direct child of #{base}"
+    end
+
+    File.rm_rf!(expanded)
+  end
+
+  # Creates initiative.md on first run. If the file already exists (pre-seeded
+  # context folder) the user-editable sections are untouched; only the managed
+  # dirs block is refreshed.
+  defp write_initiative_md(ctx_path, initiative) do
+    md = Path.join(ctx_path, "initiative.md")
+
+    if File.exists?(md) do
+      update_initiative_md_dirs(initiative)
+    else
+      File.write!(md, initial_initiative_md(initiative))
+    end
+  end
+
+  # Updates only the <!-- codrift:dirs:start/end --> block in an existing file,
+  # preserving all user-editable content (Goal, Context, Notes, etc.).
+  defp update_initiative_md_dirs(initiative) do
+    md = Path.join(context_path(initiative.id), "initiative.md")
+
+    case File.read(md) do
+      {:ok, content} ->
+        block = dirs_block(initiative.dirs)
+
+        updated =
+          if String.contains?(content, "<!-- codrift:dirs:start -->") do
+            Regex.replace(
+              ~r/<!-- codrift:dirs:start -->.*?<!-- codrift:dirs:end -->/s,
+              content,
+              block
+            )
+          else
+            content
+          end
+
+        File.write!(md, updated)
+
+      {:error, _} ->
+        :ok
+    end
+  end
+
+  defp initial_initiative_md(initiative) do
+    """
+    # #{initiative.name}
+
+    #{dirs_block(initiative.dirs)}
+
+    ## Goal
+
+    <!-- What does this initiative aim to achieve? -->
+
+    ## Context
+
+    <!-- Key background information, relevant links, prior decisions -->
+
+    ## Notes
+
+    <!-- Running notes, open questions, updates -->
+    """
+  end
+
+  defp dirs_block(dirs) do
+    body =
+      case dirs do
+        [] ->
+          "(no project directories configured yet — use 'a' in the TUI to add one)"
+
+        dirs ->
+          Enum.map_join(dirs, "\n", fn dir -> "- #{shorten_home(dir)}" end)
+      end
+
+    "<!-- codrift:dirs:start -->\n## Directories\n\n#{body}\n<!-- codrift:dirs:end -->"
+  end
+
+  defp shorten_home(path) do
+    home = Path.expand("~")
+
+    if String.starts_with?(path, home),
+      do: "~" <> String.slice(path, String.length(home)..-1//1),
+      else: path
   end
 
   defp persist(%{initiatives: initiatives, path: path}) do

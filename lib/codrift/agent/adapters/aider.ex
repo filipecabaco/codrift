@@ -10,10 +10,17 @@ defmodule Codrift.Agent.Adapters.Aider do
   def mode, do: :interactive
 
   @impl true
-  def args(_dir), do: ["--no-auto-commits"]
+  def args(_dir, opts) do
+    base = ["--no-auto-commits"]
+
+    case opts[:initiative_md_path] do
+      nil -> base
+      path -> if File.exists?(path), do: base ++ ["--read", path], else: base
+    end
+  end
 
   @impl true
-  def args_continue(dir), do: args(dir)
+  def args_continue(dir), do: args(dir, [])
 
   @impl true
   def env(_dir), do: []

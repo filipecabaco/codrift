@@ -17,7 +17,12 @@ defmodule Codrift.Agent.Adapters.Claude do
   def mode, do: :pty
 
   @impl true
-  def args(_dir), do: []
+  def args(_dir, opts) do
+    case opts[:initiative_md_path] do
+      nil -> []
+      path -> if File.exists?(path), do: ["--append-system-prompt-file", path], else: []
+    end
+  end
 
   @impl true
   def args_continue(_dir), do: []

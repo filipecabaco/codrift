@@ -158,6 +158,21 @@ defmodule Codrift.MCP.Handler do
     end
   end
 
+  defp call_tool("set_initiative_status", %{"initiative_id" => id, "status" => status_str}) do
+    valid = ~w(planning ongoing done archived)
+
+    if status_str not in valid do
+      {:error, "invalid status: #{status_str}. Must be one of: #{Enum.join(valid, ", ")}"}
+    else
+      status = String.to_existing_atom(status_str)
+
+      case Codrift.Initiative.Store.set_status(id, status) do
+        {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
+        {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+      end
+    end
+  end
+
   defp call_tool(name, _args), do: {:error, "unknown tool: #{name}"}
 
   defp dir_diffs(dir) do
@@ -225,6 +240,22 @@ defmodule Codrift.MCP.Handler do
           "type" => "object",
           "properties" => %{"initiative_id" => %{"type" => "string"}},
           "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "set_initiative_status",
+        "description" =>
+          "Set the lifecycle status of an initiative (planning, ongoing, done, archived)",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "status" => %{
+              "type" => "string",
+              "enum" => ["planning", "ongoing", "done", "archived"]
+            }
+          },
+          "required" => ["initiative_id", "status"]
         }
       },
       %{

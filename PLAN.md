@@ -75,6 +75,7 @@ Steps 5–8 are blocked until this is resolved.
 | 8 | Keybinding config layer | ⬜ Next | Config-file override |
 | 14 | Theme chooser | ⬜ Next | Named themes (Dracula, Nord, Solarized, Tokyo Night) set border colors, highlight colors, and CodeBlock syntax theme in one config entry |
 | 13 | SQLite + vector memory | ⬜ Next | `ecto_sqlite3` + `sqlite-vec` for semantic search over project context |
+| 17 | Git worktrees per initiative | ⬜ Next | For each git-enabled dir in an initiative, create a dedicated `git worktree` on an initiative-scoped branch. Agents operate inside their worktree — changes are isolated, concurrent, and mergeable. TUI gains worktree status (branch, dirty state) in sidebar. See *Upcoming: Git Worktrees* section. |
 
 ---
 
@@ -140,6 +141,41 @@ Persistent project memory with semantic search:
 - `sqlite-vec` extension for vector embeddings
 - Stores: conversation summaries, code snippets, file context, agent outputs
 - Retrieval: semantic similarity search on embeddings from a local/API model
+
+---
+
+## Upcoming: Git Worktrees per Initiative (Step 17)
+
+Each initiative can span multiple git-enabled dirs. Today all agents work on the
+same branch, so concurrent agent edits in the same repo can conflict. Worktrees
+solve this cleanly.
+
+**Flow:**
+1. When a dir is added to an initiative (or on first agent start), Codrift checks
+   `git -C <dir> rev-parse --is-inside-work-tree`.
+2. If it is a git repo, create (or reuse) a worktree:
+   ```
+   git -C <repo-root> worktree add <worktree-path> -b codrift/<initiative-slug>/<dir-slug>
+   ```
+   `<worktree-path>` lives under `~/.local/share/codrift/worktrees/<initiative-id>/<dir-slug>/`.
+3. `AgentProcess` is spawned with the worktree path as its working dir instead of
+   the original dir — agents see a full repo checkout on an isolated branch.
+4. `Codrift.Diff` reads diffs from the worktree path (already works; no change needed).
+5. TUI sidebar shows the worktree branch name + dirty indicator next to each dir entry.
+6. On initiative delete (or explicit "close worktree" action), Codrift runs
+   `git worktree remove --force <worktree-path>`.
+
+**New module: `Codrift.Worktree`** (pure, no process)
+- `ensure/2` — idempotently creates the worktree + branch, returns path
+- `remove/1` — removes worktree and deletes branch
+- `status/1` — returns `%{branch, dirty?, ahead, behind}` (shells `git status --short` + `git rev-list`)
+- `list_for_initiative/1` — returns all worktree paths owned by an initiative
+
+**Initiative.Store changes:** persist `%{worktree_path, branch}` per dir entry.
+
+**Concurrency benefit:** multiple agents on the same underlying repo each get their
+own branch + working tree → no checkout conflicts, diffs are clean per-initiative,
+and the user can PR/merge/discard each branch independently after a session.
 
 ---
 

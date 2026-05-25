@@ -25,6 +25,7 @@ defmodule Codrift.TUI.Modals do
   def render(%{modal: :new_dir} = state, frame), do: new_dir(state, frame)
   def render(%{modal: :confirm_delete} = state, frame), do: confirm_delete(state, frame)
   def render(%{modal: :palette} = state, frame), do: palette(state, frame)
+  def render(%{modal: :new_context_file} = state, frame), do: new_context_file(state, frame)
 
   @doc """
   Filters `actions` whose label contains `query` (case-insensitive).
@@ -121,6 +122,22 @@ defmodule Codrift.TUI.Modals do
     ]
   end
 
+  defp confirm_delete(%{modal_context: {:delete_context_file, _path, name}}, frame) do
+    rect = Layout.center_rect(frame, 52, 7)
+    inner = Layout.inset(rect, 1)
+
+    [
+      {%Clear{}, rect},
+      {bordered(rect, " Delete File ", :red), rect},
+      {%Paragraph{
+         text: "Delete \"#{name}\"?\n\nThis file will be permanently removed.",
+         style: %Style{fg: :white},
+         wrap: true
+       }, %{inner | height: 3}},
+      {hint("Enter: delete  Esc: cancel"), %{inner | y: inner.y + 4, height: 1}}
+    ]
+  end
+
   defp confirm_delete(%{modal_context: {:stop_agent, agent_id}}, frame) do
     rect = Layout.center_rect(frame, 52, 7)
     inner = Layout.inset(rect, 1)
@@ -159,6 +176,31 @@ defmodule Codrift.TUI.Modals do
          highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
          highlight_symbol: "▶ "
        }, %{inner | y: inner.y + 2, height: max(inner.height - 2, 1)}}
+    ]
+  end
+
+  defp new_context_file(state, frame) do
+    ctx_dir =
+      case state.modal_context do
+        {:new_context_file, path} -> path
+        _ -> "context folder"
+      end
+
+    rect = Layout.center_rect(frame, 60, 8)
+    inner = Layout.inset(rect, 1)
+
+    [
+      {%Clear{}, rect},
+      {bordered(rect, " New Context File ", :blue), rect},
+      {%Paragraph{
+         text: "Folder: #{ctx_dir}",
+         style: %Style{fg: :dark_gray}
+       }, %{inner | height: 1}},
+      {%Paragraph{text: "Filename:", style: %Style{fg: :white}},
+       %{inner | y: inner.y + 2, height: 1}},
+      {input(state.modal_input, "e.g. README.md  plan.md  context.txt"),
+       %{inner | y: inner.y + 3, height: 1}},
+      {hint("Enter: create  Esc: cancel"), %{inner | y: inner.y + 5, height: 1}}
     ]
   end
 

@@ -23,7 +23,9 @@ defmodule Codrift do
       Codrift.Initiative.Store,
       Codrift.AgentSupervisor,
       {Task.Supervisor, name: Codrift.TaskSupervisor},
-      {Bandit, [plug: __MODULE__] ++ Application.get_env(:codrift, :bandit_opts, [])}
+      {Bandit,
+       [plug: __MODULE__, startup_log: false] ++
+         Application.get_env(:codrift, :bandit_opts, [])}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Codrift.Supervisor)

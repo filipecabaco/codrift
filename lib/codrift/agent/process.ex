@@ -105,25 +105,24 @@ defmodule Codrift.AgentProcess do
       raw_line_buf: ""
     }
 
+    context_opts = initiative_context_opts(initiative_id)
+
     case mode do
       :pty ->
         env = dedup_env([{"TERM", "xterm-256color"} | adapter.env(dir)])
+        args = adapter.args(dir, context_opts)
 
-        pty_opts =
-          [
-            :pty,
-            :stdin,
-            {:stdout, self()},
-            :monitor,
-            {:cd, dir},
-            {:env, env}
-          ] ++ args_opts(adapter.args(dir))
+        # erlexec requires args to be passed as [executable | args] list rather
+        # than the {:args, [...]} option (which is invalid in PTY mode).
+        cmd = if args == [], do: adapter.cmd(), else: [adapter.cmd() | args]
 
-        {:ok, exec_pid, ospid} = :exec.run(adapter.cmd(), pty_opts)
+        pty_opts = [:pty, :stdin, {:stdout, self()}, :monitor, {:cd, dir}, {:env, env}]
+
+        {:ok, exec_pid, ospid} = :exec.run(cmd, pty_opts)
         {:ok, %{base | exec_pid: exec_pid, exec_ospid: ospid, status: :starting}}
 
       :interactive ->
-        port = open_port(adapter, dir, adapter.args(dir))
+        port = open_port(adapter, dir, adapter.args(dir, context_opts))
         {:ok, %{base | port: port, status: :starting}}
 
       :once ->
@@ -336,11 +335,20 @@ defmodule Codrift.AgentProcess do
     |> Enum.reverse()
   end
 
-  defp args_opts([]), do: []
-  defp args_opts(args), do: [{:args, args}]
-
-  defp once_args(adapter, dir, false), do: adapter.args(dir)
+  defp once_args(adapter, dir, false), do: adapter.args(dir, [])
   defp once_args(adapter, dir, true), do: adapter.args_continue(dir)
+
+  # Resolves the initiative.md path for the given initiative_id and returns
+  # context opts that adapters use to inject context at startup.
+  defp initiative_context_opts(initiative_id) do
+    path =
+      Path.join(
+        Codrift.Initiative.Store.context_path(initiative_id),
+        "initiative.md"
+      )
+
+    if File.exists?(path), do: [initiative_md_path: path], else: []
+  end
 
   defp open_port(adapter, dir, args) do
     env =
