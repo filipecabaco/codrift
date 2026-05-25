@@ -27,6 +27,7 @@ defmodule Codrift.MixProject do
     [
       {:francis, "~> 0.2"},
       {:ex_ratatui, "~> 0.10"},
+      {:erlexec, "~> 2.0"},
       # Code quality
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},

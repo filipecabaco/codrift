@@ -55,7 +55,7 @@ defmodule Codrift.TUI do
 
   alias Codrift.{AgentProcess, AgentSupervisor, Diff}
   alias Codrift.Initiative.Store
-  alias Codrift.TUI.{DirPicker, Modals, Sidebar, Styles}
+  alias Codrift.TUI.{DirPicker, Modals, Sidebar, Styles, VT100}
 
   @type modal :: :none | :new_name | :new_dir | :confirm_delete | :palette
   @type tab :: :context | :diff
@@ -67,6 +67,8 @@ defmodule Codrift.TUI do
     :selected_initiative_id,
     :selected_agent_id,
     :agent_outputs,
+    :vt100_screens,
+    :pane_size,
     :active_tab,
     :diff_files,
     :cursor_info,
@@ -79,13 +81,16 @@ defmodule Codrift.TUI do
     :dir_suggestion_cursor,
     :palette_cursor,
     :palette_filter,
-    :actions
+    :actions,
+    :input_buffer,
+    :selected_agent_mode
   ]
 
   @actions [
     %{id: :new_initiative, label: "New Initiative", hint: "n"},
     %{id: :add_dir, label: "Add Directory", hint: "a"},
     %{id: :start_claude, label: "Start Claude Agent", hint: "s"},
+    %{id: :start_terminal, label: "Open Terminal Here", hint: "t"},
     %{id: :start_aider, label: "Start Aider Agent", hint: ""},
     %{id: :delete_current, label: "Delete / Stop Current", hint: "d"},
     %{id: :refresh, label: "Refresh", hint: "r"}
@@ -96,6 +101,10 @@ defmodule Codrift.TUI do
     initiatives = Store.list()
     agents = Enum.map(AgentSupervisor.list_agents(), &AgentProcess.status/1)
 
+    {term_w, term_h} = ExRatatui.terminal_size()
+    pane_cols = max(div(term_w * 70, 100) - 2, 40)
+    pane_rows = max(term_h - 4, 10)
+
     {:ok,
      %__MODULE__{
        focus: Focus.new([:sidebar, :main]),
@@ -104,12 +113,14 @@ defmodule Codrift.TUI do
        selected_initiative_id: nil,
        selected_agent_id: nil,
        agent_outputs: %{},
+       vt100_screens: %{},
+       pane_size: {pane_cols, pane_rows},
        active_tab: :context,
        diff_files: [],
        cursor_info: nil,
        main_scroll: 0,
        status:
-         "j/k:navigate  n:new  a:add-dir  s:start  d:delete/stop  2:diff  Ctrl+P:palette  q:quit",
+         "j/k:navigate  n:new  s:start  d:delete  t:terminal  Tab:agent pane  2:diff  Ctrl+P:palette  q:quit",
        modal: :none,
        modal_input: ExRatatui.text_input_new(),
        modal_context: nil,
@@ -117,7 +128,9 @@ defmodule Codrift.TUI do
        dir_suggestion_cursor: 0,
        palette_cursor: 0,
        palette_filter: "",
-       actions: @actions
+       actions: @actions,
+       input_buffer: "",
+       selected_agent_mode: nil
      }}
   end
 
@@ -134,53 +147,65 @@ defmodule Codrift.TUI do
     base = [
       {render_mode_bar(state), header_rect},
       {Sidebar.render(state.sidebar_entries, state.sidebar_cursor, state.focus), sidebar_rect},
-      {render_main(state), main_rect},
       {render_footer(state), footer_rect}
     ]
 
-    base ++ Modals.render(state, frame)
+    base ++ render_main_area(state, main_rect) ++ Modals.render(state, frame)
   end
 
   @impl true
-  def handle_event(%Key{code: "c", kind: "press", modifiers: ["ctrl"]}, state),
-    do: {:stop, state}
+  def handle_event(%Key{code: "c", kind: "press", modifiers: ["ctrl"]}, state) do
+    if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
+      {:noreply, forward_raw(state, "\x03")}
+    else
+      {:stop, state}
+    end
+  end
+
+  def handle_event(%ExRatatui.Event.Resize{width: w, height: h}, state) do
+    pane_w = max(div(w * 70, 100) - 2, 1)
+    pane_h = max(h - 4, 1)
+
+    new_screens =
+      Map.new(state.vt100_screens, fn {id, screen} ->
+        {id, VT100.resize(screen, pane_w, pane_h)}
+      end)
+
+    maybe_resize_pty(state, pane_w, pane_h)
+
+    {:noreply, %{state | pane_size: {pane_w, pane_h}, vt100_screens: new_screens}}
+  end
 
   def handle_event(%Key{code: "esc", kind: "press"}, %{modal: modal} = state)
       when modal != :none do
     {:noreply, %{state | modal: :none, status: "Cancelled"}}
   end
 
-  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :confirm_delete} = state) do
-    {:noreply, do_delete(state)}
-  end
+  # Modal-specific event handling
 
-  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :new_name} = state) do
-    {:noreply, confirm_name(state)}
-  end
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :confirm_delete} = state),
+    do: {:noreply, do_delete(state)}
 
-  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :new_dir} = state) do
-    {:noreply, confirm_dir(state)}
-  end
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :new_name} = state),
+    do: {:noreply, confirm_name(state)}
 
-  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :palette} = state) do
-    {:noreply, execute_palette_action(state)}
-  end
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :new_dir} = state),
+    do: {:noreply, confirm_dir(state)}
 
-  def handle_event(%Key{code: "up", kind: "press"}, %{modal: :new_dir} = state) do
-    {:noreply, DirPicker.move_cursor(state, -1)}
-  end
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :palette} = state),
+    do: {:noreply, execute_palette_action(state)}
 
-  def handle_event(%Key{code: "down", kind: "press"}, %{modal: :new_dir} = state) do
-    {:noreply, DirPicker.move_cursor(state, 1)}
-  end
+  def handle_event(%Key{code: "up", kind: "press"}, %{modal: :new_dir} = state),
+    do: {:noreply, DirPicker.move_cursor(state, -1)}
 
-  def handle_event(%Key{code: "tab", kind: "press"}, %{modal: :new_dir} = state) do
-    {:noreply, DirPicker.complete(state)}
-  end
+  def handle_event(%Key{code: "down", kind: "press"}, %{modal: :new_dir} = state),
+    do: {:noreply, DirPicker.move_cursor(state, 1)}
 
-  def handle_event(%Key{code: "up", kind: "press"}, %{modal: :palette} = state) do
-    {:noreply, %{state | palette_cursor: max(state.palette_cursor - 1, 0)}}
-  end
+  def handle_event(%Key{code: "tab", kind: "press"}, %{modal: :new_dir} = state),
+    do: {:noreply, DirPicker.complete(state)}
+
+  def handle_event(%Key{code: "up", kind: "press"}, %{modal: :palette} = state),
+    do: {:noreply, %{state | palette_cursor: max(state.palette_cursor - 1, 0)}}
 
   def handle_event(%Key{code: "down", kind: "press"}, %{modal: :palette} = state) do
     max_idx = max(length(Modals.filter_actions(state.actions, state.palette_filter)) - 1, 0)
@@ -200,57 +225,24 @@ defmodule Codrift.TUI do
     {:noreply, sync_modal(state, modal)}
   end
 
+  # Normal mode — no modal open.
+  #
+  # Focus determines routing:
+  #   :sidebar → j/k navigate, letters are management shortcuts
+  #   :main    → all printable chars go to the agent input buffer
+
   def handle_event(%Key{code: "q", kind: "press"}, %{modal: :none} = state),
     do: {:stop, state}
 
   def handle_event(%Key{code: code, kind: "press"} = key, %{modal: :none} = state)
       when code in ["tab", "back_tab"] do
     {new_focus, _} = Focus.handle_key(state.focus, key)
-    {:noreply, %{state | focus: new_focus, main_scroll: 0}}
-  end
-
-  def handle_event(%Key{code: code, kind: "press"}, %{modal: :none} = state)
-      when code in ["j", "down"] do
-    {:noreply, navigate(state, 1)}
-  end
-
-  def handle_event(%Key{code: code, kind: "press"}, %{modal: :none} = state)
-      when code in ["k", "up"] do
-    {:noreply, navigate(state, -1)}
-  end
-
-  def handle_event(%Key{code: "n", kind: "press", modifiers: []}, %{modal: :none} = state) do
-    ExRatatui.text_input_set_value(state.modal_input, "")
-    {:noreply, %{state | modal: :new_name, status: "New initiative — Enter: next  Esc: cancel"}}
-  end
-
-  def handle_event(%Key{code: "a", kind: "press", modifiers: []}, %{modal: :none} = state) do
-    {:noreply, open_add_dir_modal(state)}
-  end
-
-  def handle_event(%Key{code: "s", kind: "press", modifiers: []}, %{modal: :none} = state) do
-    {:noreply, start_agent_at_cursor(state, Codrift.Agent.Adapters.Claude)}
-  end
-
-  def handle_event(%Key{code: "d", kind: "press", modifiers: []}, %{modal: :none} = state) do
-    {:noreply, open_delete_confirm(state)}
+    {:noreply, %{state | focus: new_focus, input_buffer: ""}}
   end
 
   def handle_event(%Key{code: "p", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
     ExRatatui.text_input_set_value(state.modal_input, "")
     {:noreply, %{state | modal: :palette, palette_cursor: 0, palette_filter: ""}}
-  end
-
-  def handle_event(%Key{code: "1", kind: "press"}, %{modal: :none} = state) do
-    {:noreply, %{state | active_tab: :context, main_scroll: 0} |> update_context_from_cursor()}
-  end
-
-  def handle_event(%Key{code: "2", kind: "press"}, %{modal: :none} = state) do
-    {:noreply, refresh_diff(%{state | active_tab: :diff, main_scroll: 0})}
-  end
-
-  def handle_event(%Key{code: "r", kind: "press"}, %{modal: :none} = state) do
-    {:noreply, refresh_current(state)}
   end
 
   def handle_event(%Key{code: "d", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
@@ -261,20 +253,144 @@ defmodule Codrift.TUI do
     {:noreply, %{state | main_scroll: max(state.main_scroll - 10, 0)}}
   end
 
+  # Main pane focused — route to agent based on its mode
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :none} = state) do
+    if Focus.focused?(state.focus, :main) do
+      case state.selected_agent_mode do
+        :pty -> {:noreply, forward_raw(state, "\r\n")}
+        _ -> {:noreply, send_agent_input(state)}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_event(%Key{code: "esc", kind: "press"}, %{modal: :none} = state) do
+    if Focus.focused?(state.focus, :main) do
+      case state.selected_agent_mode do
+        :pty -> {:noreply, forward_raw(state, "\e")}
+        _ -> {:noreply, %{state | input_buffer: "", status: "Input cleared"}}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_event(%Key{code: "backspace", kind: "press"}, %{modal: :none} = state) do
+    if Focus.focused?(state.focus, :main) do
+      case state.selected_agent_mode do
+        :pty ->
+          {:noreply, forward_raw(state, "\x7f")}
+
+        _ ->
+          new_buf = String.slice(state.input_buffer, 0..-2//1)
+          {:noreply, %{state | input_buffer: new_buf}}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_event(%Key{code: code, kind: "press"}, %{modal: :none} = state)
+      when byte_size(code) == 1 do
+    if Focus.focused?(state.focus, :main) do
+      case state.selected_agent_mode do
+        :pty -> {:noreply, forward_raw(state, code)}
+        _ -> {:noreply, %{state | input_buffer: state.input_buffer <> code}}
+      end
+    else
+      handle_sidebar_key(code, state)
+    end
+  end
+
+  # Sidebar arrow navigation (only when sidebar is focused)
+  def handle_event(%Key{code: code, kind: "press"}, %{modal: :none} = state)
+      when code in ["down"] do
+    if Focus.focused?(state.focus, :sidebar),
+      do: {:noreply, navigate(state, 1)},
+      else: {:noreply, state}
+  end
+
+  def handle_event(%Key{code: code, kind: "press"}, %{modal: :none} = state)
+      when code in ["up"] do
+    if Focus.focused?(state.focus, :sidebar),
+      do: {:noreply, navigate(state, -1)},
+      else: {:noreply, state}
+  end
+
   def handle_event(_, state), do: {:noreply, state}
+
+  defp handle_sidebar_key("j", state), do: {:noreply, navigate(state, 1)}
+  defp handle_sidebar_key("k", state), do: {:noreply, navigate(state, -1)}
+
+  defp handle_sidebar_key("1", state),
+    do:
+      {:noreply, %{state | active_tab: :context, main_scroll: 0} |> update_context_from_cursor()}
+
+  defp handle_sidebar_key("2", state),
+    do: {:noreply, refresh_diff(%{state | active_tab: :diff, main_scroll: 0})}
+
+  defp handle_sidebar_key("a", state), do: {:noreply, open_add_dir_modal(state)}
+
+  defp handle_sidebar_key("s", state),
+    do: {:noreply, start_agent_at_cursor(state, Codrift.Agent.Adapters.Claude)}
+
+  defp handle_sidebar_key("t", state),
+    do: {:noreply, start_agent_at_cursor(state, Codrift.Agent.Adapters.Terminal)}
+
+  defp handle_sidebar_key("d", state), do: {:noreply, open_delete_confirm(state)}
+  defp handle_sidebar_key("r", state), do: {:noreply, refresh_current(state)}
+
+  defp handle_sidebar_key("n", state) do
+    ExRatatui.text_input_set_value(state.modal_input, "")
+    {:noreply, %{state | modal: :new_name, status: "New initiative — Enter: next  Esc: cancel"}}
+  end
+
+  defp handle_sidebar_key(_, state), do: {:noreply, state}
 
   @impl true
   def handle_info({:agent_output, agent_id, data}, state) do
+    {w, h} = state.pane_size
+
+    screen = Map.get(state.vt100_screens, agent_id, VT100.new(w, h))
+
+    updated =
+      try do
+        VT100.process(screen, data)
+      rescue
+        _ -> screen
+      end
+
+    new_screens = Map.put(state.vt100_screens, agent_id, updated)
+
     outputs =
       Map.update(state.agent_outputs, agent_id, [data], fn buf ->
-        Enum.take([data | buf], 500)
+        Enum.take([data | buf], 200)
       end)
 
-    {:noreply, %{state | agent_outputs: outputs}}
+    # When the visible agent produces output, scroll to keep the cursor in view
+    new_scroll =
+      if agent_id == state.selected_agent_id do
+        {_, pane_h} = state.pane_size
+        max(0, updated.cursor_row - pane_h + 3)
+      else
+        state.main_scroll
+      end
+
+    {:noreply,
+     %{state | vt100_screens: new_screens, agent_outputs: outputs, main_scroll: new_scroll}}
   end
 
   def handle_info({:agent_ready, agent_id}, state) do
     {:noreply, reload_sidebar(%{state | status: "Agent #{String.slice(agent_id, 0, 8)} ready"})}
+  end
+
+  def handle_info({:agent_started, dir}, state) do
+    {:noreply, reload_sidebar(%{state | status: "Agent started in #{compact_path(dir)}"})}
+  end
+
+  def handle_info({:agent_start_failed, reason}, state) do
+    {:noreply, %{state | status: "Failed: #{inspect(reason)}"}}
   end
 
   def handle_info({:agent_stopped, agent_id, 0}, state) do
@@ -293,9 +409,7 @@ defmodule Codrift.TUI do
   def handle_info(_, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, _state) do
-    Enum.each(AgentSupervisor.list_agents(), &AgentSupervisor.stop_agent/1)
-  end
+  def terminate(_reason, _state), do: :ok
 
   defp confirm_name(state) do
     name = String.trim(ExRatatui.text_input_get_value(state.modal_input))
@@ -476,6 +590,9 @@ defmodule Codrift.TUI do
       %{id: :start_claude} ->
         start_agent_at_cursor(%{state | modal: :none}, Codrift.Agent.Adapters.Claude)
 
+      %{id: :start_terminal} ->
+        start_agent_at_cursor(%{state | modal: :none}, Codrift.Agent.Adapters.Terminal)
+
       %{id: :start_aider} ->
         start_agent_at_cursor(%{state | modal: :none}, Codrift.Agent.Adapters.Aider)
 
@@ -574,16 +691,33 @@ defmodule Codrift.TUI do
   defp subscribe_to_agent(state, agent_id) do
     case AgentSupervisor.find_agent(agent_id) do
       {:ok, pid} ->
-        AgentProcess.subscribe(pid)
-        existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
-        short = String.slice(agent_id, 0, 8)
+        try do
+          AgentProcess.subscribe(pid)
+          status = AgentProcess.status(pid)
+          existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
+          short = String.slice(agent_id, 0, 8)
 
-        %{
-          state
-          | selected_agent_id: agent_id,
-            agent_outputs: Map.put(state.agent_outputs, agent_id, existing),
-            status: "Subscribed to #{short}"
-        }
+          {w, h} = state.pane_size
+
+          screen =
+            try do
+              Enum.reduce(existing, VT100.new(w, h), fn chunk, s -> VT100.process(s, chunk) end)
+            rescue
+              _ -> VT100.new(w, h)
+            end
+
+          %{
+            state
+            | selected_agent_id: agent_id,
+              selected_agent_mode: status.mode,
+              agent_outputs: Map.put(state.agent_outputs, agent_id, existing),
+              vt100_screens: Map.put(state.vt100_screens, agent_id, screen),
+              status: "Subscribed to #{short} — Tab to focus, then type"
+          }
+        catch
+          :exit, _ ->
+            %{state | status: "Agent #{agent_id} not responding"}
+        end
 
       {:error, :not_found} ->
         %{state | status: "Agent #{agent_id} not found"}
@@ -594,9 +728,15 @@ defmodule Codrift.TUI do
     case Enum.at(state.sidebar_entries, state.sidebar_cursor) do
       {:initiative, id, _, _, _} ->
         case Store.get(id) do
-          {:ok, %{dirs: []}} -> %{state | status: "No directories — add one first (a)"}
-          {:ok, %{dirs: [dir | _]}} -> do_start_agent(state, id, dir, adapter)
-          {:error, :not_found} -> %{state | status: "Initiative not found"}
+          {:ok, %{dirs: []}} ->
+            # No dirs configured — start at home dir (initiative root)
+            do_start_agent(state, id, Path.expand("~"), adapter)
+
+          {:ok, %{dirs: [dir | _]}} ->
+            do_start_agent(state, id, dir, adapter)
+
+          {:error, :not_found} ->
+            %{state | status: "Initiative not found"}
         end
 
       {:dir, initiative_id, dir, _} ->
@@ -608,10 +748,21 @@ defmodule Codrift.TUI do
   end
 
   defp do_start_agent(state, initiative_id, dir, adapter) do
-    case AgentSupervisor.start_agent(initiative_id, dir, adapter) do
-      {:ok, _pid} -> reload_sidebar(%{state | status: "Agent started in #{compact_path(dir)}"})
-      {:error, reason} -> %{state | status: "Failed: #{inspect(reason)}"}
-    end
+    tui = self()
+    {cols, rows} = state.pane_size
+
+    spawn(fn ->
+      case AgentSupervisor.start_agent(initiative_id, dir, adapter) do
+        {:ok, pid} ->
+          AgentProcess.resize(pid, cols, rows)
+          send(tui, {:agent_started, dir})
+
+        {:error, reason} ->
+          send(tui, {:agent_start_failed, reason})
+      end
+    end)
+
+    %{state | status: "Starting agent in #{compact_path(dir)}..."}
   end
 
   defp refresh_current(%{active_tab: :diff} = state), do: refresh_diff(state)
@@ -648,7 +799,17 @@ defmodule Codrift.TUI do
 
   defp reload_sidebar(state) do
     initiatives = Store.list()
-    agents = Enum.map(AgentSupervisor.list_agents(), &AgentProcess.status/1)
+
+    agents =
+      AgentSupervisor.list_agents()
+      |> Enum.flat_map(fn pid ->
+        try do
+          [AgentProcess.status(pid)]
+        catch
+          :exit, _ -> []
+        end
+      end)
+
     %{state | sidebar_entries: Sidebar.build_entries(initiatives, agents)}
   end
 
@@ -759,26 +920,106 @@ defmodule Codrift.TUI do
   end
 
   defp render_agent_pane(state, agent_id, adapter, status) do
-    text =
-      case Map.get(state.agent_outputs, agent_id, []) do
-        [] -> "(no output yet)\n\nSend a prompt: select this agent and type in the input pane."
-        buf -> buf |> Enum.reverse() |> Enum.join()
-      end
-
+    focused = Focus.focused?(state.focus, :main)
     adapter_name = adapter |> Module.split() |> List.last() |> String.downcase()
     title = " #{adapter_name} (#{status}) "
+    border = Styles.pane_border(state.focus, :main)
+    block = %Block{title: title, borders: [:all], border_type: :rounded, border_style: border}
 
-    %Paragraph{
-      text: text,
-      block: %Block{
-        title: title,
-        borders: [:all],
-        border_type: :rounded,
-        border_style: Styles.pane_border(state.focus, :main)
-      },
-      wrap: true,
-      scroll: {state.main_scroll, 0}
-    }
+    screen = Map.get(state.vt100_screens, agent_id)
+    raw_output = Map.get(state.agent_outputs, agent_id, [])
+    has_output = screen != nil and (map_size(screen.cells) > 0 or raw_output != [])
+
+    if has_output do
+      render_agent_output(state, screen, focused, block)
+    else
+      render_agent_hint(status, focused, block)
+    end
+  end
+
+  defp render_agent_hint(status, focused, block) do
+    hint =
+      cond do
+        status == :stopped -> "Agent stopped. Press s to restart."
+        status == :starting -> "Starting… waiting for the agent prompt to appear."
+        focused -> "Tab to focus · type · Enter to send"
+        true -> "Navigate here then Tab to focus. Type to interact."
+      end
+
+    %Paragraph{text: hint, block: block, wrap: true}
+  end
+
+  defp render_agent_output(state, screen, focused, block) do
+    prompt_suffix =
+      if focused and state.selected_agent_mode != :pty and state.input_buffer != "",
+        do: "\n> #{state.input_buffer}▌",
+        else: ""
+
+    content =
+      if prompt_suffix == "",
+        do: VT100.to_text(screen),
+        else: append_prompt(VT100.to_text(screen), prompt_suffix)
+
+    {_, pane_h} = state.pane_size
+    cursor_scroll = max(0, screen.cursor_row - pane_h + 3)
+    scroll = max(state.main_scroll, cursor_scroll)
+
+    %Paragraph{text: content, block: block, wrap: false, scroll: {scroll, 0}}
+  end
+
+  defp append_prompt(%ExRatatui.Text{lines: lines} = text, suffix) do
+    extra =
+      suffix
+      |> String.split("\n")
+      |> Enum.map(fn line ->
+        %ExRatatui.Text.Line{spans: [%ExRatatui.Text.Span{content: line}]}
+      end)
+
+    %{text | lines: lines ++ extra}
+  end
+
+  defp maybe_resize_pty(state, w, h) do
+    with id when not is_nil(id) <- state.selected_agent_id,
+         {:ok, pid} <- AgentSupervisor.find_agent(id) do
+      AgentProcess.resize(pid, w, h)
+    else
+      _ -> :ok
+    end
+  end
+
+  defp render_main_area(state, rect) do
+    [{render_main(state), rect}]
+  end
+
+  defp forward_raw(state, data) do
+    with id when not is_nil(id) <- state.selected_agent_id,
+         {:ok, pid} <- AgentSupervisor.find_agent(id) do
+      AgentProcess.send_raw(pid, data)
+    end
+
+    state
+  end
+
+  defp send_agent_input(state) do
+    text = String.trim(state.input_buffer)
+
+    if text == "" or is_nil(state.selected_agent_id) do
+      %{state | input_buffer: ""}
+    else
+      case AgentSupervisor.find_agent(state.selected_agent_id) do
+        {:ok, pid} ->
+          AgentProcess.send_input(pid, text)
+
+          %{
+            state
+            | input_buffer: "",
+              status: "Sent → #{String.slice(state.selected_agent_id, 0, 8)}"
+          }
+
+        {:error, :not_found} ->
+          %{state | input_buffer: "", status: "Agent not found"}
+      end
+    end
   end
 
   defp render_placeholder(state) do

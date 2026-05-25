@@ -66,11 +66,15 @@ Steps 5–8 are blocked until this is resolved.
 | — | MCP initiative tools | ✅ Done | `create_initiative`, `add_dir`, `delete_initiative` |
 | — | Multi-dir sidebar | ✅ Done | initiative → 📁 dir → agent hierarchy |
 | — | Tab 3: Initiative info | ✅ Done | git branch, last commit, agents per dir |
-| — | Claude `--print` fix | ✅ Done | `:once` mode — spawn per message, `--print --continue` |
-| 5 | Pane data structure | ⬜ Next | Add `:terminal` pane type once PTY widget exists |
-| 8 | Keybinding config layer | ⬜ Next | Config-file override, VS Code defaults |
-| 12 | Terminal pane (PTY) | ⬜ Next | `portable-pty` + `tui-term` NIF extension to ex_ratatui |
-| 13 | SQLite memory (vector search) | ⬜ Next | `ecto_sqlite3` + `sqlite-vec` |
+| — | PTY agents + terminals | ✅ Done | `erlexec :pty`, direct keypress forwarding, `t` key opens `$SHELL` pane |
+| — | Cursor-driven pane | ✅ Done | initiative → overview, dir → git log, agent/terminal → ANSI output |
+| — | Graceful shutdown | ✅ Done | `terminate/2` kills all agents + terminals on TUI exit |
+| 5 | Full VT100 emulation | ⬜ Next | Rustler NIF wrapping `vt100` crate (~100 lines Rust); replaces ANSI strip with proper cell-grid rendering. Architecture: `erlexec` bytes → `vt100::Parser::process()` → `vt100::Screen` → ex_ratatui cells. Based on `tui-term` design. |
+| 16 | Multiple agents + terminals per dir | ⬜ Next | Sidebar: `📁 dir` → `◦ claude` + `◦ bash` + `◦ bash` (multiple entries); Tab cycles through them |
+| 15 | Initiative root agents | ⬜ Next | Agents with no specific dir show under the initiative header |
+| 8 | Keybinding config layer | ⬜ Next | Config-file override |
+| 14 | Theme chooser | ⬜ Next | Named themes (Dracula, Nord, Solarized, Tokyo Night) set border colors, highlight colors, and CodeBlock syntax theme in one config entry |
+| 13 | SQLite + vector memory | ⬜ Next | `ecto_sqlite3` + `sqlite-vec` for semantic search over project context |
 
 ---
 
