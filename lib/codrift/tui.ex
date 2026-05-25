@@ -48,7 +48,7 @@ defmodule Codrift.TUI do
 
   alias ExRatatui.{Focus, Layout, Style}
   alias ExRatatui.Layout.Rect
-  alias ExRatatui.Event.Key
+  alias ExRatatui.Event.{Key, Mouse}
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.CodeBlock
   alias ExRatatui.Widgets.Paragraph
@@ -90,7 +90,8 @@ defmodule Codrift.TUI do
     :sidebar_tick_ref,
     :editor_ref,
     :editing_file,
-    :autosave_ref
+    :autosave_ref,
+    :term_size
   ]
 
   @default_status "j/k:navigate  n:new  s:start  d:delete  t:terminal  Tab:agent pane  2:diff  Ctrl+P:palette  q:quit"
@@ -126,6 +127,7 @@ defmodule Codrift.TUI do
        agent_outputs: %{},
        vt100_screens: %{},
        pane_size: {pane_cols, pane_rows},
+       term_size: {term_w, term_h},
        active_tab: :context,
        diff_files: [],
        cursor_info: nil,
@@ -180,8 +182,36 @@ defmodule Codrift.TUI do
   def handle_event(%ExRatatui.Event.Resize{width: w, height: h}, state) do
     if state.resize_ref, do: Process.cancel_timer(state.resize_ref)
     ref = Process.send_after(self(), {:apply_resize, w, h}, 50)
-    {:noreply, %{state | resize_ref: ref}}
+    {:noreply, %{state | resize_ref: ref, term_size: {w, h}}}
   end
+
+  # ── Mouse events ─────────────────────────────────────────────────────────────
+
+  # Scroll in whichever pane the cursor is over.
+  def handle_event(%Mouse{kind: "scroll_up"} = ev, %{modal: :none} = state) do
+    {:noreply, mouse_scroll(state, ev, -3)}
+  end
+
+  def handle_event(%Mouse{kind: "scroll_down"} = ev, %{modal: :none} = state) do
+    {:noreply, mouse_scroll(state, ev, 3)}
+  end
+
+  # Left click: focus the pane under the pointer.
+  def handle_event(%Mouse{kind: "down", button: "left", x: x, y: _y}, %{modal: :none} = state) do
+    {term_w, _} = state.term_size || {80, 24}
+    sidebar_width = round(term_w * 0.30)
+
+    new_focus =
+      if x < sidebar_width do
+        Focus.new([:sidebar, :main])
+      else
+        Focus.new([:main, :sidebar])
+      end
+
+    {:noreply, %{state | focus: new_focus}}
+  end
+
+  def handle_event(%Mouse{}, state), do: {:noreply, state}
 
   # Edit mode — a context file is open for editing.
   # These clauses must come BEFORE the modal/normal handlers.
@@ -366,6 +396,9 @@ defmodule Codrift.TUI do
       Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
         {:noreply, forward_raw(state, "\e[B")}
 
+      Focus.focused?(state.focus, :main) ->
+        {:noreply, %{state | main_scroll: state.main_scroll + 3}}
+
       true ->
         {:noreply, state}
     end
@@ -378,6 +411,9 @@ defmodule Codrift.TUI do
 
       Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
         {:noreply, forward_raw(state, "\e[A")}
+
+      Focus.focused?(state.focus, :main) ->
+        {:noreply, %{state | main_scroll: max(state.main_scroll - 3, 0)}}
 
       true ->
         {:noreply, state}
@@ -1542,6 +1578,37 @@ defmodule Codrift.TUI do
 
   defp render_main_area(state, rect) do
     [{render_main(state), rect}]
+  end
+
+  # Scroll whichever pane the mouse cursor is over.
+  # If the pointer is in the sidebar column, scroll the sidebar (navigate).
+  # If it's in the main pane and the agent is a PTY, forward scroll as
+  # arrow keys so the shell/Claude gets the scroll event natively.
+  # Otherwise adjust main_scroll for code-viewer / initiative panes.
+  defp mouse_scroll(state, %Mouse{x: x}, delta) do
+    {term_w, _} = state.term_size || {80, 24}
+    sidebar_width = round(term_w * 0.30)
+
+    cond do
+      x < sidebar_width ->
+        # Scrolling over the sidebar navigates its cursor
+        new_cursor =
+          (state.sidebar_cursor + delta)
+          |> max(0)
+          |> min(max(length(state.sidebar_entries) - 1, 0))
+
+        %{state | sidebar_cursor: new_cursor}
+        |> update_context_from_cursor()
+
+      state.selected_agent_mode == :pty ->
+        # PTY agents: forward scroll as arrow-key sequences (3 lines per tick)
+        seq = if delta < 0, do: "\e[A", else: "\e[B"
+        Enum.reduce(1..abs(delta), state, fn _, s -> forward_raw(s, seq) end)
+
+      true ->
+        # Code viewer / initiative / diff panes: move main_scroll
+        %{state | main_scroll: max(state.main_scroll + delta, 0)}
+    end
   end
 
   defp forward_raw(state, data) do
