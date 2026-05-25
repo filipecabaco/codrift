@@ -44,7 +44,8 @@ defmodule Codrift.AgentProcess do
     :buffer_size,
     :subscribers,
     :conversation_started,
-    :raw_line_buf
+    :raw_line_buf,
+    :session_id
   ]
 
   @doc false
@@ -73,6 +74,9 @@ defmodule Codrift.AgentProcess do
 
   @doc "Returns the `n` most recent output lines in chronological order."
   def recent_output(pid, n \\ 50), do: GenServer.call(pid, {:recent_output, n})
+
+  @doc "Returns the Claude Code session ID captured from PTY output, or nil."
+  def session_id(pid), do: GenServer.call(pid, :session_id)
 
   @doc "Subscribes `subscriber` (defaults to `self()`) to output notifications."
   def subscribe(pid, subscriber \\ self()), do: GenServer.call(pid, {:subscribe, subscriber})
@@ -105,7 +109,7 @@ defmodule Codrift.AgentProcess do
       raw_line_buf: ""
     }
 
-    context_opts = initiative_context_opts(initiative_id)
+    context_opts = initiative_context_opts(initiative_id, dir)
 
     case mode do
       :pty ->
@@ -187,6 +191,10 @@ defmodule Codrift.AgentProcess do
        status: state.status,
        mode: state.mode
      }, state}
+  end
+
+  def handle_call(:session_id, _from, state) do
+    {:reply, state.session_id, state}
   end
 
   def handle_call({:recent_output, n}, _from, state) do
@@ -290,9 +298,10 @@ defmodule Codrift.AgentProcess do
 
   defp process_output(state, data) do
     new_status = state.adapter.parse_status(data) || state.status
+    session_id = extract_session_id(data) || state.session_id
     state = push_buffer(state, data)
     for {sub, _} <- state.subscribers, do: send(sub, {:agent_output, state.id, data})
-    %{state | status: new_status}
+    %{state | status: new_status, session_id: session_id}
   end
 
   defp extract_text_delta(line) do
@@ -308,6 +317,20 @@ defmodule Codrift.AgentProcess do
         ""
     end
   end
+
+  # Extracts a Claude Code session ID (e.g. "s/5646099d78871f69") from PTY output.
+  #
+  # The negative lookbehind (?<![a-z0-9]) prevents false matches on path segments
+  # like "initiatives/5646099d78871f69" where the 's' is the tail of a word.
+  @session_id_re ~r/(?<![a-z0-9])s\/[0-9a-f]{8,}/
+  defp extract_session_id(data) when is_binary(data) do
+    case Regex.run(@session_id_re, data) do
+      [match] -> match
+      _ -> nil
+    end
+  end
+
+  defp extract_session_id(_), do: nil
 
   defp handle_exit(state, code, final_status) do
     state =
@@ -344,10 +367,17 @@ defmodule Codrift.AgentProcess do
   #
   #   context_dir:   the context folder path (for --add-dir in Claude adapter)
   #   context_files: list of absolute file paths (for --read in Aider, etc.)
-  defp initiative_context_opts(initiative_id) do
+  #   session_id:    saved Claude Code session ID for --resume (if any)
+  defp initiative_context_opts(initiative_id, dir) do
     ctx_dir = Codrift.Initiative.Store.context_path(initiative_id)
 
     base = if File.dir?(ctx_dir), do: [context_dir: ctx_dir], else: []
+
+    session_opts =
+      case Codrift.SessionStore.get(initiative_id, dir) do
+        {:ok, session_id} -> [session_id: session_id]
+        {:error, :not_found} -> []
+      end
 
     files =
       case File.ls(ctx_dir) do
@@ -363,7 +393,7 @@ defmodule Codrift.AgentProcess do
           []
       end
 
-    if files == [], do: base, else: base ++ [context_files: files]
+    base ++ session_opts ++ if(files == [], do: [], else: [context_files: files])
   end
 
   defp open_port(adapter, dir, args) do

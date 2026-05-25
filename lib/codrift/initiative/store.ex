@@ -78,6 +78,8 @@ defmodule Codrift.Initiative.Store do
       if File.dir?(ctx), do: ensure_claude_md_symlink(ctx)
     end)
 
+    clean_orphaned_context_dirs(initiatives)
+
     {:ok, %{initiatives: initiatives, path: path}}
   end
 
@@ -157,6 +159,34 @@ defmodule Codrift.Initiative.Store do
   # Deletes `path` only when it is a direct child of ~/.codrift/initiatives/.
   # Prevents any possible path-traversal or misconfiguration from touching
   # project directories that live outside our managed tree.
+  # Removes context dirs for initiatives that no longer exist in the store.
+  # Runs once at startup so stale directories from deleted initiatives are
+  # automatically pruned. Uses `safe_rm_context_dir!/1` so it can only touch
+  # direct children of `~/.codrift/initiatives/`.
+  defp clean_orphaned_context_dirs(initiatives) do
+    base = Path.expand("~/.codrift/initiatives")
+
+    case File.ls(base) do
+      {:ok, entries} ->
+        known_ids = MapSet.new(Map.keys(initiatives))
+
+        entries
+        |> Enum.filter(fn name ->
+          full = Path.join(base, name)
+          File.dir?(full) and not MapSet.member?(known_ids, name)
+        end)
+        |> Enum.each(fn name ->
+          full = Path.join(base, name)
+          require Logger
+          Logger.info("Codrift.Initiative.Store: removing orphaned context dir #{full}")
+          safe_rm_context_dir!(full)
+        end)
+
+      {:error, _} ->
+        :ok
+    end
+  end
+
   defp safe_rm_context_dir!(path) do
     base = Path.expand("~/.codrift/initiatives")
     expanded = Path.expand(path)

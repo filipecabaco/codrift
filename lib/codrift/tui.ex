@@ -289,8 +289,10 @@ defmodule Codrift.TUI do
   #   :sidebar → j/k navigate, letters are management shortcuts
   #   :main    → all printable chars go to the agent input buffer
 
-  def handle_event(%Key{code: "q", kind: "press"}, %{modal: :none} = state),
-    do: {:stop, state}
+  def handle_event(%Key{code: "q", kind: "press"}, %{modal: :none} = state) do
+    save_all_sessions(state)
+    {:stop, state}
+  end
 
   def handle_event(%Key{code: code, kind: "press"} = key, %{modal: :none} = state)
       when code in ["tab", "back_tab"] do
@@ -656,7 +658,25 @@ defmodule Codrift.TUI do
   def handle_info(_, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, _state), do: :ok
+  def terminate(_reason, state) do
+    # Fallback: save any sessions not yet persisted by the `q` handler.
+    save_all_sessions(state)
+    :ok
+  end
+
+  defp save_all_sessions(state) do
+    for agent_id <- MapSet.to_list(state.subscribed_agents) do
+      try do
+        with {:ok, pid} <- AgentSupervisor.find_agent(agent_id),
+             status <- AgentProcess.status(pid),
+             session_id when not is_nil(session_id) <- AgentProcess.session_id(pid) do
+          Codrift.SessionStore.save(status.initiative_id, status.dir, session_id)
+        end
+      catch
+        :exit, _ -> :ok
+      end
+    end
+  end
 
   defp confirm_name(state) do
     name = String.trim(ExRatatui.text_input_get_value(state.modal_input))

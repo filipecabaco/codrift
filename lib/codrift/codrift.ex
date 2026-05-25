@@ -20,6 +20,7 @@ defmodule Codrift do
   def start(_type, _args) do
     children = [
       {Registry, keys: :unique, name: Codrift.AgentRegistry},
+      Codrift.SessionStore,
       Codrift.Initiative.Store,
       Codrift.AgentSupervisor,
       {Task.Supervisor, name: Codrift.TaskSupervisor},

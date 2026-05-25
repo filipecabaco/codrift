@@ -18,10 +18,19 @@ defmodule Codrift.Agent.Adapters.Claude do
 
   @impl true
   def args(_dir, opts) do
-    case opts[:context_dir] do
-      nil -> []
-      dir -> ["--add-dir", dir]
-    end
+    resume =
+      case opts[:session_id] do
+        nil -> []
+        id -> ["--resume", id]
+      end
+
+    dir_arg =
+      case opts[:context_dir] do
+        nil -> []
+        dir -> ["--add-dir", dir]
+      end
+
+    resume ++ dir_arg
   end
 
   @impl true
