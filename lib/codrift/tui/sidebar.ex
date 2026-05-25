@@ -112,10 +112,17 @@ defmodule Codrift.TUI.Sidebar do
       spans: [
         %Span{content: "    ◦ ", style: %Style{fg: color}},
         %Span{content: name, style: %Style{fg: :white}},
-        %Span{content: " (#{status})", style: %Style{fg: color}}
+        %Span{content: " (#{format_status(status)})", style: %Style{fg: color}}
       ]
     }
   end
+
+  defp format_status(:awaiting_input), do: "ready"
+  defp format_status(:starting), do: "starting"
+  defp format_status(:running), do: "running"
+  defp format_status(:idle), do: "idle"
+  defp format_status(:stopped), do: "stopped"
+  defp format_status(other), do: to_string(other)
 
   defp compact_path(path) do
     home = Path.expand("~")

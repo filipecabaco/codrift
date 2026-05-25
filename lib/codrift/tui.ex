@@ -66,6 +66,7 @@ defmodule Codrift.TUI do
     :sidebar_cursor,
     :selected_initiative_id,
     :selected_agent_id,
+    :subscribed_agents,
     :agent_outputs,
     :vt100_screens,
     :pane_size,
@@ -83,7 +84,9 @@ defmodule Codrift.TUI do
     :palette_filter,
     :actions,
     :input_buffer,
-    :selected_agent_mode
+    :selected_agent_mode,
+    :resize_ref,
+    :sidebar_tick_ref
   ]
 
   @actions [
@@ -102,8 +105,7 @@ defmodule Codrift.TUI do
     agents = Enum.map(AgentSupervisor.list_agents(), &AgentProcess.status/1)
 
     {term_w, term_h} = ExRatatui.terminal_size()
-    pane_cols = max(div(term_w * 70, 100) - 2, 40)
-    pane_rows = max(term_h - 4, 10)
+    {pane_cols, pane_rows} = calc_pane_size(term_w, term_h)
 
     {:ok,
      %__MODULE__{
@@ -112,6 +114,7 @@ defmodule Codrift.TUI do
        sidebar_cursor: 0,
        selected_initiative_id: nil,
        selected_agent_id: nil,
+       subscribed_agents: MapSet.new(),
        agent_outputs: %{},
        vt100_screens: %{},
        pane_size: {pane_cols, pane_rows},
@@ -130,7 +133,9 @@ defmodule Codrift.TUI do
        palette_filter: "",
        actions: @actions,
        input_buffer: "",
-       selected_agent_mode: nil
+       selected_agent_mode: nil,
+       resize_ref: nil,
+       sidebar_tick_ref: Process.send_after(self(), :sidebar_tick, 2000)
      }}
   end
 
@@ -163,17 +168,9 @@ defmodule Codrift.TUI do
   end
 
   def handle_event(%ExRatatui.Event.Resize{width: w, height: h}, state) do
-    pane_w = max(div(w * 70, 100) - 2, 1)
-    pane_h = max(h - 4, 1)
-
-    new_screens =
-      Map.new(state.vt100_screens, fn {id, screen} ->
-        {id, VT100.resize(screen, pane_w, pane_h)}
-      end)
-
-    maybe_resize_pty(state, pane_w, pane_h)
-
-    {:noreply, %{state | pane_size: {pane_w, pane_h}, vt100_screens: new_screens}}
+    if state.resize_ref, do: Process.cancel_timer(state.resize_ref)
+    ref = Process.send_after(self(), {:apply_resize, w, h}, 50)
+    {:noreply, %{state | resize_ref: ref}}
   end
 
   def handle_event(%Key{code: "esc", kind: "press"}, %{modal: modal} = state)
@@ -246,18 +243,26 @@ defmodule Codrift.TUI do
   end
 
   def handle_event(%Key{code: "d", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
-    {:noreply, %{state | main_scroll: state.main_scroll + 10}}
+    if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
+      {:noreply, forward_raw(state, "\x04")}
+    else
+      {:noreply, %{state | main_scroll: state.main_scroll + 10}}
+    end
   end
 
   def handle_event(%Key{code: "u", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
-    {:noreply, %{state | main_scroll: max(state.main_scroll - 10, 0)}}
+    if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
+      {:noreply, forward_raw(state, "\x15")}
+    else
+      {:noreply, %{state | main_scroll: max(state.main_scroll - 10, 0)}}
+    end
   end
 
   # Main pane focused — route to agent based on its mode
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :none} = state) do
     if Focus.focused?(state.focus, :main) do
       case state.selected_agent_mode do
-        :pty -> {:noreply, forward_raw(state, "\r\n")}
+        :pty -> {:noreply, forward_raw(state, "\r")}
         _ -> {:noreply, send_agent_input(state)}
       end
     else
@@ -303,19 +308,46 @@ defmodule Codrift.TUI do
     end
   end
 
-  # Sidebar arrow navigation (only when sidebar is focused)
-  def handle_event(%Key{code: code, kind: "press"}, %{modal: :none} = state)
-      when code in ["down"] do
-    if Focus.focused?(state.focus, :sidebar),
-      do: {:noreply, navigate(state, 1)},
-      else: {:noreply, state}
+  def handle_event(%Key{code: "down", kind: "press"}, %{modal: :none} = state) do
+    cond do
+      Focus.focused?(state.focus, :sidebar) ->
+        {:noreply, navigate(state, 1)}
+
+      Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\e[B")}
+
+      true ->
+        {:noreply, state}
+    end
   end
 
-  def handle_event(%Key{code: code, kind: "press"}, %{modal: :none} = state)
-      when code in ["up"] do
-    if Focus.focused?(state.focus, :sidebar),
-      do: {:noreply, navigate(state, -1)},
-      else: {:noreply, state}
+  def handle_event(%Key{code: "up", kind: "press"}, %{modal: :none} = state) do
+    cond do
+      Focus.focused?(state.focus, :sidebar) ->
+        {:noreply, navigate(state, -1)}
+
+      Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\e[A")}
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_event(%Key{code: "right", kind: "press"}, %{modal: :none} = state) do
+    if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
+      {:noreply, forward_raw(state, "\e[C")}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_event(%Key{code: "left", kind: "press"}, %{modal: :none} = state) do
+    if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
+      {:noreply, forward_raw(state, "\e[D")}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_event(_, state), do: {:noreply, state}
@@ -354,13 +386,7 @@ defmodule Codrift.TUI do
 
     screen = Map.get(state.vt100_screens, agent_id, VT100.new(w, h))
 
-    updated =
-      try do
-        VT100.process(screen, data)
-      rescue
-        _ -> screen
-      end
-
+    updated = VT100.process(screen, data)
     new_screens = Map.put(state.vt100_screens, agent_id, updated)
 
     outputs =
@@ -368,7 +394,6 @@ defmodule Codrift.TUI do
         Enum.take([data | buf], 200)
       end)
 
-    # When the visible agent produces output, scroll to keep the cursor in view
     new_scroll =
       if agent_id == state.selected_agent_id do
         {_, pane_h} = state.pane_size
@@ -379,6 +404,32 @@ defmodule Codrift.TUI do
 
     {:noreply,
      %{state | vt100_screens: new_screens, agent_outputs: outputs, main_scroll: new_scroll}}
+  end
+
+  def handle_info({:apply_resize, w, h}, state) do
+    {pane_w, pane_h} = calc_pane_size(w, h)
+
+    new_screens =
+      Map.new(state.vt100_screens, fn {id, screen} ->
+        {id, VT100.resize(screen, pane_w, pane_h)}
+      end)
+
+    resize_all_ptys(pane_w, pane_h)
+
+    new_scroll =
+      case Map.get(new_screens, state.selected_agent_id) do
+        nil -> 0
+        screen -> max(0, screen.cursor_row - pane_h + 3)
+      end
+
+    {:noreply,
+     %{
+       state
+       | pane_size: {pane_w, pane_h},
+         vt100_screens: new_screens,
+         main_scroll: new_scroll,
+         resize_ref: nil
+     }}
   end
 
   def handle_info({:agent_ready, agent_id}, state) do
@@ -395,15 +446,54 @@ defmodule Codrift.TUI do
 
   def handle_info({:agent_stopped, agent_id, 0}, state) do
     {:noreply,
-     reload_sidebar(%{state | status: "Agent #{String.slice(agent_id, 0, 8)} finished"})}
+     reload_sidebar(%{
+       state
+       | status: "Agent #{String.slice(agent_id, 0, 8)} finished",
+         subscribed_agents: MapSet.delete(state.subscribed_agents, agent_id)
+     })}
   end
 
   def handle_info({:agent_stopped, agent_id, code}, state) do
     {:noreply,
      reload_sidebar(%{
        state
-       | status: "⚠ Agent #{String.slice(agent_id, 0, 8)} exited #{code} — see output pane"
+       | status: "⚠ Agent #{String.slice(agent_id, 0, 8)} exited #{code} — see output pane",
+         subscribed_agents: MapSet.delete(state.subscribed_agents, agent_id)
      })}
+  end
+
+  # Ink optimizes away the repaint when terminal dimensions haven't changed.
+  # Force a full \e[2J + redraw by briefly sending a different size, then
+  # restoring the correct one. Two distinct SIGWINCHes guarantee a full clear.
+  def handle_info({:nudge_agent, agent_id, w, h}, state) do
+    if agent_id == state.selected_agent_id do
+      case AgentSupervisor.find_agent(agent_id) do
+        {:ok, pid} ->
+          AgentProcess.resize(pid, max(w - 1, 1), h)
+          Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 60)
+
+        _ ->
+          :ok
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:restore_agent_size, agent_id, w, h}, state) do
+    if agent_id == state.selected_agent_id do
+      case AgentSupervisor.find_agent(agent_id) do
+        {:ok, pid} -> AgentProcess.resize(pid, w, h)
+        _ -> :ok
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info(:sidebar_tick, state) do
+    ref = Process.send_after(self(), :sidebar_tick, 2000)
+    {:noreply, reload_sidebar(%{state | sidebar_tick_ref: ref})}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -433,36 +523,44 @@ defmodule Codrift.TUI do
   defp confirm_dir(%{modal_context: {:creating, name}} = state) do
     dir = typed_dir(state)
 
-    case Store.create(name, [dir]) do
-      {:ok, initiative} ->
-        state
-        |> reload_sidebar()
-        |> then(fn s ->
-          %{
-            s
-            | modal: :none,
-              modal_context: nil,
-              selected_initiative_id: initiative.id,
-              status: "Created '#{name}'"
-          }
-        end)
+    if not File.dir?(dir) do
+      %{state | status: "Directory does not exist: #{compact_path(dir)}"}
+    else
+      case Store.create(name, [dir]) do
+        {:ok, initiative} ->
+          state
+          |> reload_sidebar()
+          |> then(fn s ->
+            %{
+              s
+              | modal: :none,
+                modal_context: nil,
+                selected_initiative_id: initiative.id,
+                status: "Created '#{name}'"
+            }
+          end)
 
-      {:error, reason} ->
-        %{state | modal: :none, modal_context: nil, status: "Create failed: #{inspect(reason)}"}
+        {:error, reason} ->
+          %{state | modal: :none, modal_context: nil, status: "Create failed: #{inspect(reason)}"}
+      end
     end
   end
 
   defp confirm_dir(%{modal_context: {:add_dir, initiative_id}} = state) do
     dir = typed_dir(state)
 
-    case Store.add_dir(initiative_id, dir) do
-      {:ok, _} ->
-        state
-        |> reload_sidebar()
-        |> then(fn s -> %{s | modal: :none, modal_context: nil, status: "Added: #{dir}"} end)
+    if not File.dir?(dir) do
+      %{state | status: "Directory does not exist: #{compact_path(dir)}"}
+    else
+      case Store.add_dir(initiative_id, dir) do
+        {:ok, _} ->
+          state
+          |> reload_sidebar()
+          |> then(fn s -> %{s | modal: :none, modal_context: nil, status: "Added: #{dir}"} end)
 
-      {:error, reason} ->
-        %{state | modal: :none, modal_context: nil, status: "Failed: #{inspect(reason)}"}
+        {:error, reason} ->
+          %{state | modal: :none, modal_context: nil, status: "Failed: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -681,8 +779,26 @@ defmodule Codrift.TUI do
   end
 
   defp maybe_subscribe_agent(state, agent_id) do
-    if state.selected_agent_id == agent_id do
-      state
+    if MapSet.member?(state.subscribed_agents, agent_id) do
+      # Already receiving live updates — switch display without re-subscribing.
+      # Send a deferred SIGWINCH so Claude Code repaints at the current pane size,
+      # which corrects any scroll drift without rebuilding the VT100 from scratch.
+      status =
+        case AgentSupervisor.find_agent(agent_id) do
+          {:ok, pid} ->
+            {w, h} = state.pane_size
+            Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 80)
+            AgentProcess.status(pid).mode
+
+          _ ->
+            state.selected_agent_mode
+        end
+
+      {_, pane_h} = state.pane_size
+      screen = Map.get(state.vt100_screens, agent_id)
+      new_scroll = if screen, do: max(0, screen.cursor_row - pane_h + 3), else: 0
+
+      %{state | selected_agent_id: agent_id, selected_agent_mode: status, main_scroll: new_scroll}
     else
       subscribe_to_agent(state, agent_id)
     end
@@ -694,22 +810,32 @@ defmodule Codrift.TUI do
         try do
           AgentProcess.subscribe(pid)
           status = AgentProcess.status(pid)
-          existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
-          short = String.slice(agent_id, 0, 8)
-
           {w, h} = state.pane_size
 
+          # Resize the PTY first so any subsequent output arrives at the correct
+          # size. Use two-step (w-1 → w) to force Ink's full \e[2J repaint even
+          # when dimensions would otherwise be unchanged.
+          AgentProcess.resize(pid, max(w - 1, 1), h)
+          Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 60)
+
+          existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
+
+          # Start replay only from the last full-screen clear (\e[2J or \ec).
+          # IL/DL operations need correct scroll-region context; replaying chunks
+          # that predate DECSTBM setup corrupts row-shift arithmetic. A clear is
+          # always followed by a full repaint, so we lose nothing by truncating.
+          replay = chunks_from_last_clear(existing)
+
           screen =
-            try do
-              Enum.reduce(existing, VT100.new(w, h), fn chunk, s -> VT100.process(s, chunk) end)
-            rescue
-              _ -> VT100.new(w, h)
-            end
+            Enum.reduce(replay, VT100.new(w, h), fn chunk, s -> VT100.process(s, chunk) end)
+
+          short = String.slice(agent_id, 0, 8)
 
           %{
             state
             | selected_agent_id: agent_id,
               selected_agent_mode: status.mode,
+              subscribed_agents: MapSet.put(state.subscribed_agents, agent_id),
               agent_outputs: Map.put(state.agent_outputs, agent_id, existing),
               vt100_screens: Map.put(state.vt100_screens, agent_id, screen),
               status: "Subscribed to #{short} — Tab to focus, then type"
@@ -751,7 +877,7 @@ defmodule Codrift.TUI do
     tui = self()
     {cols, rows} = state.pane_size
 
-    spawn(fn ->
+    Task.Supervisor.start_child(Codrift.TaskSupervisor, fn ->
       case AgentSupervisor.start_agent(initiative_id, dir, adapter) do
         {:ok, pid} ->
           AgentProcess.resize(pid, cols, rows)
@@ -766,7 +892,10 @@ defmodule Codrift.TUI do
   end
 
   defp refresh_current(%{active_tab: :diff} = state), do: refresh_diff(state)
-  defp refresh_current(state), do: update_context_from_cursor(state)
+
+  defp refresh_current(state) do
+    state |> reload_sidebar() |> update_context_from_cursor()
+  end
 
   defp refresh_diff(%{selected_initiative_id: nil} = state) do
     %{state | status: "Select an initiative first"}
@@ -922,7 +1051,7 @@ defmodule Codrift.TUI do
   defp render_agent_pane(state, agent_id, adapter, status) do
     focused = Focus.focused?(state.focus, :main)
     adapter_name = adapter |> Module.split() |> List.last() |> String.downcase()
-    title = " #{adapter_name} (#{status}) "
+    title = " #{adapter_name} (#{format_status(status)}) "
     border = Styles.pane_border(state.focus, :main)
     block = %Block{title: title, borders: [:all], border_type: :rounded, border_style: border}
 
@@ -937,11 +1066,21 @@ defmodule Codrift.TUI do
     end
   end
 
+  defp format_status(:awaiting_input), do: "ready"
+  defp format_status(:starting), do: "starting"
+  defp format_status(:running), do: "running"
+  defp format_status(:idle), do: "idle"
+  defp format_status(:stopped), do: "stopped"
+  defp format_status(other), do: to_string(other)
+
   defp render_agent_hint(status, focused, block) do
     hint =
       cond do
         status == :stopped -> "Agent stopped. Press s to restart."
         status == :starting -> "Starting… waiting for the agent prompt to appear."
+        status == :awaiting_input and focused -> "Agent ready. Type your message and press Enter."
+        status == :awaiting_input -> "Agent ready. Tab to focus, then type your message."
+        status == :running -> "Agent is working…"
         focused -> "Tab to focus · type · Enter to send"
         true -> "Navigate here then Tab to focus. Type to interact."
       end
@@ -957,8 +1096,8 @@ defmodule Codrift.TUI do
 
     content =
       if prompt_suffix == "",
-        do: VT100.to_text(screen),
-        else: append_prompt(VT100.to_text(screen), prompt_suffix)
+        do: VT100.to_text(screen, focused),
+        else: append_prompt(VT100.to_text(screen, false), prompt_suffix)
 
     {_, pane_h} = state.pane_size
     cursor_scroll = max(0, screen.cursor_row - pane_h + 3)
@@ -978,12 +1117,9 @@ defmodule Codrift.TUI do
     %{text | lines: lines ++ extra}
   end
 
-  defp maybe_resize_pty(state, w, h) do
-    with id when not is_nil(id) <- state.selected_agent_id,
-         {:ok, pid} <- AgentSupervisor.find_agent(id) do
+  defp resize_all_ptys(w, h) do
+    for pid <- AgentSupervisor.list_agents() do
       AgentProcess.resize(pid, w, h)
-    else
-      _ -> :ok
     end
   end
 
@@ -992,9 +1128,17 @@ defmodule Codrift.TUI do
   end
 
   defp forward_raw(state, data) do
-    with id when not is_nil(id) <- state.selected_agent_id,
-         {:ok, pid} <- AgentSupervisor.find_agent(id) do
-      AgentProcess.send_raw(pid, data)
+    screen = Map.get(state.vt100_screens, state.selected_agent_id)
+
+    # Claude Code sends \e[?25l (hide cursor) while repainting and \e[?25h when
+    # done. Forwarding keystrokes mid-repaint lands them at cursor_row=0 (the
+    # \e[H from the clear), not at the input line. Drop input until the cursor
+    # is visible again — repaints complete in < 200 ms so no keys are lost.
+    if screen == nil or screen.cursor_visible do
+      with id when not is_nil(id) <- state.selected_agent_id,
+           {:ok, pid} <- AgentSupervisor.find_agent(id) do
+        AgentProcess.send_raw(pid, data)
+      end
     end
 
     state
@@ -1051,9 +1195,33 @@ defmodule Codrift.TUI do
 
   defp compact_path(path) do
     home = Path.expand("~")
+    relative = Path.relative_to(path, home)
+    if relative == path, do: path, else: "~/#{relative}"
+  end
 
-    if String.starts_with?(path, home),
-      do: "~" <> String.slice(path, String.length(home)..-1//1),
-      else: path
+  # Ratatui allocates sidebar first (floor(w * 30/100)), main gets the remainder.
+  # Using `w - floor(w*30/100)` matches that exactly; `floor(w*70/100)` diverges
+  # by 1 on odd widths, causing Claude Code to draw at the wrong column count.
+  defp calc_pane_size(term_w, term_h) do
+    cols = max(term_w - div(term_w * 30, 100) - 2, 1)
+    rows = max(term_h - 4, 1)
+    {cols, rows}
+  end
+
+  # Find the last full-screen clear anchor in a chunk list and return everything
+  # from that chunk onwards.  \e[2J (ED 2) and \ec (RIS) are both "fresh screen"
+  # signals — everything after them is a self-contained repaint.
+  defp chunks_from_last_clear(chunks) do
+    clear_pattern = :binary.compile_pattern(["\e[2J", "\ec"])
+
+    chunks
+    |> Enum.with_index()
+    |> Enum.reduce(nil, fn {chunk, idx}, last ->
+      if :binary.match(chunk, clear_pattern) != :nomatch, do: idx, else: last
+    end)
+    |> case do
+      nil -> chunks
+      idx -> Enum.drop(chunks, idx)
+    end
   end
 end

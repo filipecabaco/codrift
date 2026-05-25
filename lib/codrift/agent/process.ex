@@ -41,6 +41,7 @@ defmodule Codrift.AgentProcess do
     :port,
     :status,
     :buffer,
+    :buffer_size,
     :subscribers,
     :conversation_started,
     :raw_line_buf
@@ -98,7 +99,8 @@ defmodule Codrift.AgentProcess do
       exec_ospid: nil,
       port: nil,
       buffer: [],
-      subscribers: [],
+      buffer_size: 0,
+      subscribers: %{},
       conversation_started: false,
       raw_line_buf: ""
     }
@@ -193,8 +195,15 @@ defmodule Codrift.AgentProcess do
   end
 
   def handle_call({:subscribe, pid}, _from, state) do
-    Process.monitor(pid)
-    {:reply, :ok, %{state | subscribers: [pid | state.subscribers]}}
+    subs =
+      if Map.has_key?(state.subscribers, pid) do
+        state.subscribers
+      else
+        ref = Process.monitor(pid)
+        Map.put(state.subscribers, pid, ref)
+      end
+
+    {:reply, :ok, %{state | subscribers: subs}}
   end
 
   @impl true
@@ -226,15 +235,15 @@ defmodule Codrift.AgentProcess do
 
   # Port exit in :once mode — go back to :idle
   def handle_info({port, {:exit_status, 0}}, %{port: port, mode: :once} = state) do
-    for sub <- state.subscribers, do: send(sub, {:agent_ready, state.id})
+    for {sub, _} <- state.subscribers, do: send(sub, {:agent_ready, state.id})
     {:noreply, %{state | port: nil, status: :idle, conversation_started: true}}
   end
 
   def handle_info({port, {:exit_status, code}}, %{port: port, mode: :once} = state) do
     error = "\n[agent exited with code #{code}]\n"
-    new_buf = Enum.take([error | state.buffer], 1_000)
-    for sub <- state.subscribers, do: send(sub, {:agent_stopped, state.id, code})
-    {:noreply, %{state | port: nil, status: :idle, buffer: new_buf, conversation_started: true}}
+    state = push_buffer(state, error)
+    for {sub, _} <- state.subscribers, do: send(sub, {:agent_stopped, state.id, code})
+    {:noreply, %{state | port: nil, status: :idle, conversation_started: true}}
   end
 
   # Port exit in :interactive mode
@@ -243,7 +252,7 @@ defmodule Codrift.AgentProcess do
   end
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    {:noreply, %{state | subscribers: List.delete(state.subscribers, pid)}}
+    {:noreply, %{state | subscribers: Map.delete(state.subscribers, pid)}}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -274,17 +283,17 @@ defmodule Codrift.AgentProcess do
     if text == "" do
       %{state | raw_line_buf: leftover}
     else
-      new_buffer = Enum.take([text | state.buffer], 1_000)
-      for sub <- state.subscribers, do: send(sub, {:agent_output, state.id, text})
-      %{state | buffer: new_buffer, status: :running, raw_line_buf: leftover}
+      state = push_buffer(state, text)
+      for {sub, _} <- state.subscribers, do: send(sub, {:agent_output, state.id, text})
+      %{state | status: :running, raw_line_buf: leftover}
     end
   end
 
   defp process_output(state, data) do
     new_status = state.adapter.parse_status(data) || state.status
-    new_buffer = Enum.take([data | state.buffer], 1_000)
-    for sub <- state.subscribers, do: send(sub, {:agent_output, state.id, data})
-    %{state | buffer: new_buffer, status: new_status}
+    state = push_buffer(state, data)
+    for {sub, _} <- state.subscribers, do: send(sub, {:agent_output, state.id, data})
+    %{state | status: new_status}
   end
 
   defp extract_text_delta(line) do
@@ -302,22 +311,22 @@ defmodule Codrift.AgentProcess do
   end
 
   defp handle_exit(state, code, final_status) do
-    new_buffer =
+    state =
       if code != 0,
-        do: Enum.take(["\n[agent exited with code #{code}]\n" | state.buffer], 1_000),
-        else: state.buffer
+        do: push_buffer(state, "\n[agent exited with code #{code}]\n"),
+        else: state
 
-    for sub <- state.subscribers, do: send(sub, {:agent_stopped, state.id, code})
+    for {sub, _} <- state.subscribers, do: send(sub, {:agent_stopped, state.id, code})
 
-    {:noreply,
-     %{
-       state
-       | exec_pid: nil,
-         exec_ospid: nil,
-         port: nil,
-         status: final_status,
-         buffer: new_buffer
-     }}
+    {:noreply, %{state | exec_pid: nil, exec_ospid: nil, port: nil, status: final_status}}
+  end
+
+  defp push_buffer(state, data) do
+    if state.buffer_size >= 1_000 do
+      %{state | buffer: [data | Enum.take(state.buffer, 999)]}
+    else
+      %{state | buffer: [data | state.buffer], buffer_size: state.buffer_size + 1}
+    end
   end
 
   defp dedup_env(env) do

@@ -9,19 +9,25 @@ defmodule Codrift.TUI.VT100 do
 
   1. `new/2` — allocate a virtual screen (width × height cell grid)
   2. `process/2` — feed raw PTY bytes; updates cursor, cells, and style
-  3. `to_text/1` — convert the cell grid to `%ExRatatui.Text{}` for rendering
-  4. `resize/3` — notify the emulator of dimension changes (also send TIOCSWINSZ
-     to the process via `erlexec`'s `:exec.winsz/3`)
+  3. `to_text/2` — convert the cell grid to `%ExRatatui.Text{}` for rendering
+  4. `resize/3` — notify the emulator of dimension changes
 
   ## Supported sequences
 
   - SGR colors and modifiers (`\\e[...m`)
-  - Cursor movement: absolute (`H`/`f`), relative (`A B C D`), column (`G`)
-  - Erase: screen (`J 0/1/2`), line (`K 0/1/2`)
+  - Cursor movement: absolute (`H`/`f`/`d`), relative (`A B C D`), column (`G`)
+  - Erase: screen (`J 0/1/2`), line (`K 0/1/2`), characters (`X`)
+  - Character insert/delete (`@`/`P`)
+  - Scroll region (`r`)
   - Save/restore cursor (`\\e7`/`\\e8` and `\\e[s`/`\\e[u`)
-  - Set scroll region (`r`)
   - Alternate screen toggle (`?1049h/l` — treated as clear)
+  - Cursor visibility (`?25h/l`)
   - Carriage return, line feed, backspace, tab
+
+  ## Not implemented (safe to add later once scroll-region tracking is validated)
+
+  - IL/DL (`L`/`M`) — insert/delete lines; requires accurate scroll-region sync
+  - SU/SD (`S`/`T`) — scroll viewport; same caveat
   """
 
   alias ExRatatui.Style
@@ -40,10 +46,12 @@ defmodule Codrift.TUI.VT100 do
     :cells,
     :cursor_row,
     :cursor_col,
+    :cursor_visible,
     :saved_cursor,
     :style,
     :scroll_top,
-    :scroll_bottom
+    :scroll_bottom,
+    :incomplete
   ]
 
   @type t :: %__MODULE__{
@@ -52,10 +60,12 @@ defmodule Codrift.TUI.VT100 do
           cells: grid(),
           cursor_row: non_neg_integer(),
           cursor_col: non_neg_integer(),
+          cursor_visible: boolean(),
           saved_cursor: {non_neg_integer(), non_neg_integer()},
           style: Style.t(),
           scroll_top: non_neg_integer(),
-          scroll_bottom: non_neg_integer()
+          scroll_bottom: non_neg_integer(),
+          incomplete: binary()
         }
 
   @doc "Creates a new virtual screen with all cells blank."
@@ -66,44 +76,74 @@ defmodule Codrift.TUI.VT100 do
       cells: %{},
       cursor_row: 0,
       cursor_col: 0,
+      cursor_visible: true,
       saved_cursor: {0, 0},
       style: @default_style,
       scroll_top: 0,
-      scroll_bottom: max(height - 1, 0)
+      scroll_bottom: max(height - 1, 0),
+      incomplete: ""
     }
   end
 
   @doc "Resizes the virtual screen, discarding cells outside the new bounds."
   def resize(%__MODULE__{} = screen, width, height) do
-    %{screen | width: max(width, 1), height: max(height, 1), scroll_bottom: max(height - 1, 0)}
+    w = max(width, 1)
+    h = max(height, 1)
+    {sr, sc} = screen.saved_cursor
+
+    %{
+      screen
+      | width: w,
+        height: h,
+        scroll_top: min(screen.scroll_top, h - 1),
+        scroll_bottom: h - 1,
+        cursor_row: min(screen.cursor_row, h - 1),
+        cursor_col: min(screen.cursor_col, w - 1),
+        saved_cursor: {min(sr, h - 1), min(sc, w - 1)}
+    }
   end
 
   @doc "Feeds raw PTY bytes into the emulator and returns the updated screen."
   def process(%__MODULE__{} = screen, data) when is_binary(data) do
-    process_bytes(screen, data)
+    combined = screen.incomplete <> data
+    {complete, leftover} = split_at_incomplete(combined)
+    updated = process_bytes(screen, complete)
+    %{updated | incomplete: leftover}
   end
 
-  @doc "Converts the current screen state to an `%ExRatatui.Text{}` ready for `Paragraph`."
-  def to_text(%__MODULE__{} = screen) do
+  @doc """
+  Converts the current screen state to an `%ExRatatui.Text{}` ready for `Paragraph`.
+
+  Pass `show_cursor: true` to render the cursor as a reversed cell. The cursor is
+  only shown if the screen has not hidden it via `\\e[?25l`.
+  """
+  def to_text(%__MODULE__{} = screen, show_cursor \\ false) do
+    display_cursor = show_cursor and screen.cursor_visible
+
     lines =
       Enum.map(0..(screen.height - 1), fn row ->
         row_cells = Map.get(screen.cells, row, %{})
-        %Line{spans: row_to_spans(row_cells, screen.width)}
+
+        cells =
+          if display_cursor and row == screen.cursor_row do
+            col = screen.cursor_col
+            {ch, style} = Map.get(row_cells, col, {@empty_char, @default_style})
+            cursor_style = %{style | modifiers: Enum.uniq([:reversed | style.modifiers])}
+            Map.put(row_cells, col, {ch, cursor_style})
+          else
+            row_cells
+          end
+
+        %Line{spans: row_to_spans(cells, screen.width)}
       end)
 
     %Text{lines: lines}
   end
 
-  defp row_to_spans(row_cells, _width) do
-    if map_size(row_cells) == 0 do
-      []
-    else
-      last_col = Enum.max(Map.keys(row_cells))
-
-      0..last_col
-      |> Enum.map(fn col -> Map.get(row_cells, col, {@empty_char, @default_style}) end)
-      |> group_spans()
-    end
+  defp row_to_spans(row_cells, width) do
+    0..(width - 1)
+    |> Enum.map(fn col -> Map.get(row_cells, col, {@empty_char, @default_style}) end)
+    |> group_spans()
   end
 
   defp group_spans([]), do: [%Span{content: " "}]
@@ -117,6 +157,55 @@ defmodule Codrift.TUI.VT100 do
       %Span{content: content, style: style}
     end)
   end
+
+  # ── Incomplete-sequence carry buffer ─────────────────────────────────────
+  #
+  # PTY output arrives in arbitrary chunks that can be split mid-escape-sequence.
+  # We scan the end of each combined (carry + new) binary for an incomplete ESC
+  # sequence and hold it over for the next call rather than dropping it or
+  # misinterpreting the continuation bytes as literal text.
+
+  defp split_at_incomplete(data) do
+    sz = byte_size(data)
+    scan_start = max(sz - 1032, 0)
+
+    case find_last_esc(data, sz - 1, scan_start) do
+      nil ->
+        {data, ""}
+
+      pos ->
+        tail = binary_part(data, pos, sz - pos)
+
+        if incomplete_esc?(tail),
+          do: {binary_part(data, 0, pos), tail},
+          else: {data, ""}
+    end
+  end
+
+  defp find_last_esc(_data, pos, min_pos) when pos < min_pos, do: nil
+
+  defp find_last_esc(data, pos, min_pos) do
+    if :binary.at(data, pos) == 0x1B,
+      do: pos,
+      else: find_last_esc(data, pos - 1, min_pos)
+  end
+
+  # Lone ESC or ESC + bracket with no final byte yet
+  defp incomplete_esc?(<<"\e">>), do: true
+  defp incomplete_esc?(<<"\e[">>), do: true
+
+  defp incomplete_esc?(<<"\e[", rest::binary>>) do
+    # All bytes after \e[ are param/intermediate (0x20–0x3F), no final byte (0x40–0x7E)
+    :binary.bin_to_list(rest) |> Enum.all?(&(&1 in 0x20..0x3F))
+  end
+
+  # OSC with no BEL or ST yet — cap at 1 KB to prevent infinite accumulation
+  defp incomplete_esc?(<<"\e]", rest::binary>>) when byte_size(rest) < 1024 do
+    :binary.match(rest, <<7>>) == :nomatch and
+      :binary.match(rest, <<0x1B, 0x5C>>) == :nomatch
+  end
+
+  defp incomplete_esc?(_), do: false
 
   # ── Byte-level parser ─────────────────────────────────────────────────────
 
@@ -147,6 +236,30 @@ defmodule Codrift.TUI.VT100 do
 
   defp process_bytes(screen, <<"\eM", rest::binary>>),
     do: process_bytes(reverse_index(screen), rest)
+
+  # IND — index (same as LF but within scroll region)
+  defp process_bytes(screen, <<"\eD", rest::binary>>),
+    do: process_bytes(advance_line(screen), rest)
+
+  # NEL — next line (CR + LF)
+  defp process_bytes(screen, <<"\eE", rest::binary>>),
+    do: process_bytes(advance_line(%{screen | cursor_col: 0}), rest)
+
+  # RIS — reset to initial state (hard reset: clear screen + reset scroll region)
+  defp process_bytes(screen, <<"\ec", rest::binary>>) do
+    reset = %{
+      screen
+      | cells: %{},
+        cursor_row: 0,
+        cursor_col: 0,
+        scroll_top: 0,
+        scroll_bottom: screen.height - 1,
+        style: @default_style,
+        saved_cursor: {0, 0}
+    }
+
+    process_bytes(reset, rest)
+  end
 
   # Unknown two-char ESC — skip
   defp process_bytes(screen, <<"\e", _::utf8, rest::binary>>), do: process_bytes(screen, rest)
@@ -212,6 +325,12 @@ defmodule Codrift.TUI.VT100 do
     %{screen | cursor_col: clamp(col, 0, screen.width - 1)}
   end
 
+  # VPA — vertical position absolute
+  defp apply_csi(screen, params, ?d) do
+    row = clamp(p(params, 0, 1) - 1, 0, screen.height - 1)
+    %{screen | cursor_row: row}
+  end
+
   defp apply_csi(screen, params, ?J) do
     case p(params, 0, 0) do
       0 -> erase_below(screen)
@@ -230,20 +349,96 @@ defmodule Codrift.TUI.VT100 do
     end
   end
 
+  # ECH — erase characters
+  defp apply_csi(screen, params, ?X) do
+    n = p(params, 0, 1)
+    erase_chars(screen, n)
+  end
+
+  # ICH — insert characters
+  defp apply_csi(screen, params, ?@) do
+    n = p(params, 0, 1)
+    insert_chars(screen, n)
+  end
+
+  # DCH — delete characters
+  defp apply_csi(screen, params, ?P) do
+    n = p(params, 0, 1)
+    delete_chars(screen, n)
+  end
+
   defp apply_csi(screen, params, ?m), do: %{screen | style: apply_sgr(params, screen.style)}
   defp apply_csi(screen, _params, ?s), do: save_cursor(screen)
   defp apply_csi(screen, _params, ?u), do: restore_cursor(screen)
 
+  # DECSTBM — set scroll region; cursor homes to (0, 0) per DEC spec (without DECOM)
   defp apply_csi(screen, params, ?r) do
     top = max(p(params, 0, 1) - 1, 0)
     bottom = min(p(params, 1, screen.height) - 1, screen.height - 1)
-    %{screen | scroll_top: top, scroll_bottom: bottom, cursor_row: 0, cursor_col: 0}
+
+    if top < bottom and bottom < screen.height do
+      %{screen | scroll_top: top, scroll_bottom: bottom, cursor_row: 0, cursor_col: 0}
+    else
+      %{screen | scroll_top: 0, scroll_bottom: screen.height - 1, cursor_row: 0, cursor_col: 0}
+    end
+  end
+
+  # IL — insert N blank lines at cursor, pushing lines in scroll region down
+  defp apply_csi(screen, params, ?L) do
+    if in_scroll_region?(screen) do
+      n = p(params, 0, 1)
+      scroll_region_down(screen, screen.cursor_row, n)
+    else
+      screen
+    end
+  end
+
+  # DL — delete N lines at cursor, pulling lines in scroll region up
+  defp apply_csi(screen, params, ?M) do
+    if in_scroll_region?(screen) do
+      n = p(params, 0, 1)
+      scroll_region_up(screen, screen.cursor_row, n)
+    else
+      screen
+    end
+  end
+
+  # SU — scroll viewport up N lines (content moves up, cursor stays)
+  defp apply_csi(screen, params, ?S) do
+    n = p(params, 0, 1)
+    row = screen.cursor_row
+    %{scroll_up(screen, n) | cursor_row: row}
+  end
+
+  # SD — scroll viewport down N lines (content moves down, cursor stays)
+  defp apply_csi(screen, params, ?T) do
+    n = p(params, 0, 1)
+    row = screen.cursor_row
+    %{scroll_down(screen, n) | cursor_row: row}
   end
 
   defp apply_csi(screen, _params, _final), do: screen
 
   defp apply_private_csi(screen, params, ?h) do
-    if List.first(params) == 1049, do: clear_screen(screen), else: screen
+    case List.first(params) do
+      1049 -> screen
+      1047 -> screen
+      1048 -> save_cursor(screen)
+      47 -> screen
+      25 -> %{screen | cursor_visible: true}
+      _ -> screen
+    end
+  end
+
+  defp apply_private_csi(screen, params, ?l) do
+    case List.first(params) do
+      1049 -> screen
+      1047 -> screen
+      1048 -> restore_cursor(screen)
+      47 -> screen
+      25 -> %{screen | cursor_visible: false}
+      _ -> screen
+    end
   end
 
   defp apply_private_csi(screen, _params, _final), do: screen
@@ -273,7 +468,7 @@ defmodule Codrift.TUI.VT100 do
   end
 
   defp advance_line(%{cursor_row: row, scroll_bottom: bottom} = screen) when row >= bottom do
-    scroll_up(screen, 1)
+    %{scroll_up(screen, 1) | cursor_row: bottom}
   end
 
   defp advance_line(screen) do
@@ -281,7 +476,7 @@ defmodule Codrift.TUI.VT100 do
   end
 
   defp reverse_index(%{cursor_row: row, scroll_top: top} = screen) when row <= top do
-    scroll_down(screen, 1)
+    %{scroll_down(screen, 1) | cursor_row: top}
   end
 
   defp reverse_index(screen) do
@@ -291,23 +486,29 @@ defmodule Codrift.TUI.VT100 do
   defp scroll_up(screen, n) do
     top = screen.scroll_top
     bottom = screen.scroll_bottom
+    n = min(n, bottom - top + 1)
 
     new_cells =
-      Enum.reduce(top..(bottom - n), screen.cells, fn row, cells ->
-        Map.put(cells, row, Map.get(cells, row + n, %{}))
-      end)
+      if bottom - n >= top do
+        Enum.reduce(top..(bottom - n)//1, screen.cells, fn row, cells ->
+          Map.put(cells, row, Map.get(cells, row + n, %{}))
+        end)
+      else
+        screen.cells
+      end
 
     new_cells =
-      Enum.reduce((bottom - n + 1)..bottom, new_cells, fn row, cells ->
+      Enum.reduce((bottom - n + 1)..bottom//1, new_cells, fn row, cells ->
         Map.put(cells, row, %{})
       end)
 
-    %{screen | cells: new_cells, cursor_row: screen.scroll_bottom}
+    %{screen | cells: new_cells}
   end
 
   defp scroll_down(screen, n) do
     top = screen.scroll_top
     bottom = screen.scroll_bottom
+    n = min(n, bottom - top + 1)
 
     new_cells =
       Enum.reduce(bottom..top//-1, screen.cells, fn row, cells ->
@@ -318,7 +519,96 @@ defmodule Codrift.TUI.VT100 do
         end
       end)
 
-    %{screen | cells: new_cells, cursor_row: screen.scroll_top}
+    %{screen | cells: new_cells}
+  end
+
+  # Scroll sub-region [start_row..scroll_bottom] up by n (IL helper — no cursor change)
+  defp scroll_region_up(screen, start_row, n) do
+    bottom = screen.scroll_bottom
+    n = min(n, bottom - start_row + 1)
+
+    cells =
+      Enum.reduce(start_row..(bottom - n)//1, screen.cells, fn row, acc ->
+        Map.put(acc, row, Map.get(acc, row + n, %{}))
+      end)
+
+    cells =
+      Enum.reduce((bottom - n + 1)..bottom//1, cells, fn row, acc ->
+        Map.put(acc, row, %{})
+      end)
+
+    %{screen | cells: cells}
+  end
+
+  # Scroll sub-region [start_row..scroll_bottom] down by n (IL helper — no cursor change)
+  defp scroll_region_down(screen, start_row, n) do
+    bottom = screen.scroll_bottom
+    n = min(n, bottom - start_row + 1)
+
+    cells =
+      Enum.reduce(bottom..(start_row + n)//-1, screen.cells, fn row, acc ->
+        Map.put(acc, row, Map.get(acc, row - n, %{}))
+      end)
+
+    cells =
+      Enum.reduce(start_row..(start_row + n - 1)//1, cells, fn row, acc ->
+        Map.put(acc, row, %{})
+      end)
+
+    %{screen | cells: cells}
+  end
+
+  defp in_scroll_region?(s),
+    do: s.cursor_row >= s.scroll_top and s.cursor_row <= s.scroll_bottom
+
+  defp insert_chars(screen, n) do
+    row = screen.cursor_row
+    col = screen.cursor_col
+    width = screen.width
+    row_cells = Map.get(screen.cells, row, %{})
+
+    new_row =
+      Enum.reduce(row_cells, %{}, fn {c, cell}, acc ->
+        cond do
+          c < col -> Map.put(acc, c, cell)
+          c + n < width -> Map.put(acc, c + n, cell)
+          true -> acc
+        end
+      end)
+
+    %{screen | cells: Map.put(screen.cells, row, new_row)}
+  end
+
+  defp delete_chars(screen, n) do
+    row = screen.cursor_row
+    col = screen.cursor_col
+    width = screen.width
+    row_cells = Map.get(screen.cells, row, %{})
+
+    new_row =
+      Enum.reduce(row_cells, %{}, fn {c, cell}, acc ->
+        cond do
+          c < col -> Map.put(acc, c, cell)
+          c < col + n -> acc
+          c - n < width -> Map.put(acc, c - n, cell)
+          true -> acc
+        end
+      end)
+
+    %{screen | cells: Map.put(screen.cells, row, new_row)}
+  end
+
+  defp erase_chars(screen, n) do
+    col = screen.cursor_col
+    n = min(n, screen.width - col)
+
+    if n > 0 do
+      update_row(screen, screen.cursor_row, fn row_map ->
+        Map.drop(row_map, Enum.to_list(col..(col + n - 1)//1))
+      end)
+    else
+      screen
+    end
   end
 
   defp save_cursor(screen) do
@@ -336,13 +626,25 @@ defmodule Codrift.TUI.VT100 do
 
   defp erase_below(screen) do
     row = screen.cursor_row
+    last_col = screen.width - 1
+    last_row = screen.height - 1
 
     new_cells =
       screen.cells
       |> Map.update(row, %{}, fn row_map ->
-        Map.drop(row_map, Enum.to_list(screen.cursor_col..(screen.width - 1)))
+        if screen.cursor_col <= last_col do
+          Map.drop(row_map, Enum.to_list(screen.cursor_col..last_col//1))
+        else
+          row_map
+        end
       end)
-      |> Map.drop(Enum.to_list((row + 1)..(screen.height - 1)))
+      |> then(fn cells ->
+        if row + 1 <= last_row do
+          Map.drop(cells, Enum.to_list((row + 1)..last_row//1))
+        else
+          cells
+        end
+      end)
 
     %{screen | cells: new_cells}
   end
@@ -353,22 +655,34 @@ defmodule Codrift.TUI.VT100 do
     new_cells =
       screen.cells
       |> Map.update(row, %{}, fn row_map ->
-        Map.drop(row_map, Enum.to_list(0..screen.cursor_col))
+        Map.drop(row_map, Enum.to_list(0..screen.cursor_col//1))
       end)
-      |> Map.drop(Enum.to_list(0..(row - 1)))
+      |> then(fn cells ->
+        if row > 0 do
+          Map.drop(cells, Enum.to_list(0..(row - 1)//1))
+        else
+          cells
+        end
+      end)
 
     %{screen | cells: new_cells}
   end
 
   defp erase_line_right(screen) do
-    update_row(screen, screen.cursor_row, fn row_map ->
-      Map.drop(row_map, Enum.to_list(screen.cursor_col..(screen.width - 1)))
-    end)
+    last_col = screen.width - 1
+
+    if screen.cursor_col <= last_col do
+      update_row(screen, screen.cursor_row, fn row_map ->
+        Map.drop(row_map, Enum.to_list(screen.cursor_col..last_col//1))
+      end)
+    else
+      screen
+    end
   end
 
   defp erase_line_left(screen) do
     update_row(screen, screen.cursor_row, fn row_map ->
-      Map.drop(row_map, Enum.to_list(0..screen.cursor_col))
+      Map.drop(row_map, Enum.to_list(0..screen.cursor_col//1))
     end)
   end
 
@@ -477,8 +791,8 @@ defmodule Codrift.TUI.VT100 do
 
   defp split_csi_numeric(rest, acc), do: {Enum.reverse(acc), rest}
 
-  # Captures 0x30–0x3F: all param characters including ? < > = — used for normal params
-  defp split_csi(<<byte::8, rest::binary>>, acc) when byte in 0x30..0x3F do
+  # Captures param bytes (0x30–0x3F) and intermediate bytes (0x20–0x2F)
+  defp split_csi(<<byte::8, rest::binary>>, acc) when byte in 0x20..0x3F do
     split_csi(rest, [byte | acc])
   end
 
@@ -486,6 +800,7 @@ defmodule Codrift.TUI.VT100 do
 
   defp parse_csi_params(bytes) do
     bytes
+    |> Enum.filter(fn b -> b in 0x30..0x3F end)
     |> List.to_string()
     |> String.split(";")
     |> Enum.map(&parse_num_or_empty/1)
