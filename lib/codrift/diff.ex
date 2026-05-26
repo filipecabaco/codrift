@@ -21,6 +21,79 @@ defmodule Codrift.Diff do
     defstruct [:path, :old_path, :hunks, :additions, :deletions]
   end
 
+  @doc """
+  Converts a `FileDiff` to a list of typed row tuples for side-by-side rendering.
+
+  Each row is `{type, old_content | nil, new_content | nil}` where `type` is:
+  - `:header`  — hunk header (`@@ … @@`)
+  - `:context` — unchanged line (appears on both sides)
+  - `:change`  — remove (`old` present, `new` may be nil) or add (vice-versa)
+  """
+  def to_split_rows(%FileDiff{} = f) do
+    Enum.flat_map(f.hunks, fn hunk ->
+      [{:header, hunk.header, hunk.header} | pair_hunk_rows(hunk.lines)]
+    end)
+  end
+
+  defp pair_hunk_rows(lines) do
+    lines
+    |> chunk_by_change()
+    |> Enum.flat_map(fn
+      {:context, items} ->
+        Enum.map(items, fn content -> {:context, content, content} end)
+
+      {:change, removes, adds} ->
+        count = max(length(removes), length(adds))
+        removes_padded = removes ++ List.duplicate(nil, count - length(removes))
+        adds_padded = adds ++ List.duplicate(nil, count - length(adds))
+        Enum.zip(removes_padded, adds_padded) |> Enum.map(fn {r, a} -> {:change, r, a} end)
+    end)
+  end
+
+  @doc """
+  Converts a `FileDiff` to a list of `{old_line | nil, new_line | nil}` tuples
+  for side-by-side (split) diff rendering.
+
+  Context lines appear on both sides. Adjacent remove/add blocks are paired
+  row-by-row; excess removes or adds get a `nil` partner.
+  """
+  def to_split_lines(%FileDiff{} = f) do
+    Enum.flat_map(f.hunks, fn hunk ->
+      [{hunk.header, hunk.header} | pair_hunk_lines(hunk.lines)]
+    end)
+  end
+
+  defp pair_hunk_lines(lines) do
+    lines
+    |> chunk_by_change()
+    |> Enum.flat_map(fn
+      {:context, items} ->
+        Enum.map(items, &{&1, &1})
+
+      {:change, removes, adds} ->
+        count = max(length(removes), length(adds))
+        removes_padded = removes ++ List.duplicate(nil, count - length(removes))
+        adds_padded = adds ++ List.duplicate(nil, count - length(adds))
+        Enum.zip(removes_padded, adds_padded)
+    end)
+  end
+
+  # Groups consecutive context lines together and consecutive change lines
+  # (removes + adds in any order) into `{:change, removes, adds}` tuples.
+  defp chunk_by_change(lines) do
+    lines
+    |> Enum.chunk_by(fn %Line{type: t} -> t == :context end)
+    |> Enum.flat_map(fn
+      [%Line{type: :context} | _] = group ->
+        [{:context, Enum.map(group, & &1.content)}]
+
+      group ->
+        removes = group |> Enum.filter(&(&1.type == :remove)) |> Enum.map(& &1.content)
+        adds = group |> Enum.filter(&(&1.type == :add)) |> Enum.map(& &1.content)
+        [{:change, removes, adds}]
+    end)
+  end
+
   @doc "Serialises a `FileDiff` back to a unified diff patch string for display."
   def to_unified(%FileDiff{} = f) do
     header = "--- a/#{f.old_path}\n+++ b/#{f.path}"

@@ -28,6 +28,11 @@ defmodule Codrift.SessionStore do
     GenServer.call(server, {:get, initiative_id, dir})
   end
 
+  @doc "Returns all saved sessions as `[{initiative_id, dir, session_id}]`."
+  def list_all(server \\ __MODULE__) do
+    GenServer.call(server, :list_all)
+  end
+
   # ── GenServer callbacks ─────────────────────────────────────────────────────
 
   @impl true
@@ -86,6 +91,25 @@ defmodule Codrift.SessionStore do
     :ok = Exqlite.Sqlite3.release(db, stmt)
 
     {:reply, result, state}
+  end
+
+  def handle_call(:list_all, _from, %{db: db} = state) do
+    {:ok, stmt} =
+      Exqlite.Sqlite3.prepare(db, "SELECT initiative_id, dir, session_id FROM claude_sessions")
+
+    rows = collect_rows(db, stmt, [])
+    :ok = Exqlite.Sqlite3.release(db, stmt)
+    {:reply, rows, state}
+  end
+
+  defp collect_rows(db, stmt, acc) do
+    case Exqlite.Sqlite3.step(db, stmt) do
+      {:row, [initiative_id, dir, session_id]} ->
+        collect_rows(db, stmt, [{initiative_id, dir, session_id} | acc])
+
+      :done ->
+        Enum.reverse(acc)
+    end
   end
 
   @impl true

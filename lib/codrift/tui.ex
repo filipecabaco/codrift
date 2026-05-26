@@ -8,7 +8,7 @@ defmodule Codrift.TUI do
       │ ● Context  ○ 2: Diff                         │  mode indicator
       ├─────────────┬────────────────────────────────┤
       │ Initiatives │                                │
-      │  └ 📁 dir   │  Context-driven main pane      │
+      │  └ ▸ dir    │  Context-driven main pane      │
       │     └ agent │  (updates as cursor moves)     │
       ├─────────────┴────────────────────────────────┤
       │ status / hints                               │  footer
@@ -37,8 +37,11 @@ defmodule Codrift.TUI do
   | `s` | Start Claude agent (context-sensitive) |
   | `d` | Delete / remove / stop (context-sensitive with confirmation) |
   | `Ctrl+P` | Command palette |
+  | `Ctrl+B` | Toggle sidebar (collapse / expand) |
   | `1` | Context mode (default) |
   | `2` | Diff mode for selected initiative |
+  | `v` | Toggle diff view: unified ↔ split (diff mode only) |
+  | `*` | Reset diff sidebar to "all files" (diff mode only) |
   | `r` | Refresh current pane |
   | `Ctrl+D` / `Ctrl+U` | Scroll half-page |
   | `q` / `Ctrl+C` | Quit (kills all running agents) |
@@ -91,25 +94,44 @@ defmodule Codrift.TUI do
     :editor_ref,
     :editing_file,
     :autosave_ref,
-    :term_size
+    :term_size,
+    # Diff tab state (separate from main_scroll to avoid reset on sidebar navigation)
+    :diff_scroll,
+    :diff_view_mode,
+    # diff sidebar (replaces context sidebar when active_tab == :diff)
+    :diff_sidebar_entries,
+    :diff_sidebar_cursor,
+    :sidebar_collapsed
   ]
 
   @default_status "j/k:navigate  n:new  s:start  d:delete  t:terminal  Tab:agent pane  2:diff  Ctrl+P:palette  q:quit"
 
   @actions [
+    # Navigation
+    %{id: :toggle_sidebar, label: "Toggle Sidebar", hint: "Ctrl+B"},
+    %{id: :context_mode, label: "Context View", hint: "1"},
+    %{id: :diff_mode, label: "Diff View", hint: "2"},
+    %{id: :toggle_diff_view, label: "Toggle Diff: Unified / Split", hint: "v"},
+    %{id: :diff_all_files, label: "Diff: Show All Files", hint: "*"},
+    # Initiatives & directories
     %{id: :new_initiative, label: "New Initiative", hint: "n"},
     %{id: :add_dir, label: "Add Directory", hint: "a"},
+    %{id: :cycle_status, label: "Cycle Initiative Status", hint: "[/]"},
+    %{id: :delete_current, label: "Delete / Stop Current", hint: "d"},
+    # Agents
     %{id: :start_claude, label: "Start Claude Agent", hint: "s"},
     %{id: :start_terminal, label: "Open Terminal Here", hint: "t"},
     %{id: :start_aider, label: "Start Aider Agent", hint: ""},
-    %{id: :delete_current, label: "Delete / Stop Current", hint: "d"},
-    %{id: :refresh, label: "Refresh", hint: "r"},
-    %{id: :cycle_status, label: "Cycle Status", hint: "[/]"},
-    %{id: :new_context_file, label: "New Context File", hint: "c"}
+    # Context files
+    %{id: :new_context_file, label: "New Context File", hint: "c"},
+    %{id: :edit_context_file, label: "Edit Context File", hint: "e"},
+    # Other
+    %{id: :refresh, label: "Refresh", hint: "r"}
   ]
 
   @impl true
   def mount(_opts) do
+    Process.send_after(self(), :autostart_sessions, 300)
     initiatives = Store.list()
     agents = Enum.map(AgentSupervisor.list_agents(), &AgentProcess.status/1)
 
@@ -147,7 +169,12 @@ defmodule Codrift.TUI do
        sidebar_tick_ref: Process.send_after(self(), :sidebar_tick, 2000),
        editor_ref: ExRatatui.textarea_new(),
        editing_file: nil,
-       autosave_ref: nil
+       autosave_ref: nil,
+       diff_scroll: 0,
+       diff_view_mode: :unified,
+       diff_sidebar_entries: [],
+       diff_sidebar_cursor: 0,
+       sidebar_collapsed: false
      }}
   end
 
@@ -158,19 +185,65 @@ defmodule Codrift.TUI do
     [header_rect, body_rect, footer_rect] =
       Layout.split(full, :vertical, [{:length, 1}, {:min, 0}, {:length, 1}])
 
-    [sidebar_rect, main_rect] =
-      Layout.split(body_rect, :horizontal, [{:percentage, 30}, {:percentage, 70}])
+    {sidebar_widgets, main_rect} =
+      if state.sidebar_collapsed do
+        {[], body_rect}
+      else
+        [sidebar_rect, mr] =
+          Layout.split(body_rect, :horizontal, [{:percentage, 30}, {:percentage, 70}])
 
-    base = [
-      {render_mode_bar(state), header_rect},
-      {Sidebar.render(state.sidebar_entries, state.sidebar_cursor, state.focus), sidebar_rect},
-      {render_footer(state), footer_rect}
-    ]
+        sidebar_widget =
+          if state.active_tab == :diff do
+            Sidebar.render_diff(
+              state.diff_sidebar_entries,
+              state.diff_sidebar_cursor,
+              state.focus
+            )
+          else
+            Sidebar.render(state.sidebar_entries, state.sidebar_cursor, state.focus)
+          end
+
+        {[{sidebar_widget, sidebar_rect}], mr}
+      end
+
+    base =
+      [{render_mode_bar(state), header_rect}] ++
+        sidebar_widgets ++
+        [{render_footer(state), footer_rect}]
 
     base ++ render_main_area(state, main_rect) ++ Modals.render(state, frame)
   end
 
   @impl true
+  def handle_event(%Key{code: "b", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
+    new_collapsed = not state.sidebar_collapsed
+    {term_w, term_h} = state.term_size || {80, 24}
+    {pane_w, pane_h} = calc_pane_size(term_w, term_h, new_collapsed)
+
+    new_screens =
+      Map.new(state.vt100_screens, fn {id, screen} ->
+        {id, VT100.resize(screen, pane_w, pane_h)}
+      end)
+
+    resize_all_ptys(pane_w, pane_h)
+
+    # If the sidebar was focused while collapsing, shift focus to main so
+    # keyboard navigation doesn't silently move an invisible cursor.
+    new_focus =
+      if new_collapsed and Focus.focused?(state.focus, :sidebar),
+        do: Focus.new([:main, :sidebar]),
+        else: state.focus
+
+    {:noreply,
+     %{
+       state
+       | sidebar_collapsed: new_collapsed,
+         pane_size: {pane_w, pane_h},
+         vt100_screens: new_screens,
+         focus: new_focus
+     }}
+  end
+
   def handle_event(%Key{code: "c", kind: "press", modifiers: ["ctrl"]}, state) do
     if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
       {:noreply, forward_raw(state, "\x03")}
@@ -199,7 +272,7 @@ defmodule Codrift.TUI do
   # Left click: focus the pane under the pointer.
   def handle_event(%Mouse{kind: "down", button: "left", x: x, y: _y}, %{modal: :none} = state) do
     {term_w, _} = state.term_size || {80, 24}
-    sidebar_width = round(term_w * 0.30)
+    sidebar_width = if state.sidebar_collapsed, do: 0, else: round(term_w * 0.30)
 
     new_focus =
       if x < sidebar_width do
@@ -289,8 +362,10 @@ defmodule Codrift.TUI do
   #   :sidebar → j/k navigate, letters are management shortcuts
   #   :main    → all printable chars go to the agent input buffer
 
-  def handle_event(%Key{code: "q", kind: "press"}, %{modal: :none} = state),
-    do: {:stop, state}
+  def handle_event(%Key{code: "q", kind: "press"}, %{modal: :none} = state) do
+    save_all_sessions(state)
+    {:stop, state}
+  end
 
   def handle_event(%Key{code: code, kind: "press"} = key, %{modal: :none} = state)
       when code in ["tab", "back_tab"] do
@@ -304,18 +379,28 @@ defmodule Codrift.TUI do
   end
 
   def handle_event(%Key{code: "d", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
-    if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
-      {:noreply, forward_raw(state, "\x04")}
-    else
-      {:noreply, %{state | main_scroll: state.main_scroll + 10}}
+    cond do
+      Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\x04")}
+
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff_scroll: state.diff_scroll + 10}}
+
+      true ->
+        {:noreply, %{state | main_scroll: state.main_scroll + 10}}
     end
   end
 
   def handle_event(%Key{code: "u", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
-    if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
-      {:noreply, forward_raw(state, "\x15")}
-    else
-      {:noreply, %{state | main_scroll: max(state.main_scroll - 10, 0)}}
+    cond do
+      Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\x15")}
+
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff_scroll: max(state.diff_scroll - 10, 0)}}
+
+      true ->
+        {:noreply, %{state | main_scroll: max(state.main_scroll - 10, 0)}}
     end
   end
 
@@ -393,6 +478,9 @@ defmodule Codrift.TUI do
       Focus.focused?(state.focus, :sidebar) ->
         {:noreply, navigate(state, 1)}
 
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff_scroll: state.diff_scroll + 3}}
+
       Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
         {:noreply, forward_raw(state, "\e[B")}
 
@@ -408,6 +496,9 @@ defmodule Codrift.TUI do
     cond do
       Focus.focused?(state.focus, :sidebar) ->
         {:noreply, navigate(state, -1)}
+
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff_scroll: max(state.diff_scroll - 3, 0)}}
 
       Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
         {:noreply, forward_raw(state, "\e[A")}
@@ -445,8 +536,27 @@ defmodule Codrift.TUI do
     do:
       {:noreply, %{state | active_tab: :context, main_scroll: 0} |> update_context_from_cursor()}
 
-  defp handle_sidebar_key("2", state),
-    do: {:noreply, refresh_diff(%{state | active_tab: :diff, main_scroll: 0})}
+  defp handle_sidebar_key("2", state) do
+    new_state = %{
+      state
+      | active_tab: :diff,
+        main_scroll: 0,
+        diff_scroll: 0,
+        diff_sidebar_cursor: 0,
+        diff_view_mode: :unified
+    }
+
+    {:noreply, refresh_diff(new_state)}
+  end
+
+  defp handle_sidebar_key("v", %{active_tab: :diff} = state) do
+    new_mode = if state.diff_view_mode == :unified, do: :split, else: :unified
+    {:noreply, %{state | diff_view_mode: new_mode, diff_scroll: 0}}
+  end
+
+  defp handle_sidebar_key("*", %{active_tab: :diff} = state) do
+    {:noreply, %{state | diff_sidebar_cursor: 0, diff_scroll: 0}}
+  end
 
   defp handle_sidebar_key("a", state), do: {:noreply, open_add_dir_modal(state)}
 
@@ -505,7 +615,7 @@ defmodule Codrift.TUI do
   end
 
   def handle_info({:apply_resize, w, h}, state) do
-    {pane_w, pane_h} = calc_pane_size(w, h)
+    {pane_w, pane_h} = calc_pane_size(w, h, state.sidebar_collapsed)
 
     new_screens =
       Map.new(state.vt100_screens, fn {id, screen} ->
@@ -556,7 +666,7 @@ defmodule Codrift.TUI do
 
     {:noreply,
      reload_sidebar(
-       flash_status(new_state, "⚠ Agent #{short} exited #{code} — see output pane", 4000)
+       flash_status(new_state, "! Agent #{short} exited #{code} — see output pane", 4000)
      )}
   end
 
@@ -653,7 +763,39 @@ defmodule Codrift.TUI do
     {:noreply, %{state | status: @default_status}}
   end
 
+  # Auto-restart Claude agents that were running when the TUI last exited.
+  def handle_info(:autostart_sessions, state) do
+    sessions = Codrift.SessionStore.list_all()
+
+    new_state =
+      Enum.reduce(sessions, state, fn {initiative_id, dir, _uuid}, acc ->
+        case Store.get(initiative_id) do
+          {:ok, _initiative} ->
+            do_start_agent(acc, initiative_id, dir, Codrift.Agent.Adapters.Claude)
+
+          _ ->
+            acc
+        end
+      end)
+
+    {:noreply, new_state}
+  end
+
   def handle_info(_, state), do: {:noreply, state}
+
+  defp save_all_sessions(state) do
+    for agent_id <- MapSet.to_list(state.subscribed_agents) do
+      try do
+        with {:ok, pid} <- AgentSupervisor.find_agent(agent_id),
+             status <- AgentProcess.status(pid),
+             uuid when not is_nil(uuid) <- AgentProcess.session_uuid(pid) do
+          Codrift.SessionStore.save(status.initiative_id, status.dir, uuid)
+        end
+      catch
+        :exit, _ -> :ok
+      end
+    end
+  end
 
   defp confirm_name(state) do
     name = String.trim(ExRatatui.text_input_get_value(state.modal_input))
@@ -870,12 +1012,72 @@ defmodule Codrift.TUI do
       nil ->
         %{state | modal: :none}
 
+      # ── Navigation ────────────────────────────────────────────────────────────
+
+      %{id: :toggle_sidebar} ->
+        new_collapsed = not state.sidebar_collapsed
+        {term_w, term_h} = state.term_size || {80, 24}
+        {pane_w, pane_h} = calc_pane_size(term_w, term_h, new_collapsed)
+
+        new_screens =
+          Map.new(state.vt100_screens, fn {id, screen} ->
+            {id, VT100.resize(screen, pane_w, pane_h)}
+          end)
+
+        resize_all_ptys(pane_w, pane_h)
+
+        new_focus =
+          if new_collapsed and Focus.focused?(state.focus, :sidebar),
+            do: Focus.new([:main, :sidebar]),
+            else: state.focus
+
+        %{
+          state
+          | modal: :none,
+            sidebar_collapsed: new_collapsed,
+            pane_size: {pane_w, pane_h},
+            vt100_screens: new_screens,
+            focus: new_focus
+        }
+
+      %{id: :context_mode} ->
+        %{state | modal: :none, active_tab: :context, main_scroll: 0}
+        |> update_context_from_cursor()
+
+      %{id: :diff_mode} ->
+        refresh_diff(%{
+          state
+          | modal: :none,
+            active_tab: :diff,
+            main_scroll: 0,
+            diff_scroll: 0,
+            diff_sidebar_cursor: 0,
+            diff_view_mode: :unified
+        })
+
+      %{id: :toggle_diff_view} ->
+        new_mode = if state.diff_view_mode == :unified, do: :split, else: :unified
+        %{state | modal: :none, diff_view_mode: new_mode, diff_scroll: 0}
+
+      %{id: :diff_all_files} ->
+        %{state | modal: :none, diff_sidebar_cursor: 0, diff_scroll: 0}
+
+      # ── Initiatives & directories ─────────────────────────────────────────────
+
       %{id: :new_initiative} ->
         ExRatatui.text_input_set_value(state.modal_input, "")
         %{state | modal: :new_name}
 
       %{id: :add_dir} ->
         open_add_dir_modal(%{state | modal: :none})
+
+      %{id: :cycle_status} ->
+        cycle_initiative_status(%{state | modal: :none}, :next)
+
+      %{id: :delete_current} ->
+        open_delete_confirm(%{state | modal: :none})
+
+      # ── Agents ────────────────────────────────────────────────────────────────
 
       %{id: :start_claude} ->
         start_agent_at_cursor(%{state | modal: :none}, Codrift.Agent.Adapters.Claude)
@@ -886,17 +1088,21 @@ defmodule Codrift.TUI do
       %{id: :start_aider} ->
         start_agent_at_cursor(%{state | modal: :none}, Codrift.Agent.Adapters.Aider)
 
-      %{id: :delete_current} ->
-        open_delete_confirm(%{state | modal: :none})
-
-      %{id: :refresh} ->
-        refresh_current(%{state | modal: :none})
-
-      %{id: :cycle_status} ->
-        cycle_initiative_status(%{state | modal: :none}, :next)
+      # ── Context files ─────────────────────────────────────────────────────────
 
       %{id: :new_context_file} ->
         open_new_context_file_modal(%{state | modal: :none})
+
+      %{id: :edit_context_file} ->
+        case Enum.at(state.sidebar_entries, state.sidebar_cursor) do
+          {:context_file, _, path, _} -> start_editing(%{state | modal: :none}, path)
+          _ -> flash_status(%{state | modal: :none}, "Navigate to a context file first")
+        end
+
+      # ── Other ─────────────────────────────────────────────────────────────────
+
+      %{id: :refresh} ->
+        refresh_current(%{state | modal: :none})
     end
   end
 
@@ -910,13 +1116,23 @@ defmodule Codrift.TUI do
 
   defp navigate(state, delta) do
     if Focus.focused?(state.focus, :sidebar) do
-      max_idx = max(length(state.sidebar_entries) - 1, 0)
-      new_cursor = min(max(state.sidebar_cursor + delta, 0), max_idx)
+      if state.active_tab == :diff do
+        # In diff mode the sidebar shows diff entries; navigate those independently.
+        max_idx = max(length(state.diff_sidebar_entries) - 1, 0)
+        new_cursor = min(max(state.diff_sidebar_cursor + delta, 0), max_idx)
+        %{state | diff_sidebar_cursor: new_cursor, diff_scroll: 0}
+      else
+        max_idx = max(length(state.sidebar_entries) - 1, 0)
+        new_cursor = min(max(state.sidebar_cursor + delta, 0), max_idx)
 
-      %{state | sidebar_cursor: new_cursor, main_scroll: 0}
-      |> update_context_from_cursor()
+        %{state | sidebar_cursor: new_cursor, main_scroll: 0}
+        |> update_context_from_cursor()
+      end
     else
-      %{state | main_scroll: max(state.main_scroll + delta * 3, 0)}
+      case state.active_tab do
+        :diff -> %{state | diff_scroll: max(state.diff_scroll + delta * 3, 0)}
+        _ -> %{state | main_scroll: max(state.main_scroll + delta * 3, 0)}
+      end
     end
   end
 
@@ -1246,8 +1462,20 @@ defmodule Codrift.TUI do
   defp refresh_diff(state) do
     case Store.get(state.selected_initiative_id) do
       {:ok, initiative} ->
-        files = Enum.flat_map(initiative.dirs, &diff_for_dir/1)
-        flash_status(%{state | diff_files: files}, "Diff: #{length(files)} file(s) changed")
+        dir_diffs = Enum.map(initiative.dirs, fn dir -> {dir, diff_for_dir(dir)} end)
+        total_files = Enum.sum(Enum.map(dir_diffs, fn {_, fs} -> length(fs) end))
+        diff_sidebar = Sidebar.build_diff_entries(dir_diffs)
+
+        flash_status(
+          %{
+            state
+            | diff_files: dir_diffs,
+              diff_sidebar_entries: diff_sidebar,
+              diff_sidebar_cursor: 0,
+              diff_scroll: 0
+          },
+          "Diff: #{total_files} file(s) changed"
+        )
 
       {:error, :not_found} ->
         flash_status(state, "Initiative not found")
@@ -1301,35 +1529,13 @@ defmodule Codrift.TUI do
         lines: [
           %Line{
             spans: [
-              %Span{content: " ● Context ", style: context_style},
+              %Span{content: " 1: Context ", style: context_style},
               %Span{content: " │ ", style: %Style{fg: :dark_gray}},
               %Span{content: "2: Diff ", style: diff_style}
             ]
           }
         ]
       }
-    }
-  end
-
-  defp render_main(%{active_tab: :diff} = state) do
-    content =
-      case state.diff_files do
-        [] -> "No diff loaded.\n\nSelect an initiative and press '2' or 'r' to refresh."
-        files -> Enum.map_join(files, "\n", &Diff.to_unified/1)
-      end
-
-    %CodeBlock{
-      content: content,
-      language: "diff",
-      theme: :base16_ocean_dark,
-      line_numbers: false,
-      block: %Block{
-        title: " Diff ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: Styles.pane_border(state.focus, :main)
-      },
-      scroll: {state.main_scroll, 0}
     }
   end
 
@@ -1405,12 +1611,12 @@ defmodule Codrift.TUI do
     text =
       case state.cursor_info do
         %{type: :context_dir, files: []} ->
-          "No files yet.\n\nPress 'c' to create a new file here.\nDrop any files into this folder to share context with agents.\n\n📂 #{compact_path(path)}"
+          "No files yet.\n\nPress 'c' to create a new file here.\nDrop any files into this folder to share context with agents.\n\n◈ #{compact_path(path)}"
 
         %{type: :context_dir, files: files} ->
           file_list = Enum.map_join(files, "\n", fn f -> "  #{f}" end)
 
-          "📂 #{compact_path(path)}\n\n#{file_list}\n\nPress 'c' to create a new file · 's' to start Claude · 't' for a terminal"
+          "◈ #{compact_path(path)}\n\n#{file_list}\n\nPress 'c' to create a new file · 's' to start Claude · 't' for a terminal"
 
         _ ->
           "Loading…"
@@ -1440,7 +1646,7 @@ defmodule Codrift.TUI do
             cursor_line_style: %Style{bg: :dark_gray},
             line_number_style: %Style{fg: :dark_gray},
             block: %Block{
-              title: " ✏ #{Path.basename(path)}  Esc: save & close  autosaves ",
+              title: " ~ #{Path.basename(path)}  Esc: save & close  autosaves ",
               borders: [:all],
               border_type: :rounded,
               border_style: %Style{fg: :yellow}
@@ -1492,7 +1698,7 @@ defmodule Codrift.TUI do
     %Paragraph{
       text: text,
       block: %Block{
-        title: " 📁 #{compact_path(dir)} ",
+        title: " ▸ #{compact_path(dir)} ",
         borders: [:all],
         border_type: :rounded,
         border_style: Styles.pane_border(state.focus, :main)
@@ -1573,9 +1779,168 @@ defmodule Codrift.TUI do
     end
   end
 
+  defp render_main_area(%{active_tab: :diff} = state, rect) do
+    render_diff_content(state, rect)
+  end
+
   defp render_main_area(state, rect) do
     [{render_main(state), rect}]
   end
+
+  # ── Diff content pane ────────────────────────────────────────────────────────
+  # Driven by the diff sidebar cursor — no separate file-list panel.
+
+  defp render_diff_content(state, rect) do
+    files = diff_files_for_cursor(state)
+    title = diff_content_title(state)
+    # In diff mode the content pane is always the primary reading surface, so
+    # always show it with an active border regardless of which pane has focus.
+    border = %Style{fg: :cyan}
+
+    case state.diff_view_mode do
+      :unified ->
+        content =
+          if files == [],
+            do: "No changes in this directory.",
+            else: Enum.map_join(files, "\n", &Diff.to_unified/1)
+
+        [
+          {%CodeBlock{
+             content: content,
+             language: "diff",
+             theme: :base16_ocean_dark,
+             line_numbers: false,
+             block: %Block{
+               title: title,
+               borders: [:all],
+               border_type: :rounded,
+               border_style: border
+             },
+             scroll: {state.diff_scroll, 0}
+           }, rect}
+        ]
+
+      :split ->
+        [left_rect, right_rect] =
+          Layout.split(rect, :horizontal, [{:percentage, 50}, {:percentage, 50}])
+
+        rows = Enum.flat_map(files, &Diff.to_split_rows/1)
+        left_text = build_split_text(rows, :old)
+        right_text = build_split_text(rows, :new)
+
+        left_block = %Block{
+          title: " - removed ",
+          borders: [:all],
+          border_type: :rounded,
+          border_style: %Style{fg: :red}
+        }
+
+        right_block = %Block{
+          title: " + added ",
+          borders: [:all],
+          border_type: :rounded,
+          border_style: %Style{fg: :green}
+        }
+
+        [
+          {%Paragraph{
+             text: left_text,
+             block: left_block,
+             wrap: false,
+             scroll: {state.diff_scroll, 0}
+           }, left_rect},
+          {%Paragraph{
+             text: right_text,
+             block: right_block,
+             wrap: false,
+             scroll: {state.diff_scroll, 0}
+           }, right_rect}
+        ]
+    end
+  end
+
+  # Builds a %ExRatatui.Text{} for one side of the split diff view.
+  # Removes are red on the old side, adds are green on the new side.
+  # Padding rows (nil) render as empty lines with a faint background marker.
+  defp build_split_text(rows, side) do
+    alias ExRatatui.Text.{Line, Span}
+
+    lines =
+      Enum.map(rows, fn
+        {:header, old, new} ->
+          content = if side == :old, do: old || "", else: new || ""
+          %Line{spans: [%Span{content: content, style: %Style{fg: :dark_gray}}]}
+
+        {:context, old, new} ->
+          content = if side == :old, do: old || "", else: new || ""
+          %Line{spans: [%Span{content: content}]}
+
+        {:change, old, new} ->
+          case side do
+            :old ->
+              if old do
+                %Line{spans: [%Span{content: old, style: %Style{fg: :red}}]}
+              else
+                %Line{spans: [%Span{content: "~", style: %Style{fg: :dark_gray}}]}
+              end
+
+            :new ->
+              if new do
+                %Line{spans: [%Span{content: new, style: %Style{fg: :green}}]}
+              else
+                %Line{spans: [%Span{content: "~", style: %Style{fg: :dark_gray}}]}
+              end
+          end
+      end)
+
+    %ExRatatui.Text{lines: lines}
+  end
+
+  # Returns the subset of FileDiff structs to display based on the diff
+  # sidebar cursor position.
+  defp diff_files_for_cursor(%{diff_sidebar_entries: [], diff_files: dir_diffs}) do
+    Enum.flat_map(dir_diffs, fn {_, files} -> files end)
+  end
+
+  defp diff_files_for_cursor(%{
+         diff_sidebar_entries: entries,
+         diff_sidebar_cursor: cursor,
+         diff_files: dir_diffs
+       }) do
+    all_files = Enum.flat_map(dir_diffs, fn {_, files} -> files end)
+
+    case Enum.at(entries, cursor) do
+      {:diff_all, _, _} ->
+        all_files
+
+      {:diff_dir, dir, _, _} ->
+        dir_diffs
+        |> Enum.find({nil, []}, fn {d, _} -> d == dir end)
+        |> elem(1)
+
+      {:diff_file, _dir, path, _, _} ->
+        Enum.filter(all_files, &(&1.path == path))
+
+      nil ->
+        all_files
+    end
+  end
+
+  # Builds the title string for the diff content pane from the active sidebar entry.
+  defp diff_content_title(state) do
+    entry = Enum.at(state.diff_sidebar_entries, state.diff_sidebar_cursor)
+    mode_hint = " v:#{next_view_mode(state.diff_view_mode)} *:all "
+
+    case entry do
+      {:diff_all, _, _} -> " Diff #{mode_hint}"
+      {:diff_dir, dir, _, _} -> " ▸ #{compact_path(dir)} #{mode_hint}"
+      {:diff_file, _, path, _, _} -> " #{Path.basename(path)} #{mode_hint}"
+      nil -> " Diff "
+    end
+  end
+
+  defp next_view_mode(:unified), do: "split"
+  defp next_view_mode(:split), do: "unified"
 
   # Scroll whichever pane the mouse cursor is over.
   # If the pointer is in the sidebar column, scroll the sidebar (navigate).
@@ -1584,7 +1949,7 @@ defmodule Codrift.TUI do
   # Otherwise adjust main_scroll for code-viewer / initiative panes.
   defp mouse_scroll(state, %Mouse{x: x}, delta) do
     {term_w, _} = state.term_size || {80, 24}
-    sidebar_width = round(term_w * 0.30)
+    sidebar_width = if state.sidebar_collapsed, do: 0, else: round(term_w * 0.30)
 
     cond do
       x < sidebar_width ->
@@ -1673,8 +2038,9 @@ defmodule Codrift.TUI do
   # Ratatui allocates sidebar first (floor(w * 30/100)), main gets the remainder.
   # Using `w - floor(w*30/100)` matches that exactly; `floor(w*70/100)` diverges
   # by 1 on odd widths, causing Claude Code to draw at the wrong column count.
-  defp calc_pane_size(term_w, term_h) do
-    cols = max(term_w - div(term_w * 30, 100) - 2, 1)
+  defp calc_pane_size(term_w, term_h, sidebar_collapsed \\ false) do
+    sidebar_w = if sidebar_collapsed, do: 0, else: div(term_w * 30, 100)
+    cols = max(term_w - sidebar_w - 2, 1)
     rows = max(term_h - 4, 1)
     {cols, rows}
   end

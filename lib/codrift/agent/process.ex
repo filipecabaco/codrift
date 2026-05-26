@@ -44,7 +44,8 @@ defmodule Codrift.AgentProcess do
     :buffer_size,
     :subscribers,
     :conversation_started,
-    :raw_line_buf
+    :raw_line_buf,
+    :session_uuid
   ]
 
   @doc false
@@ -73,6 +74,9 @@ defmodule Codrift.AgentProcess do
 
   @doc "Returns the `n` most recent output lines in chronological order."
   def recent_output(pid, n \\ 50), do: GenServer.call(pid, {:recent_output, n})
+
+  @doc "Returns the Claude Code session UUID detected from disk after startup, or nil."
+  def session_uuid(pid), do: GenServer.call(pid, :session_uuid)
 
   @doc "Subscribes `subscriber` (defaults to `self()`) to output notifications."
   def subscribe(pid, subscriber \\ self()), do: GenServer.call(pid, {:subscribe, subscriber})
@@ -119,6 +123,12 @@ defmodule Codrift.AgentProcess do
         pty_opts = [:pty, :stdin, {:stdout, self()}, :monitor, {:cd, dir}, {:env, env}]
 
         {:ok, exec_pid, ospid} = :exec.run(cmd, pty_opts)
+
+        # Schedule session UUID detection: Claude writes its session .jsonl within
+        # a few seconds of startup; we find the newest file modified after launch.
+        start_posix = :os.system_time(:second)
+        Process.send_after(self(), {:detect_session, start_posix}, 3_000)
+
         {:ok, %{base | exec_pid: exec_pid, exec_ospid: ospid, status: :starting}}
 
       :interactive ->
@@ -189,6 +199,10 @@ defmodule Codrift.AgentProcess do
      }, state}
   end
 
+  def handle_call(:session_uuid, _from, state) do
+    {:reply, state.session_uuid, state}
+  end
+
   def handle_call({:recent_output, n}, _from, state) do
     {:reply, state.buffer |> Enum.take(n) |> Enum.reverse(), state}
   end
@@ -252,6 +266,26 @@ defmodule Codrift.AgentProcess do
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     {:noreply, %{state | subscribers: Map.delete(state.subscribers, pid)}}
+  end
+
+  # Detect which session UUID Claude created/used for this agent by finding the
+  # .jsonl file in ~/.claude/projects/<encoded-dir>/ that was modified at or
+  # after `start_posix`. Retries once 5 s later if nothing is found yet.
+  def handle_info({:detect_session, start_posix}, state) do
+    case detect_claude_session(state.dir, start_posix) do
+      nil ->
+        # Not found yet — retry once more in 5 s
+        Process.send_after(self(), {:detect_session_retry, start_posix}, 5_000)
+        {:noreply, state}
+
+      uuid ->
+        {:noreply, %{state | session_uuid: uuid}}
+    end
+  end
+
+  def handle_info({:detect_session_retry, start_posix}, state) do
+    uuid = detect_claude_session(state.dir, start_posix)
+    {:noreply, %{state | session_uuid: uuid}}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -338,19 +372,54 @@ defmodule Codrift.AgentProcess do
   defp once_args(adapter, dir, false), do: adapter.args(dir, [])
   defp once_args(adapter, dir, true), do: adapter.args_continue(dir)
 
+  # Finds the session UUID by looking for .jsonl files in Claude's projects dir
+  # that were modified at or after `after_posix` (POSIX seconds). Returns the
+  # UUID string (filename without .jsonl) of the most recently modified match,
+  # or nil if nothing was found.
+  defp detect_claude_session(dir, after_posix) do
+    project_dir = Path.expand("~/.claude/projects/#{String.replace(dir, "/", "-")}")
+
+    with {:ok, files} <- File.ls(project_dir) do
+      files
+      |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+      |> Enum.flat_map(fn f ->
+        full = Path.join(project_dir, f)
+
+        case File.stat(full, time: :posix) do
+          {:ok, %{mtime: mtime}} when mtime >= after_posix ->
+            [{Path.basename(f, ".jsonl"), mtime}]
+
+          _ ->
+            []
+        end
+      end)
+      |> Enum.sort_by(&elem(&1, 1), :desc)
+      |> case do
+        [{uuid, _} | _] -> uuid
+        [] -> nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
   # Collects all non-hidden files in the initiative's context folder (excluding
   # CLAUDE.md, which is a symlink handled via --add-dir) and returns context
   # opts for adapters:
   #
   #   context_dir:   the context folder path (for --add-dir in Claude adapter)
   #   context_files: list of absolute file paths (for --read in Aider, etc.)
-  #
-  # Session resumption is handled by the Claude adapter itself via --continue,
-  # which reads Claude's own session storage rather than relying on stored IDs.
-  defp initiative_context_opts(initiative_id, _dir) do
+  #   session_id:    UUID from SessionStore for --resume (if any)
+  defp initiative_context_opts(initiative_id, dir) do
     ctx_dir = Codrift.Initiative.Store.context_path(initiative_id)
 
     base = if File.dir?(ctx_dir), do: [context_dir: ctx_dir], else: []
+
+    session_opts =
+      case Codrift.SessionStore.get(initiative_id, dir) do
+        {:ok, uuid} -> [session_id: uuid]
+        {:error, :not_found} -> []
+      end
 
     files =
       case File.ls(ctx_dir) do
@@ -366,7 +435,7 @@ defmodule Codrift.AgentProcess do
           []
       end
 
-    base ++ if(files == [], do: [], else: [context_files: files])
+    base ++ session_opts ++ if(files == [], do: [], else: [context_files: files])
   end
 
   defp open_port(adapter, dir, args) do

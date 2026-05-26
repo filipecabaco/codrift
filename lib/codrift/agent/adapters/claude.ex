@@ -18,10 +18,17 @@ defmodule Codrift.Agent.Adapters.Claude do
 
   @impl true
   def args(dir, opts) do
-    # Use --continue when a previous session exists for this directory.
-    # Claude stores sessions at ~/.claude/projects/<dir-encoded>/<uuid>.jsonl;
-    # we check for any .jsonl file rather than tracking IDs ourselves.
-    resume = if has_session?(dir), do: ["--continue"], else: []
+    resume =
+      case opts[:session_id] do
+        nil ->
+          # No stored UUID yet (first run). Use --continue if any previous session
+          # exists in this directory so the user can pick up where they left off.
+          if has_session?(dir), do: ["--continue"], else: []
+
+        uuid ->
+          # Resume the exact session we previously detected for this initiative+dir.
+          ["--resume", uuid]
+      end
 
     dir_arg =
       case opts[:context_dir] do
@@ -32,7 +39,7 @@ defmodule Codrift.Agent.Adapters.Claude do
     resume ++ dir_arg
   end
 
-  # Returns true when ~/.claude/projects/<encoded-dir>/ contains any .jsonl file.
+  # Returns true when ~/.claude/projects/<encoded-dir>/ has any .jsonl session file.
   defp has_session?(dir) do
     project_name = String.replace(dir, "/", "-")
     sessions_dir = Path.expand("~/.claude/projects/#{project_name}")
