@@ -49,71 +49,73 @@ defmodule Codrift.Config.Theme do
 
   # ── Built-in themes ──────────────────────────────────────────────────────────
 
-  @themes %{
-    default: %__MODULE__{
-      name: :default,
-      border_focused: :yellow,
-      border_unfocused: {:indexed, 238},
-      diff_border: :cyan,
-      sidebar_highlight: :cyan,
-      syntax_theme: :base16_ocean_dark
-    },
-    dracula: %__MODULE__{
-      name: :dracula,
-      # purple
-      border_focused: {:indexed, 141},
-      border_unfocused: {:indexed, 238},
-      # green
-      diff_border: {:indexed, 84},
-      sidebar_highlight: {:indexed, 141},
-      syntax_theme: :base16_ocean_dark
-    },
-    nord: %__MODULE__{
-      name: :nord,
-      # frost blue
-      border_focused: {:indexed, 67},
-      border_unfocused: {:indexed, 238},
-      # teal
-      diff_border: {:indexed, 73},
-      sidebar_highlight: {:indexed, 67},
-      syntax_theme: :base16_ocean_dark
-    },
-    solarized: %__MODULE__{
-      name: :solarized,
-      # amber
-      border_focused: {:indexed, 136},
-      border_unfocused: {:indexed, 240},
-      # teal
-      diff_border: {:indexed, 37},
-      sidebar_highlight: {:indexed, 136},
-      syntax_theme: :base16_ocean_dark
-    },
-    tokyo_night: %__MODULE__{
-      name: :tokyo_night,
-      # blue accent
-      border_focused: {:indexed, 111},
-      border_unfocused: {:indexed, 237},
-      # pink/red
-      diff_border: {:indexed, 203},
-      sidebar_highlight: {:indexed, 111},
-      syntax_theme: :base16_ocean_dark
-    }
-  }
-
   @doc "Returns the built-in default theme (`:default`)."
   @spec default() :: t()
-  def default, do: @themes.default
+  def default, do: themes().default
 
   @doc "Returns a map of all built-in themes keyed by atom name."
   @spec all() :: %{atom() => t()}
-  def all, do: @themes
+  def all, do: themes()
 
   @doc """
   Returns the theme struct for the given name atom, or the default theme if the
   name is not recognised.
   """
   @spec get(atom()) :: t()
-  def get(name), do: Map.get(@themes, name, @themes.default)
+  def get(name), do: Map.get(themes(), name, themes().default)
+
+  defp themes do
+    %{
+      default: %__MODULE__{
+        name: :default,
+        border_focused: :yellow,
+        border_unfocused: {:indexed, 238},
+        diff_border: :cyan,
+        sidebar_highlight: :cyan,
+        syntax_theme: :base16_ocean_dark
+      },
+      dracula: %__MODULE__{
+        name: :dracula,
+        # purple
+        border_focused: {:indexed, 141},
+        border_unfocused: {:indexed, 238},
+        # green
+        diff_border: {:indexed, 84},
+        sidebar_highlight: {:indexed, 141},
+        syntax_theme: :base16_ocean_dark
+      },
+      nord: %__MODULE__{
+        name: :nord,
+        # frost blue
+        border_focused: {:indexed, 67},
+        border_unfocused: {:indexed, 238},
+        # teal
+        diff_border: {:indexed, 73},
+        sidebar_highlight: {:indexed, 67},
+        syntax_theme: :base16_ocean_dark
+      },
+      solarized: %__MODULE__{
+        name: :solarized,
+        # amber
+        border_focused: {:indexed, 136},
+        border_unfocused: {:indexed, 240},
+        # teal
+        diff_border: {:indexed, 37},
+        sidebar_highlight: {:indexed, 136},
+        syntax_theme: :base16_ocean_dark
+      },
+      tokyo_night: %__MODULE__{
+        name: :tokyo_night,
+        # blue accent
+        border_focused: {:indexed, 111},
+        border_unfocused: {:indexed, 237},
+        # pink/red
+        diff_border: {:indexed, 203},
+        sidebar_highlight: {:indexed, 111},
+        syntax_theme: :base16_ocean_dark
+      }
+    }
+  end
 
   @doc """
   Loads the theme from `~/.codrift/theme.json`.

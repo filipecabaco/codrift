@@ -74,7 +74,7 @@ defmodule Codrift.TUI do
   alias Codrift.Initiative.Store
   alias Codrift.TUI.{DirPicker, Modals, Sidebar, Styles, VT100}
 
-  @type modal :: :none | :new_name | :new_dir | :confirm_delete | :palette
+  @type modal :: :none | :new_name | :new_dir | :confirm_delete | :palette | :theme_picker
   @type tab :: :context | :diff
 
   defstruct [
@@ -120,7 +120,10 @@ defmodule Codrift.TUI do
     # Config: keybindings and theme (loaded from ~/.codrift/ at startup)
     :keybindings,
     :keybindings_reverse,
-    :theme
+    :theme,
+    # Theme picker modal state
+    :theme_picker_cursor,
+    :theme_before_picker
   ]
 
   @impl true
@@ -136,48 +139,51 @@ defmodule Codrift.TUI do
     keybindings_reverse = Keybindings.build_reverse(keybindings)
     theme = Theme.load()
 
-    {:ok,
-     %__MODULE__{
-       focus: Focus.new([:sidebar, :main]),
-       sidebar_entries: Sidebar.build_entries(initiatives, agents),
-       sidebar_cursor: 0,
-       selected_initiative_id: nil,
-       selected_agent_id: nil,
-       subscribed_agents: MapSet.new(),
-       agent_outputs: %{},
-       vt100_screens: %{},
-       pane_size: {pane_cols, pane_rows},
-       term_size: {term_w, term_h},
-       active_tab: :context,
-       diff_files: [],
-       cursor_info: nil,
-       main_scroll: 0,
-       status: build_default_status(keybindings),
-       modal: :none,
-       modal_input: ExRatatui.text_input_new(),
-       modal_context: nil,
-       dir_suggestions: [],
-       dir_suggestion_cursor: 0,
-       palette_cursor: 0,
-       palette_filter: "",
-       actions: build_actions(keybindings),
-       input_buffer: "",
-       selected_agent_mode: nil,
-       resize_ref: nil,
-       sidebar_tick_ref: Process.send_after(self(), :sidebar_tick, 2000),
-       editor_ref: ExRatatui.textarea_new(),
-       editing_file: nil,
-       autosave_ref: nil,
-       diff_scroll: 0,
-       diff_view_mode: :unified,
-       diff_sidebar_entries: [],
-       diff_sidebar_cursor: 0,
-       sidebar_collapsed: false,
-       status_timer_ref: nil,
-       keybindings: keybindings,
-       keybindings_reverse: keybindings_reverse,
-       theme: theme
-     }}
+    initial_state = %__MODULE__{
+      focus: Focus.new([:sidebar, :main]),
+      sidebar_entries: Sidebar.build_entries(initiatives, agents),
+      sidebar_cursor: 0,
+      selected_initiative_id: nil,
+      selected_agent_id: nil,
+      subscribed_agents: MapSet.new(),
+      agent_outputs: %{},
+      vt100_screens: %{},
+      pane_size: {pane_cols, pane_rows},
+      term_size: {term_w, term_h},
+      active_tab: :context,
+      diff_files: [],
+      cursor_info: nil,
+      main_scroll: 0,
+      status: build_default_status(keybindings),
+      modal: :none,
+      modal_input: ExRatatui.text_input_new(),
+      modal_context: nil,
+      dir_suggestions: [],
+      dir_suggestion_cursor: 0,
+      palette_cursor: 0,
+      palette_filter: "",
+      actions: build_actions(keybindings),
+      input_buffer: "",
+      selected_agent_mode: nil,
+      resize_ref: nil,
+      sidebar_tick_ref: Process.send_after(self(), :sidebar_tick, 2000),
+      editor_ref: ExRatatui.textarea_new(),
+      editing_file: nil,
+      autosave_ref: nil,
+      diff_scroll: 0,
+      diff_view_mode: :unified,
+      diff_sidebar_entries: [],
+      diff_sidebar_cursor: 0,
+      sidebar_collapsed: false,
+      status_timer_ref: nil,
+      keybindings: keybindings,
+      keybindings_reverse: keybindings_reverse,
+      theme: theme,
+      theme_picker_cursor: 0,
+      theme_before_picker: nil
+    }
+
+    {:ok, update_context_from_cursor(initial_state)}
   end
 
   @impl true
@@ -278,6 +284,11 @@ defmodule Codrift.TUI do
     {:noreply, %{state | autosave_ref: ref}}
   end
 
+  def handle_event(%Key{code: "esc", kind: "press"}, %{modal: :theme_picker} = state) do
+    {:noreply,
+     %{state | modal: :none, theme: state.theme_before_picker, theme_before_picker: nil}}
+  end
+
   def handle_event(%Key{code: "esc", kind: "press"}, %{modal: modal} = state)
       when modal != :none do
     {:noreply, flash_status(%{state | modal: :none}, "Cancelled")}
@@ -300,6 +311,9 @@ defmodule Codrift.TUI do
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :new_context_file} = state),
     do: {:noreply, confirm_context_file(state)}
 
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :theme_picker} = state),
+    do: {:noreply, apply_theme_picker(state)}
+
   def handle_event(%Key{code: "up", kind: "press"}, %{modal: :new_dir} = state),
     do: {:noreply, DirPicker.move_cursor(state, -1)}
 
@@ -315,6 +329,19 @@ defmodule Codrift.TUI do
   def handle_event(%Key{code: "down", kind: "press"}, %{modal: :palette} = state) do
     max_idx = max(length(Modals.filter_actions(state.actions, state.palette_filter)) - 1, 0)
     {:noreply, %{state | palette_cursor: min(state.palette_cursor + 1, max_idx)}}
+  end
+
+  def handle_event(%Key{code: "up", kind: "press"}, %{modal: :theme_picker} = state) do
+    cursor = max(state.theme_picker_cursor - 1, 0)
+    theme = Enum.at(theme_picker_list(), cursor).theme
+    {:noreply, %{state | theme_picker_cursor: cursor, theme: theme}}
+  end
+
+  def handle_event(%Key{code: "down", kind: "press"}, %{modal: :theme_picker} = state) do
+    max_idx = length(theme_picker_list()) - 1
+    cursor = min(state.theme_picker_cursor + 1, max_idx)
+    theme = Enum.at(theme_picker_list(), cursor).theme
+    {:noreply, %{state | theme_picker_cursor: cursor, theme: theme}}
   end
 
   def handle_event(%Key{code: code, kind: "press"}, %{modal: modal} = state)
@@ -502,14 +529,6 @@ defmodule Codrift.TUI do
   end
 
   def handle_event(_, state), do: {:noreply, state}
-
-  # Translates a raw key code to an action atom via the reverse keybindings map,
-  # then dispatches it. Called when the sidebar is focused and the user presses a
-  # single-character key.
-  defp handle_sidebar_key(code, state) do
-    action = Map.get(state.keybindings_reverse, code)
-    dispatch_sidebar_action(action, state)
-  end
 
   # ── Action dispatcher ─────────────────────────────────────────────────────────
   # Handles each action atom, called from both the sidebar key path and the
@@ -1113,6 +1132,19 @@ defmodule Codrift.TUI do
           {:context_file, _, path, _} -> start_editing(%{state | modal: :none}, path)
           _ -> flash_status(%{state | modal: :none}, "Navigate to a context file first")
         end
+
+      # ── Theme ────────────────────────────────────────────────────────────────
+
+      %{id: :theme_picker} ->
+        themes = theme_picker_list()
+        cursor = Enum.find_index(themes, fn %{theme: t} -> t.name == state.theme.name end) || 0
+
+        %{
+          state
+          | modal: :theme_picker,
+            theme_picker_cursor: cursor,
+            theme_before_picker: state.theme
+        }
 
       # ── Other ─────────────────────────────────────────────────────────────────
 
@@ -2291,7 +2323,11 @@ defmodule Codrift.TUI do
   defp build_actions(kb) do
     [
       # Navigation
-      %{id: :toggle_sidebar, label: "Toggle Sidebar", hint: Keybindings.format(kb.toggle_sidebar)},
+      %{
+        id: :toggle_sidebar,
+        label: "Toggle Sidebar",
+        hint: Keybindings.format(kb.toggle_sidebar)
+      },
       %{id: :context_mode, label: "Context View", hint: Keybindings.format(kb.context_mode)},
       %{id: :diff_mode, label: "Diff View", hint: Keybindings.format(kb.diff_mode)},
       %{
@@ -2305,7 +2341,11 @@ defmodule Codrift.TUI do
         hint: Keybindings.format(kb.diff_all_files)
       },
       # Initiatives & directories
-      %{id: :new_initiative, label: "New Initiative", hint: Keybindings.format(kb.new_initiative)},
+      %{
+        id: :new_initiative,
+        label: "New Initiative",
+        hint: Keybindings.format(kb.new_initiative)
+      },
       %{id: :add_dir, label: "Add Directory", hint: Keybindings.format(kb.add_dir)},
       %{
         id: :cycle_status,
@@ -2333,7 +2373,24 @@ defmodule Codrift.TUI do
         hint: Keybindings.format(kb.edit_context)
       },
       # Other
-      %{id: :refresh, label: "Refresh", hint: Keybindings.format(kb.refresh)}
+      %{id: :refresh, label: "Refresh", hint: Keybindings.format(kb.refresh)},
+      %{id: :theme_picker, label: "Choose Theme", hint: ""}
     ]
+  end
+
+  defp theme_picker_list do
+    Theme.all()
+    |> Enum.sort_by(fn {name, _} -> name end)
+    |> Enum.map(fn {_name, theme} -> %{theme: theme} end)
+  end
+
+  defp apply_theme_picker(state) do
+    theme = Enum.at(theme_picker_list(), state.theme_picker_cursor).theme
+    path = Path.join(Path.expand("~/.codrift"), "theme.json")
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, JSON.encode!(%{"theme" => to_string(theme.name)}))
+
+    %{state | modal: :none, theme: theme, theme_before_picker: nil}
+    |> flash_status("Theme: #{theme.name}")
   end
 end
