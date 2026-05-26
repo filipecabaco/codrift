@@ -26,6 +26,7 @@ defmodule Codrift.TUI.Modals do
   def render(%{modal: :confirm_delete} = state, frame), do: confirm_delete(state, frame)
   def render(%{modal: :palette} = state, frame), do: palette(state, frame)
   def render(%{modal: :new_context_file} = state, frame), do: new_context_file(state, frame)
+  def render(%{modal: :theme_picker} = state, frame), do: theme_picker(state, frame)
 
   @doc """
   Filters `actions` whose label contains `query` (case-insensitive).
@@ -201,6 +202,31 @@ defmodule Codrift.TUI.Modals do
       {input(state.modal_input, "e.g. README.md  plan.md  context.txt"),
        %{inner | y: inner.y + 3, height: 1}},
       {hint("Enter: create  Esc: cancel"), %{inner | y: inner.y + 5, height: 1}}
+    ]
+  end
+
+  defp theme_picker(state, frame) do
+    themes = Codrift.Config.Theme.all() |> Enum.sort_by(fn {name, _} -> name end)
+    height = length(themes) + 4
+    rect = Layout.center_rect(frame, 40, height)
+    inner = Layout.inset(rect, 1)
+
+    items =
+      Enum.map(themes, fn {_name, theme} ->
+        marker = if theme.name == state.theme_before_picker.name, do: " ●", else: "  "
+        "#{marker} #{theme.name}"
+      end)
+
+    [
+      {%Clear{}, rect},
+      {bordered(rect, " Choose Theme ", :yellow), rect},
+      {%WidgetList{
+         items: items,
+         selected: state.theme_picker_cursor,
+         highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
+         highlight_symbol: "▶ "
+       }, %{inner | height: max(inner.height - 1, 1)}},
+      {hint("Enter: apply  Esc: cancel"), %{inner | y: inner.y + inner.height - 1, height: 1}}
     ]
   end
 

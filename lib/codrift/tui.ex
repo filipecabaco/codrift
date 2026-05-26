@@ -27,6 +27,9 @@ defmodule Codrift.TUI do
 
   ## Keybindings
 
+  All keys below are the **defaults**. Override any of them by creating
+  `~/.codrift/keybindings.json` — see `Codrift.Config.Keybindings` for details.
+
   | Key | Action |
   |-----|--------|
   | `j` / `↓` | Move down / scroll main pane |
@@ -45,6 +48,15 @@ defmodule Codrift.TUI do
   | `r` | Refresh current pane |
   | `Ctrl+D` / `Ctrl+U` | Scroll half-page |
   | `q` / `Ctrl+C` | Quit (kills all running agents) |
+
+  ## Themes
+
+  Set the visual theme by creating `~/.codrift/theme.json`:
+
+      {"theme": "dracula"}
+
+  Available themes: `default`, `dracula`, `nord`, `solarized`, `tokyo_night`.
+  See `Codrift.Config.Theme` for full details.
   """
 
   use ExRatatui.App
@@ -58,10 +70,11 @@ defmodule Codrift.TUI do
   alias ExRatatui.Widgets.Textarea
 
   alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative, Paths}
+  alias Codrift.Config.{Keybindings, Theme}
   alias Codrift.Initiative.Store
   alias Codrift.TUI.{DirPicker, Modals, Sidebar, Styles, VT100}
 
-  @type modal :: :none | :new_name | :new_dir | :confirm_delete | :palette
+  @type modal :: :none | :new_name | :new_dir | :confirm_delete | :palette | :theme_picker
   @type tab :: :context | :diff
 
   defstruct [
@@ -103,32 +116,14 @@ defmodule Codrift.TUI do
     :diff_sidebar_cursor,
     :sidebar_collapsed,
     # Timer ref for flash_status — cancelled before each new flash to prevent stacking.
-    :status_timer_ref
-  ]
-
-  @default_status "j/k:navigate  n:new  s:start  d:delete  t:terminal  Tab:agent pane  2:diff  Ctrl+P:palette  q:quit"
-
-  @actions [
-    # Navigation
-    %{id: :toggle_sidebar, label: "Toggle Sidebar", hint: "Ctrl+B"},
-    %{id: :context_mode, label: "Context View", hint: "1"},
-    %{id: :diff_mode, label: "Diff View", hint: "2"},
-    %{id: :toggle_diff_view, label: "Toggle Diff: Unified / Split", hint: "v"},
-    %{id: :diff_all_files, label: "Diff: Show All Files", hint: "*"},
-    # Initiatives & directories
-    %{id: :new_initiative, label: "New Initiative", hint: "n"},
-    %{id: :add_dir, label: "Add Directory", hint: "a"},
-    %{id: :cycle_status, label: "Cycle Initiative Status", hint: "[/]"},
-    %{id: :delete_current, label: "Delete / Stop Current", hint: "d"},
-    # Agents
-    %{id: :start_claude, label: "Start Claude Agent", hint: "s"},
-    %{id: :start_terminal, label: "Open Terminal Here", hint: "t"},
-    %{id: :start_aider, label: "Start Aider Agent", hint: ""},
-    # Context files
-    %{id: :new_context_file, label: "New Context File", hint: "c"},
-    %{id: :edit_context_file, label: "Edit Context File", hint: "e"},
-    # Other
-    %{id: :refresh, label: "Refresh", hint: "r"}
+    :status_timer_ref,
+    # Config: keybindings and theme (loaded from ~/.codrift/ at startup)
+    :keybindings,
+    :keybindings_reverse,
+    :theme,
+    # Theme picker modal state
+    :theme_picker_cursor,
+    :theme_before_picker
   ]
 
   @impl true
@@ -140,45 +135,55 @@ defmodule Codrift.TUI do
     {term_w, term_h} = ExRatatui.terminal_size()
     {pane_cols, pane_rows} = calc_pane_size(term_w, term_h)
 
-    {:ok,
-     %__MODULE__{
-       focus: Focus.new([:sidebar, :main]),
-       sidebar_entries: Sidebar.build_entries(initiatives, agents),
-       sidebar_cursor: 0,
-       selected_initiative_id: nil,
-       selected_agent_id: nil,
-       subscribed_agents: MapSet.new(),
-       agent_outputs: %{},
-       vt100_screens: %{},
-       pane_size: {pane_cols, pane_rows},
-       term_size: {term_w, term_h},
-       active_tab: :context,
-       diff_files: [],
-       cursor_info: nil,
-       main_scroll: 0,
-       status: @default_status,
-       modal: :none,
-       modal_input: ExRatatui.text_input_new(),
-       modal_context: nil,
-       dir_suggestions: [],
-       dir_suggestion_cursor: 0,
-       palette_cursor: 0,
-       palette_filter: "",
-       actions: @actions,
-       input_buffer: "",
-       selected_agent_mode: nil,
-       resize_ref: nil,
-       sidebar_tick_ref: Process.send_after(self(), :sidebar_tick, 2000),
-       editor_ref: ExRatatui.textarea_new(),
-       editing_file: nil,
-       autosave_ref: nil,
-       diff_scroll: 0,
-       diff_view_mode: :unified,
-       diff_sidebar_entries: [],
-       diff_sidebar_cursor: 0,
-       sidebar_collapsed: false,
-       status_timer_ref: nil
-     }}
+    keybindings = Keybindings.load()
+    keybindings_reverse = Keybindings.build_reverse(keybindings)
+    theme = Theme.load()
+
+    initial_state = %__MODULE__{
+      focus: Focus.new([:sidebar, :main]),
+      sidebar_entries: Sidebar.build_entries(initiatives, agents),
+      sidebar_cursor: 0,
+      selected_initiative_id: nil,
+      selected_agent_id: nil,
+      subscribed_agents: MapSet.new(),
+      agent_outputs: %{},
+      vt100_screens: %{},
+      pane_size: {pane_cols, pane_rows},
+      term_size: {term_w, term_h},
+      active_tab: :context,
+      diff_files: [],
+      cursor_info: nil,
+      main_scroll: 0,
+      status: build_default_status(keybindings),
+      modal: :none,
+      modal_input: ExRatatui.text_input_new(),
+      modal_context: nil,
+      dir_suggestions: [],
+      dir_suggestion_cursor: 0,
+      palette_cursor: 0,
+      palette_filter: "",
+      actions: build_actions(keybindings),
+      input_buffer: "",
+      selected_agent_mode: nil,
+      resize_ref: nil,
+      sidebar_tick_ref: Process.send_after(self(), :sidebar_tick, 2000),
+      editor_ref: ExRatatui.textarea_new(),
+      editing_file: nil,
+      autosave_ref: nil,
+      diff_scroll: 0,
+      diff_view_mode: :unified,
+      diff_sidebar_entries: [],
+      diff_sidebar_cursor: 0,
+      sidebar_collapsed: false,
+      status_timer_ref: nil,
+      keybindings: keybindings,
+      keybindings_reverse: keybindings_reverse,
+      theme: theme,
+      theme_picker_cursor: 0,
+      theme_before_picker: nil
+    }
+
+    {:ok, update_context_from_cursor(initial_state)}
   end
 
   @impl true
@@ -200,10 +205,11 @@ defmodule Codrift.TUI do
             Sidebar.render_diff(
               state.diff_sidebar_entries,
               state.diff_sidebar_cursor,
-              state.focus
+              state.focus,
+              state.theme
             )
           else
-            Sidebar.render(state.sidebar_entries, state.sidebar_cursor, state.focus)
+            Sidebar.render(state.sidebar_entries, state.sidebar_cursor, state.focus, state.theme)
           end
 
         {[{sidebar_widget, sidebar_rect}], mr}
@@ -218,10 +224,6 @@ defmodule Codrift.TUI do
   end
 
   @impl true
-  def handle_event(%Key{code: "b", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
-    {:noreply, toggle_sidebar(state)}
-  end
-
   def handle_event(%Key{code: "c", kind: "press", modifiers: ["ctrl"]}, state) do
     if Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty do
       {:noreply, forward_raw(state, "\x03")}
@@ -282,6 +284,11 @@ defmodule Codrift.TUI do
     {:noreply, %{state | autosave_ref: ref}}
   end
 
+  def handle_event(%Key{code: "esc", kind: "press"}, %{modal: :theme_picker} = state) do
+    {:noreply,
+     %{state | modal: :none, theme: state.theme_before_picker, theme_before_picker: nil}}
+  end
+
   def handle_event(%Key{code: "esc", kind: "press"}, %{modal: modal} = state)
       when modal != :none do
     {:noreply, flash_status(%{state | modal: :none}, "Cancelled")}
@@ -304,6 +311,9 @@ defmodule Codrift.TUI do
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :new_context_file} = state),
     do: {:noreply, confirm_context_file(state)}
 
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: :theme_picker} = state),
+    do: {:noreply, apply_theme_picker(state)}
+
   def handle_event(%Key{code: "up", kind: "press"}, %{modal: :new_dir} = state),
     do: {:noreply, DirPicker.move_cursor(state, -1)}
 
@@ -319,6 +329,19 @@ defmodule Codrift.TUI do
   def handle_event(%Key{code: "down", kind: "press"}, %{modal: :palette} = state) do
     max_idx = max(length(Modals.filter_actions(state.actions, state.palette_filter)) - 1, 0)
     {:noreply, %{state | palette_cursor: min(state.palette_cursor + 1, max_idx)}}
+  end
+
+  def handle_event(%Key{code: "up", kind: "press"}, %{modal: :theme_picker} = state) do
+    cursor = max(state.theme_picker_cursor - 1, 0)
+    theme = Enum.at(theme_picker_list(), cursor).theme
+    {:noreply, %{state | theme_picker_cursor: cursor, theme: theme}}
+  end
+
+  def handle_event(%Key{code: "down", kind: "press"}, %{modal: :theme_picker} = state) do
+    max_idx = length(theme_picker_list()) - 1
+    cursor = min(state.theme_picker_cursor + 1, max_idx)
+    theme = Enum.at(theme_picker_list(), cursor).theme
+    {:noreply, %{state | theme_picker_cursor: cursor, theme: theme}}
   end
 
   def handle_event(%Key{code: code, kind: "press"}, %{modal: modal} = state)
@@ -340,20 +363,10 @@ defmodule Codrift.TUI do
   #   :sidebar → j/k navigate, letters are management shortcuts
   #   :main    → all printable chars go to the agent input buffer
 
-  def handle_event(%Key{code: "q", kind: "press"}, %{modal: :none} = state) do
-    save_all_sessions(state)
-    {:stop, state}
-  end
-
   def handle_event(%Key{code: code, kind: "press"} = key, %{modal: :none} = state)
       when code in ["tab", "back_tab"] do
     {new_focus, _} = Focus.handle_key(state.focus, key)
     {:noreply, %{state | focus: new_focus, input_buffer: ""}}
-  end
-
-  def handle_event(%Key{code: "p", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
-    ExRatatui.text_input_set_value(state.modal_input, "")
-    {:noreply, %{state | modal: :palette, palette_cursor: 0, palette_filter: ""}}
   end
 
   def handle_event(%Key{code: "d", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
@@ -380,6 +393,13 @@ defmodule Codrift.TUI do
       true ->
         {:noreply, %{state | main_scroll: max(state.main_scroll - 10, 0)}}
     end
+  end
+
+  # Generic ctrl-key handler — dispatches configured actions (toggle_sidebar, palette, …).
+  # Must come after ctrl+c/d/u which have PTY-forwarding logic.
+  def handle_event(%Key{code: code, kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
+    action = Map.get(state.keybindings_reverse, "ctrl+#{code}")
+    dispatch_sidebar_action(action, state)
   end
 
   # Main pane focused — route to agent based on its mode
@@ -420,34 +440,37 @@ defmodule Codrift.TUI do
     end
   end
 
-  # `e` opens the text editor when the main pane shows a context file,
-  # regardless of which pane is focused. Must come before the generic
-  # byte_size == 1 handler that would otherwise swallow it.
-  def handle_event(%Key{code: "e", kind: "press"}, %{modal: :none} = state) do
-    cond do
-      Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
-        {:noreply, forward_raw(state, "e")}
-
-      Focus.focused?(state.focus, :main) ->
-        case state.cursor_info do
-          %{type: :context_file, path: path} -> {:noreply, start_editing(state, path)}
-          _ -> {:noreply, %{state | input_buffer: state.input_buffer <> "e"}}
-        end
-
-      true ->
-        handle_sidebar_key("e", state)
-    end
-  end
-
+  # Generic single-character key handler.
+  #
+  # Routing priority:
+  #   1. Configured quit key → always quit (even from PTY pane, matching legacy `q` behaviour)
+  #   2. Main pane + PTY agent → forward raw to PTY
+  #   3. Main pane + non-PTY + edit_context key on a context_file → open editor
+  #   4. Main pane + non-PTY → append to input buffer
+  #   5. Sidebar focused → dispatch via configured action
   def handle_event(%Key{code: code, kind: "press"}, %{modal: :none} = state)
       when byte_size(code) == 1 do
-    if Focus.focused?(state.focus, :main) do
-      case state.selected_agent_mode do
-        :pty -> {:noreply, forward_raw(state, code)}
-        _ -> {:noreply, %{state | input_buffer: state.input_buffer <> code}}
-      end
-    else
-      handle_sidebar_key(code, state)
+    action = Map.get(state.keybindings_reverse, code)
+
+    cond do
+      action == :quit ->
+        save_all_sessions(state)
+        {:stop, state}
+
+      Focus.focused?(state.focus, :main) and state.selected_agent_mode == :pty ->
+        {:noreply, forward_raw(state, code)}
+
+      Focus.focused?(state.focus, :main) and action == :edit_context ->
+        case state.cursor_info do
+          %{type: :context_file, path: path} -> {:noreply, start_editing(state, path)}
+          _ -> {:noreply, %{state | input_buffer: state.input_buffer <> code}}
+        end
+
+      Focus.focused?(state.focus, :main) ->
+        {:noreply, %{state | input_buffer: state.input_buffer <> code}}
+
+      true ->
+        dispatch_sidebar_action(action, state)
     end
   end
 
@@ -507,14 +530,21 @@ defmodule Codrift.TUI do
 
   def handle_event(_, state), do: {:noreply, state}
 
-  defp handle_sidebar_key("j", state), do: {:noreply, navigate(state, 1)}
-  defp handle_sidebar_key("k", state), do: {:noreply, navigate(state, -1)}
+  # ── Action dispatcher ─────────────────────────────────────────────────────────
+  # Handles each action atom, called from both the sidebar key path and the
+  # generic ctrl-key handler.
 
-  defp handle_sidebar_key("1", state),
-    do:
-      {:noreply, %{state | active_tab: :context, main_scroll: 0} |> update_context_from_cursor()}
+  defp dispatch_sidebar_action(:navigate_down, state),
+    do: {:noreply, navigate(state, 1)}
 
-  defp handle_sidebar_key("2", state) do
+  defp dispatch_sidebar_action(:navigate_up, state),
+    do: {:noreply, navigate(state, -1)}
+
+  defp dispatch_sidebar_action(:context_mode, state) do
+    {:noreply, %{state | active_tab: :context, main_scroll: 0} |> update_context_from_cursor()}
+  end
+
+  defp dispatch_sidebar_action(:diff_mode, state) do
     new_state = %{
       state
       | active_tab: :diff,
@@ -527,43 +557,69 @@ defmodule Codrift.TUI do
     {:noreply, refresh_diff(new_state)}
   end
 
-  defp handle_sidebar_key("v", %{active_tab: :diff} = state) do
+  defp dispatch_sidebar_action(:toggle_diff_view, %{active_tab: :diff} = state) do
     new_mode = if state.diff_view_mode == :unified, do: :split, else: :unified
     {:noreply, %{state | diff_view_mode: new_mode, diff_scroll: 0}}
   end
 
-  defp handle_sidebar_key("*", %{active_tab: :diff} = state) do
-    {:noreply, %{state | diff_sidebar_cursor: 0, diff_scroll: 0}}
-  end
+  defp dispatch_sidebar_action(:toggle_diff_view, state), do: {:noreply, state}
 
-  defp handle_sidebar_key("a", state), do: {:noreply, open_add_dir_modal(state)}
+  defp dispatch_sidebar_action(:diff_all_files, %{active_tab: :diff} = state),
+    do: {:noreply, %{state | diff_sidebar_cursor: 0, diff_scroll: 0}}
 
-  defp handle_sidebar_key("s", state),
+  defp dispatch_sidebar_action(:diff_all_files, state), do: {:noreply, state}
+
+  defp dispatch_sidebar_action(:add_dir, state),
+    do: {:noreply, open_add_dir_modal(state)}
+
+  defp dispatch_sidebar_action(:start_agent, state),
     do: {:noreply, start_agent_at_cursor(state, Codrift.Agent.Adapters.Claude)}
 
-  defp handle_sidebar_key("t", state),
+  defp dispatch_sidebar_action(:start_terminal, state),
     do: {:noreply, start_agent_at_cursor(state, Codrift.Agent.Adapters.Terminal)}
 
-  defp handle_sidebar_key("c", state), do: {:noreply, open_new_context_file_modal(state)}
-  defp handle_sidebar_key("d", state), do: {:noreply, open_delete_confirm(state)}
+  defp dispatch_sidebar_action(:new_context, state),
+    do: {:noreply, open_new_context_file_modal(state)}
 
-  defp handle_sidebar_key("e", state) do
+  defp dispatch_sidebar_action(:delete, state),
+    do: {:noreply, open_delete_confirm(state)}
+
+  defp dispatch_sidebar_action(:edit_context, state) do
     case Enum.at(state.sidebar_entries, state.sidebar_cursor) do
       {:context_file, _, path, _} -> {:noreply, start_editing(state, path)}
       _ -> {:noreply, state}
     end
   end
 
-  defp handle_sidebar_key("r", state), do: {:noreply, refresh_current(state)}
-  defp handle_sidebar_key("]", state), do: {:noreply, cycle_initiative_status(state, :next)}
-  defp handle_sidebar_key("[", state), do: {:noreply, cycle_initiative_status(state, :prev)}
+  defp dispatch_sidebar_action(:refresh, state),
+    do: {:noreply, refresh_current(state)}
 
-  defp handle_sidebar_key("n", state) do
+  defp dispatch_sidebar_action(:status_next, state),
+    do: {:noreply, cycle_initiative_status(state, :next)}
+
+  defp dispatch_sidebar_action(:status_prev, state),
+    do: {:noreply, cycle_initiative_status(state, :prev)}
+
+  defp dispatch_sidebar_action(:new_initiative, state) do
     ExRatatui.text_input_set_value(state.modal_input, "")
     {:noreply, %{state | modal: :new_name, status: "New initiative — Enter: next  Esc: cancel"}}
   end
 
-  defp handle_sidebar_key(_, state), do: {:noreply, state}
+  defp dispatch_sidebar_action(:toggle_sidebar, state),
+    do: {:noreply, toggle_sidebar(state)}
+
+  defp dispatch_sidebar_action(:palette, state) do
+    ExRatatui.text_input_set_value(state.modal_input, "")
+    {:noreply, %{state | modal: :palette, palette_cursor: 0, palette_filter: ""}}
+  end
+
+  defp dispatch_sidebar_action(:quit, state) do
+    save_all_sessions(state)
+    {:stop, state}
+  end
+
+  # Unknown or unbound key — no-op.
+  defp dispatch_sidebar_action(_, state), do: {:noreply, state}
 
   @impl true
   def handle_info({:agent_output, agent_id, data}, state) do
@@ -741,7 +797,7 @@ defmodule Codrift.TUI do
   end
 
   def handle_info(:reset_status, state) do
-    {:noreply, %{state | status: @default_status, status_timer_ref: nil}}
+    {:noreply, %{state | status: build_default_status(state.keybindings), status_timer_ref: nil}}
   end
 
   # Auto-restart Claude agents that were running when the TUI last exited.
@@ -1076,6 +1132,19 @@ defmodule Codrift.TUI do
           {:context_file, _, path, _} -> start_editing(%{state | modal: :none}, path)
           _ -> flash_status(%{state | modal: :none}, "Navigate to a context file first")
         end
+
+      # ── Theme ────────────────────────────────────────────────────────────────
+
+      %{id: :theme_picker} ->
+        themes = theme_picker_list()
+        cursor = Enum.find_index(themes, fn %{theme: t} -> t.name == state.theme.name end) || 0
+
+        %{
+          state
+          | modal: :theme_picker,
+            theme_picker_cursor: cursor,
+            theme_before_picker: state.theme
+        }
 
       # ── Other ─────────────────────────────────────────────────────────────────
 
@@ -1571,13 +1640,13 @@ defmodule Codrift.TUI do
         %CodeBlock{
           content: content,
           language: "md",
-          theme: :base16_ocean_dark,
+          theme: state.theme.syntax_theme,
           line_numbers: false,
           block: %Block{
             title: " #{name} · #{status} ",
             borders: [:all],
             border_type: :rounded,
-            border_style: Styles.pane_border(state.focus, :main)
+            border_style: Styles.pane_border(state.focus, :main, state.theme)
           },
           scroll: {state.main_scroll, 0}
         }
@@ -1589,13 +1658,13 @@ defmodule Codrift.TUI do
         %CodeBlock{
           content: content,
           language: "md",
-          theme: :base16_ocean_dark,
+          theme: state.theme.syntax_theme,
           line_numbers: false,
           block: %Block{
             title: " #{name} · #{status} ",
             borders: [:all],
             border_type: :rounded,
-            border_style: Styles.pane_border(state.focus, :main)
+            border_style: Styles.pane_border(state.focus, :main, state.theme)
           },
           scroll: {state.main_scroll, 0}
         }
@@ -1607,7 +1676,7 @@ defmodule Codrift.TUI do
             title: " #{name} ",
             borders: [:all],
             border_type: :rounded,
-            border_style: Styles.pane_border(state.focus, :main)
+            border_style: Styles.pane_border(state.focus, :main, state.theme)
           }
         }
     end
@@ -1634,7 +1703,7 @@ defmodule Codrift.TUI do
         title: " ◈ context ",
         borders: [:all],
         border_type: :rounded,
-        border_style: Styles.pane_border(state.focus, :main)
+        border_style: Styles.pane_border(state.focus, :main, state.theme)
       },
       wrap: true,
       scroll: {state.main_scroll, 0}
@@ -1664,13 +1733,13 @@ defmodule Codrift.TUI do
           %CodeBlock{
             content: display,
             language: detect_language(path),
-            theme: :base16_ocean_dark,
+            theme: state.theme.syntax_theme,
             line_numbers: true,
             block: %Block{
               title: " #{Path.basename(path)}  e: edit  d: delete ",
               borders: [:all],
               border_type: :rounded,
-              border_style: Styles.pane_border(state.focus, :main)
+              border_style: Styles.pane_border(state.focus, :main, state.theme)
             },
             scroll: {state.main_scroll, 0}
           }
@@ -1683,7 +1752,7 @@ defmodule Codrift.TUI do
             title: "  ",
             borders: [:all],
             border_type: :rounded,
-            border_style: Styles.pane_border(state.focus, :main)
+            border_style: Styles.pane_border(state.focus, :main, state.theme)
           }
         }
     end
@@ -1707,7 +1776,7 @@ defmodule Codrift.TUI do
         title: " ▸ #{Paths.compact(dir)} ",
         borders: [:all],
         border_type: :rounded,
-        border_style: Styles.pane_border(state.focus, :main)
+        border_style: Styles.pane_border(state.focus, :main, state.theme)
       },
       wrap: true,
       scroll: {state.main_scroll, 0}
@@ -1717,7 +1786,7 @@ defmodule Codrift.TUI do
   defp render_agent_pane(state, agent_id, adapter, status) do
     focused = Focus.focused?(state.focus, :main)
     title = " #{Codrift.Agent.adapter_name(adapter)} (#{Styles.format_status(status)}) "
-    border = Styles.pane_border(state.focus, :main)
+    border = Styles.pane_border(state.focus, :main, state.theme)
     block = %Block{title: title, borders: [:all], border_type: :rounded, border_style: border}
 
     screen = Map.get(state.vt100_screens, agent_id)
@@ -1793,7 +1862,7 @@ defmodule Codrift.TUI do
     title = diff_content_title(state)
     # In diff mode the content pane is always the primary reading surface, so
     # always show it with an active border regardless of which pane has focus.
-    border = %Style{fg: :cyan}
+    border = Styles.diff_border(state.theme)
 
     case state.diff_view_mode do
       :unified ->
@@ -1806,7 +1875,7 @@ defmodule Codrift.TUI do
           {%CodeBlock{
              content: content,
              language: "diff",
-             theme: :base16_ocean_dark,
+             theme: state.theme.syntax_theme,
              line_numbers: false,
              block: %Block{
                title: title,
@@ -2017,7 +2086,7 @@ defmodule Codrift.TUI do
         title: " Codrift ",
         borders: [:all],
         border_type: :rounded,
-        border_style: Styles.pane_border(state.focus, :main)
+        border_style: Styles.pane_border(state.focus, :main, state.theme)
       },
       wrap: true
     }
@@ -2231,5 +2300,97 @@ defmodule Codrift.TUI do
     agents_label = if count == 0, do: "none", else: "#{count} running"
 
     "**#{Paths.compact(path)}**  \nbranch: `#{branch}` · commit: `#{commit}` · agents: #{agents_label}"
+  end
+
+  # ── Config helpers ────────────────────────────────────────────────────────────
+
+  # Builds the footer status hint string using the active keybindings.
+  defp build_default_status(kb) do
+    f = &Keybindings.format/1
+
+    "#{f.(kb.navigate_down)}/#{f.(kb.navigate_up)}:navigate  " <>
+      "#{f.(kb.new_initiative)}:new  " <>
+      "#{f.(kb.start_agent)}:start  " <>
+      "#{f.(kb.delete)}:delete  " <>
+      "#{f.(kb.start_terminal)}:terminal  " <>
+      "Tab:agent pane  " <>
+      "#{f.(kb.diff_mode)}:diff  " <>
+      "#{f.(kb.palette)}:palette  " <>
+      "#{f.(kb.quit)}:quit"
+  end
+
+  # Builds the command palette actions list with hints from the active keybindings.
+  defp build_actions(kb) do
+    [
+      # Navigation
+      %{
+        id: :toggle_sidebar,
+        label: "Toggle Sidebar",
+        hint: Keybindings.format(kb.toggle_sidebar)
+      },
+      %{id: :context_mode, label: "Context View", hint: Keybindings.format(kb.context_mode)},
+      %{id: :diff_mode, label: "Diff View", hint: Keybindings.format(kb.diff_mode)},
+      %{
+        id: :toggle_diff_view,
+        label: "Toggle Diff: Unified / Split",
+        hint: Keybindings.format(kb.toggle_diff_view)
+      },
+      %{
+        id: :diff_all_files,
+        label: "Diff: Show All Files",
+        hint: Keybindings.format(kb.diff_all_files)
+      },
+      # Initiatives & directories
+      %{
+        id: :new_initiative,
+        label: "New Initiative",
+        hint: Keybindings.format(kb.new_initiative)
+      },
+      %{id: :add_dir, label: "Add Directory", hint: Keybindings.format(kb.add_dir)},
+      %{
+        id: :cycle_status,
+        label: "Cycle Initiative Status",
+        hint: "#{Keybindings.format(kb.status_prev)}/#{Keybindings.format(kb.status_next)}"
+      },
+      %{id: :delete_current, label: "Delete / Stop Current", hint: Keybindings.format(kb.delete)},
+      # Agents
+      %{id: :start_claude, label: "Start Claude Agent", hint: Keybindings.format(kb.start_agent)},
+      %{
+        id: :start_terminal,
+        label: "Open Terminal Here",
+        hint: Keybindings.format(kb.start_terminal)
+      },
+      %{id: :start_aider, label: "Start Aider Agent", hint: ""},
+      # Context files
+      %{
+        id: :new_context_file,
+        label: "New Context File",
+        hint: Keybindings.format(kb.new_context)
+      },
+      %{
+        id: :edit_context_file,
+        label: "Edit Context File",
+        hint: Keybindings.format(kb.edit_context)
+      },
+      # Other
+      %{id: :refresh, label: "Refresh", hint: Keybindings.format(kb.refresh)},
+      %{id: :theme_picker, label: "Choose Theme", hint: ""}
+    ]
+  end
+
+  defp theme_picker_list do
+    Theme.all()
+    |> Enum.sort_by(fn {name, _} -> name end)
+    |> Enum.map(fn {_name, theme} -> %{theme: theme} end)
+  end
+
+  defp apply_theme_picker(state) do
+    theme = Enum.at(theme_picker_list(), state.theme_picker_cursor).theme
+    path = Path.join(Path.expand("~/.codrift"), "theme.json")
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, JSON.encode!(%{"theme" => to_string(theme.name)}))
+
+    %{state | modal: :none, theme: theme, theme_before_picker: nil}
+    |> flash_status("Theme: #{theme.name}")
   end
 end

@@ -18,3 +18,6 @@ erl_crash.dump
 
 # Temporary files
 /tmp/
+
+# Claude Code agent worktrees and session data
+.claude/
