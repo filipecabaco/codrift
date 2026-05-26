@@ -22,8 +22,7 @@ defmodule Mix.Tasks.Codrift.Tui do
   def run(_args) do
     {:ok, _} = Application.ensure_all_started(:codrift)
 
-    # Suppress console logging so the TUI owns the terminal cleanly.
-    Logger.configure(level: :none)
+    Logger.configure(level: :error)
 
     {:ok, pid} = Codrift.TUI.start_link([])
     ref = Process.monitor(pid)

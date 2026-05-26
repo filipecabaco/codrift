@@ -19,7 +19,20 @@ defmodule Codrift.MCP.Handler do
     - `start_agent` — spawn an agent in a directory
     - `send_to_agent` — send input to a running agent
     - `get_agent_output` — fetch recent output from an agent
+    - `create_initiative` — create a new initiative
+    - `add_dir` — add a directory to an initiative
+    - `delete_initiative` — delete an initiative
+    - `set_initiative_status` — set initiative lifecycle status
+    - `memory_search` — FTS5 full-text search over an initiative's memory store
+    - `memory_add` — store a new memory entry (decision/summary/snippet/file_context/note)
+    - `memory_delete` — delete a memory entry by id
+    - `memory_recent` — return the most recent memory entries
+    - `memory_list` — return all entries of a specific type
   """
+
+  alias Codrift.Agent.Adapters.Aider
+  alias Codrift.Agent.Adapters.Claude
+  alias Codrift.Initiative.Store
 
   @server_info %{
     "protocolVersion" => "2024-11-05",
@@ -73,11 +86,11 @@ defmodule Codrift.MCP.Handler do
   end
 
   defp call_tool("list_initiatives", _args) do
-    {:ok, Enum.map(Codrift.Initiative.Store.list(), &Codrift.Initiative.to_map/1)}
+    {:ok, Enum.map(Store.list(), &Codrift.Initiative.to_map/1)}
   end
 
   defp call_tool("get_diff", %{"initiative_id" => initiative_id}) do
-    case Codrift.Initiative.Store.get(initiative_id) do
+    case Store.get(initiative_id) do
       {:ok, initiative} -> {:ok, Enum.flat_map(initiative.dirs, &dir_diffs/1)}
       {:error, :not_found} -> {:error, "initiative not found: #{initiative_id}"}
     end
@@ -95,7 +108,10 @@ defmodule Codrift.MCP.Handler do
     {:ok, agents}
   end
 
-  defp call_tool("start_agent", %{"initiative_id" => init_id, "dir" => dir, "adapter" => adapter}) do
+  defp call_tool(
+         "start_agent",
+         %{"initiative_id" => init_id, "dir" => dir, "adapter" => adapter}
+       ) do
     module = adapter_module(adapter)
     expanded_dir = Path.expand(dir)
 
@@ -137,7 +153,7 @@ defmodule Codrift.MCP.Handler do
   defp call_tool("create_initiative", %{"name" => name} = args) do
     dirs = Map.get(args, "dirs", [])
 
-    case Codrift.Initiative.Store.create(name, dirs) do
+    case Store.create(name, dirs) do
       {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
       {:error, reason} -> {:error, inspect(reason)}
     end
@@ -146,14 +162,14 @@ defmodule Codrift.MCP.Handler do
   defp call_tool("add_dir", %{"initiative_id" => id, "dir" => dir}) do
     expanded = Path.expand(dir)
 
-    case Codrift.Initiative.Store.add_dir(id, expanded) do
+    case Store.add_dir(id, expanded) do
       {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
       {:error, :not_found} -> {:error, "initiative not found: #{id}"}
     end
   end
 
   defp call_tool("delete_initiative", %{"initiative_id" => id}) do
-    case Codrift.Initiative.Store.delete(id) do
+    case Store.delete(id) do
       :ok -> {:ok, %{"deleted" => id}}
       {:error, :not_found} -> {:error, "initiative not found: #{id}"}
     end
@@ -165,12 +181,59 @@ defmodule Codrift.MCP.Handler do
     if status_str in valid do
       status = String.to_existing_atom(status_str)
 
-      case Codrift.Initiative.Store.set_status(id, status) do
+      case Store.set_status(id, status) do
         {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
         {:error, :not_found} -> {:error, "initiative not found: #{id}"}
       end
     else
       {:error, "invalid status: #{status_str}. Must be one of: #{Enum.join(valid, ", ")}"}
+    end
+  end
+
+  defp call_tool("memory_search", %{"initiative_id" => id, "query" => query}) do
+    {:ok, Codrift.Memory.search(id, query)}
+  end
+
+  defp call_tool(
+         "memory_add",
+         %{"initiative_id" => id, "chunk_type" => type, "content" => content} = args
+       ) do
+    source = Map.get(args, "source", "mcp")
+    valid = Codrift.Memory.valid_types()
+
+    if type in valid do
+      case Codrift.Memory.add(id, type, content, source) do
+        {:ok, rowid} -> {:ok, %{"id" => rowid}}
+      end
+    else
+      {:error, "invalid chunk_type '#{type}'. Must be one of: #{Enum.join(valid, ", ")}"}
+    end
+  end
+
+  defp call_tool("memory_delete", %{"initiative_id" => id, "id" => rowid})
+       when is_integer(rowid) do
+    case Codrift.Memory.delete(id, rowid) do
+      :ok -> {:ok, %{"deleted" => rowid}}
+      {:error, :not_found} -> {:error, "memory entry not found: #{rowid}"}
+    end
+  end
+
+  defp call_tool("memory_delete", %{"initiative_id" => _id, "id" => rowid}) do
+    {:error, "id must be an integer, got: #{inspect(rowid)}"}
+  end
+
+  defp call_tool("memory_recent", %{"initiative_id" => id} = args) do
+    limit = args |> Map.get("limit", 20) |> clamp_limit()
+    {:ok, Codrift.Memory.recent(id, limit)}
+  end
+
+  defp call_tool("memory_list", %{"initiative_id" => id, "chunk_type" => type}) do
+    valid = Codrift.Memory.valid_types()
+
+    if type in valid do
+      {:ok, Codrift.Memory.list(id, type)}
+    else
+      {:error, "invalid chunk_type '#{type}'. Must be one of: #{Enum.join(valid, ", ")}"}
     end
   end
 
@@ -183,9 +246,14 @@ defmodule Codrift.MCP.Handler do
     end
   end
 
-  defp adapter_module("claude"), do: Codrift.Agent.Adapters.Claude
-  defp adapter_module("aider"), do: Codrift.Agent.Adapters.Aider
+  defp adapter_module("claude"), do: Claude
+  defp adapter_module("aider"), do: Aider
   defp adapter_module(name), do: raise("unknown adapter: #{name}")
+
+  # Clamps memory_recent limit to 1..100.  Accepts integers only; any other
+  # type (float, nil) falls back to the default of 20.
+  defp clamp_limit(n) when is_integer(n) and n > 0, do: min(n, 100)
+  defp clamp_limit(_), do: 20
 
   defp encode_ok(id, result) do
     JSON.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => result})
@@ -304,6 +372,88 @@ defmodule Codrift.MCP.Handler do
             "n" => %{"type" => "integer", "description" => "Number of lines (default 50)"}
           },
           "required" => ["agent_id"]
+        }
+      },
+      %{
+        "name" => "memory_search",
+        "description" =>
+          "Full-text search over an initiative's memory store. Returns up to 20 results ranked by relevance.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "query" => %{
+              "type" => "string",
+              "description" =>
+                "FTS5 query: plain words, quoted phrases, AND/OR/NOT operators supported"
+            }
+          },
+          "required" => ["initiative_id", "query"]
+        }
+      },
+      %{
+        "name" => "memory_add",
+        "description" =>
+          "Add a memory entry. Use after completing a task, making a decision, or finding a reusable pattern.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "chunk_type" => %{
+              "type" => "string",
+              "enum" => Codrift.Memory.valid_types(),
+              "description" => "decision | summary | snippet | file_context | note"
+            },
+            "content" => %{"type" => "string"},
+            "source" => %{
+              "type" => "string",
+              "description" => "Who wrote this (agent ID, file path, etc). Defaults to 'mcp'."
+            }
+          },
+          "required" => ["initiative_id", "chunk_type", "content"]
+        }
+      },
+      %{
+        "name" => "memory_delete",
+        "description" =>
+          "Delete a memory entry by id (from memory_search or memory_add). Removes outdated entries.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "id" => %{"type" => "integer"}
+          },
+          "required" => ["initiative_id", "id"]
+        }
+      },
+      %{
+        "name" => "memory_recent",
+        "description" => "Return the most recent memory entries across all types, newest first.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "limit" => %{
+              "type" => "integer",
+              "description" => "Max entries to return (default 20)"
+            }
+          },
+          "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "memory_list",
+        "description" => "Return all memory entries of a specific type, newest first.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "chunk_type" => %{
+              "type" => "string",
+              "enum" => Codrift.Memory.valid_types()
+            }
+          },
+          "required" => ["initiative_id", "chunk_type"]
         }
       }
     ]

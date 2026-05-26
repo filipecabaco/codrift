@@ -1,4 +1,5 @@
 defmodule Codrift.Agent.Adapters.ClaudeTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias Codrift.Agent.Adapters.Claude

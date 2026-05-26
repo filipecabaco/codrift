@@ -15,43 +15,25 @@ defmodule Mix.Tasks.Codrift.Mcp.Install do
 
   use Mix.Task
 
+  alias Codrift.CLI.MCP
+
   @shortdoc "Register Codrift MCP server with Claude Code (or print install command)"
 
-  @server_name "codrift"
-  @default_port 7437
-
   @impl Mix.Task
-  def run(_args) do
-    port = Application.get_env(:codrift, :bandit_opts, []) |> Keyword.get(:port, @default_port)
-    sse_url = "http://localhost:#{port}/mcp/sse"
-    install_cmd = "claude mcp add #{@server_name} --transport sse #{sse_url}"
+  def run(args) do
+    # In the Mix context the application config is available, so honour any
+    # custom port set via `config :codrift, bandit_opts: [port: N]` — unless
+    # the caller already supplied an explicit --port=N flag.
+    has_port_flag = Enum.any?(args, &String.starts_with?(&1, "--port="))
 
-    case System.find_executable("claude") do
-      nil ->
-        Mix.shell().info("""
-        Claude CLI not found in PATH. Add the MCP server manually:
+    port_flag =
+      if has_port_flag do
+        []
+      else
+        port = Application.get_env(:codrift, :bandit_opts, []) |> Keyword.get(:port, 7437)
+        ["--port=#{port}"]
+      end
 
-            #{install_cmd}
-
-        Or for other MCP clients, point them at the SSE endpoint:
-
-            #{sse_url}
-        """)
-
-      claude ->
-        Mix.shell().info("Registering Codrift MCP server with Claude Code...")
-
-        case System.cmd(claude, ["mcp", "add", @server_name, "--transport", "sse", sse_url],
-               stderr_to_stdout: true
-             ) do
-          {output, 0} ->
-            Mix.shell().info("Done. #{String.trim(output)}")
-            Mix.shell().info("\nVerify with: claude mcp list")
-
-          {output, code} ->
-            Mix.shell().error("claude mcp add exited #{code}: #{String.trim(output)}")
-            Mix.shell().info("\nManual install:\n\n    #{install_cmd}\n")
-        end
-    end
+    MCP.run(["install"] ++ port_flag ++ args)
   end
 end

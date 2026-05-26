@@ -109,14 +109,7 @@ defmodule Codrift.Config.Keybindings do
       with {:ok, raw} <- File.read(path),
            {:ok, parsed} <- JSON.decode(raw) do
         parsed
-        |> Enum.flat_map(fn {k, v} ->
-          with action when not is_nil(action) <- string_to_action(k),
-               true <- is_binary(v) do
-            [{action, v}]
-          else
-            _ -> []
-          end
-        end)
+        |> Enum.flat_map(&parse_binding/1)
         |> Map.new()
       else
         _ -> %{}
@@ -195,4 +188,13 @@ defmodule Codrift.Config.Keybindings do
   defp string_to_action("toggle_sidebar"), do: :toggle_sidebar
   defp string_to_action("palette"), do: :palette
   defp string_to_action(_), do: nil
+
+  defp parse_binding({k, v}) do
+    with action when not is_nil(action) <- string_to_action(k),
+         true <- is_binary(v) do
+      [{action, v}]
+    else
+      _ -> []
+    end
+  end
 end

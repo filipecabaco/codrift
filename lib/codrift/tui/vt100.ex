@@ -205,6 +205,7 @@ defmodule Codrift.TUI.VT100 do
 
   # Lone ESC or ESC + bracket with no final byte yet
   defp incomplete_esc?(<<"\e">>), do: true
+
   defp incomplete_esc?(<<"\e[">>), do: true
 
   defp incomplete_esc?(<<"\e[", rest::binary>>) do
@@ -339,6 +340,7 @@ defmodule Codrift.TUI.VT100 do
   # ── CSI dispatch ──────────────────────────────────────────────────────────
 
   defp apply_csi(screen, params, ?H), do: cursor_position(screen, params)
+
   defp apply_csi(screen, params, ?f), do: cursor_position(screen, params)
 
   defp apply_csi(screen, params, ?A) do
@@ -409,7 +411,9 @@ defmodule Codrift.TUI.VT100 do
   end
 
   defp apply_csi(screen, params, ?m), do: %{screen | style: apply_sgr(params, screen.style)}
+
   defp apply_csi(screen, _params, ?s), do: save_cursor(screen)
+
   defp apply_csi(screen, _params, ?u), do: restore_cursor(screen)
 
   # DECSTBM — set scroll region; cursor homes to (0, 0) per DEC spec (without DECOM)

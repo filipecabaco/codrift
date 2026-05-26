@@ -133,8 +133,7 @@ defmodule Codrift.SessionStore do
   end
 
   def handle_call({:delete_by_agent, agent_id}, _from, %{db: db} = state) do
-    {:ok, stmt} =
-      Exqlite.Sqlite3.prepare(db, "DELETE FROM claude_sessions WHERE agent_id = ?1")
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, "DELETE FROM claude_sessions WHERE agent_id = ?1")
 
     :ok = Exqlite.Sqlite3.bind(stmt, [agent_id])
     :done = Exqlite.Sqlite3.step(db, stmt)
@@ -223,8 +222,7 @@ defmodule Codrift.SessionStore do
   end
 
   defp needs_migration?(db) do
-    {:ok, stmt} =
-      Exqlite.Sqlite3.prepare(db, "PRAGMA table_info(claude_sessions)")
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, "PRAGMA table_info(claude_sessions)")
 
     columns = collect_column_names(db, stmt, [])
     :ok = Exqlite.Sqlite3.release(db, stmt)

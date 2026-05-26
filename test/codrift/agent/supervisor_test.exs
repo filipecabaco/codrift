@@ -1,8 +1,9 @@
 defmodule Codrift.AgentSupervisorTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
-  alias Codrift.AgentSupervisor
   alias Codrift.AgentProcess
+  alias Codrift.AgentSupervisor
   alias Codrift.Test.EchoAdapter
 
   setup do

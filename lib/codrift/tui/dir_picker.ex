@@ -90,16 +90,23 @@ defmodule Codrift.TUI.DirPicker do
   Returns the updated state map.
   """
   def move_cursor(state, delta) do
-    max_idx = max(length(state.dir_suggestions) - 1, 0)
-    new_cursor = min(max(state.dir_suggestion_cursor + delta, 0), max_idx)
+    max_idx = max(length(state.modal.dir_picker.suggestions) - 1, 0)
+    new_cursor = min(max(state.modal.dir_picker.cursor + delta, 0), max_idx)
 
-    case Enum.at(state.dir_suggestions, new_cursor) do
+    case Enum.at(state.modal.dir_picker.suggestions, new_cursor) do
       nil ->
-        %{state | dir_suggestion_cursor: new_cursor}
+        %{
+          state
+          | modal: %{state.modal | dir_picker: %{state.modal.dir_picker | cursor: new_cursor}}
+        }
 
       path ->
-        ExRatatui.text_input_set_value(state.modal_input, path)
-        %{state | dir_suggestion_cursor: new_cursor}
+        ExRatatui.text_input_set_value(state.modal.input, path)
+
+        %{
+          state
+          | modal: %{state.modal | dir_picker: %{state.modal.dir_picker | cursor: new_cursor}}
+        }
     end
   end
 
@@ -111,14 +118,18 @@ defmodule Codrift.TUI.DirPicker do
   """
   def complete(state) do
     path =
-      case Enum.at(state.dir_suggestions, state.dir_suggestion_cursor) do
-        nil -> ExRatatui.text_input_get_value(state.modal_input)
+      case Enum.at(state.modal.dir_picker.suggestions, state.modal.dir_picker.cursor) do
+        nil -> ExRatatui.text_input_get_value(state.modal.input)
         p -> p
       end
 
     completed = if String.ends_with?(path, "/"), do: path, else: path <> "/"
-    ExRatatui.text_input_set_value(state.modal_input, completed)
-    %{state | dir_suggestions: suggestions(completed), dir_suggestion_cursor: 0}
+    ExRatatui.text_input_set_value(state.modal.input, completed)
+
+    %{
+      state
+      | modal: %{state.modal | dir_picker: %{suggestions: suggestions(completed), cursor: 0}}
+    }
   end
 
   @doc """
@@ -128,8 +139,8 @@ defmodule Codrift.TUI.DirPicker do
   Returns the updated state map.
   """
   def sync(state) do
-    typed = ExRatatui.text_input_get_value(state.modal_input)
-    %{state | dir_suggestions: suggestions(typed), dir_suggestion_cursor: 0}
+    typed = ExRatatui.text_input_get_value(state.modal.input)
+    %{state | modal: %{state.modal | dir_picker: %{suggestions: suggestions(typed), cursor: 0}}}
   end
 
   defp score_and_sort(entries, "") do

@@ -236,6 +236,20 @@ defmodule Codrift.Initiative.Store do
     File.rm_rf!(expanded)
   end
 
+  @doc """
+  Writes `initiative.md` and ensures the `CLAUDE.md` symlink.
+
+  Public so that `Codrift.CLI.Initiative` can call it when creating an
+  initiative outside the supervision tree.
+  """
+  def write_initiative_md_for_cli(ctx_path, initiative) do
+    # Mirrors handle_call({:create, ...}): ensure_git_repo must be called so
+    # that context folders created by the CLI are identical to those created by
+    # the GenServer (both have a .git repo for diff tracking).
+    ensure_git_repo(ctx_path)
+    write_initiative_md(ctx_path, initiative)
+  end
+
   # Creates initiative.md on first run. If the file already exists (pre-seeded
   # context folder) the user-editable sections are untouched; only the managed
   # dirs block is refreshed.
@@ -293,10 +307,42 @@ defmodule Codrift.Initiative.Store do
   end
 
   defp initial_initiative_md(initiative) do
+    types = Enum.join(Codrift.Memory.valid_types(), ", ")
+
     """
     # #{initiative.name}
 
+    ## Initiative
+
+    ID: #{initiative.id}
+    Name: #{initiative.name}
+
     #{dirs_block(initiative.dirs)}
+
+    ## Memory Store
+
+    Shared knowledge base for all agents on this initiative.
+    Search it before starting work; update it when you finish or make a decision.
+    This saves tokens and keeps all agents aligned.
+
+    Valid types: #{types}
+
+    ### Via MCP tool (Claude Code — preferred):
+
+    Use the structured tools: `memory_search`, `memory_add`, `memory_delete`,
+    `memory_recent`, `memory_list`. Pass `initiative_id: "#{initiative.id}"` to each.
+
+    ### Via CLI (any agent):
+
+        codrift memory search #{initiative.id} "your query"
+        codrift memory add    #{initiative.id} decision "we use JWT not sessions"
+        codrift memory add    #{initiative.id} summary  "completed auth module"
+        codrift memory add    #{initiative.id} snippet  "pattern or code fragment"
+        codrift memory delete #{initiative.id} <id>
+        codrift memory recent #{initiative.id}
+        codrift memory list   #{initiative.id} decision
+
+    Results include an `id` field — use it with `memory delete` to remove outdated entries.
 
     ## Goal
 
@@ -337,19 +383,21 @@ defmodule Codrift.Initiative.Store do
          {:ok, content} <- File.read(path),
          {:ok, %{"initiatives" => raw}} <- JSON.decode(content) do
       raw
-      |> Enum.flat_map(fn {id, data} ->
-        case Initiative.from_map(data) do
-          {:ok, initiative} ->
-            [{id, initiative}]
-
-          {:error, reason} ->
-            Logger.warning("Skipping malformed initiative #{inspect(id)}: #{inspect(reason)}")
-            []
-        end
-      end)
+      |> Enum.flat_map(&parse_raw_initiative/1)
       |> Map.new()
     else
       _ -> %{}
+    end
+  end
+
+  defp parse_raw_initiative({id, data}) do
+    case Initiative.from_map(data) do
+      {:ok, initiative} ->
+        [{id, initiative}]
+
+      {:error, reason} ->
+        Logger.warning("Skipping malformed initiative #{inspect(id)}: #{inspect(reason)}")
+        []
     end
   end
 end

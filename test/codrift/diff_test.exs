@@ -1,4 +1,5 @@
 defmodule Codrift.DiffTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias Codrift.Diff
