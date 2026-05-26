@@ -123,7 +123,7 @@ defmodule Codrift.TUI.Sidebar do
   end
 
   @doc "Renders the sidebar `%WidgetList{}` widget for the diff tab."
-  def render_diff(entries, cursor, focus) do
+  def render_diff(entries, cursor, focus, theme \\ nil) do
     %WidgetList{
       items: Enum.map(entries, &item/1),
       selected: cursor,
@@ -131,15 +131,15 @@ defmodule Codrift.TUI.Sidebar do
         title: " Changed Files ",
         borders: [:all],
         border_type: :rounded,
-        border_style: Styles.pane_border(focus, :sidebar)
+        border_style: Styles.pane_border(focus, :sidebar, theme)
       },
-      highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
+      highlight_style: Styles.sidebar_highlight(theme),
       highlight_symbol: "▶ "
     }
   end
 
   @doc "Renders the sidebar `%WidgetList{}` widget."
-  def render(entries, cursor, focus) do
+  def render(entries, cursor, focus, theme \\ nil) do
     %WidgetList{
       items: Enum.map(entries, &item/1),
       selected: cursor,
@@ -147,9 +147,9 @@ defmodule Codrift.TUI.Sidebar do
         title: " Initiatives ",
         borders: [:all],
         border_type: :rounded,
-        border_style: Styles.pane_border(focus, :sidebar)
+        border_style: Styles.pane_border(focus, :sidebar, theme)
       },
-      highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
+      highlight_style: Styles.sidebar_highlight(theme),
       highlight_symbol: "▶ "
     }
   end

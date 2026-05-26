@@ -125,13 +125,18 @@ Codrift (Application)
 
 ---
 
+### ✅ Done — Config layer
+
+| # | Step | Notes |
+|---|------|-------|
+| 32 | Keybinding config layer | `Codrift.Config.Keybindings` — loads `~/.codrift/keybindings.json`, merges over defaults; TUI dispatch uses reverse map; palette hints and footer status bar reflect configured keys |
+| 33 | Theme chooser | `Codrift.Config.Theme` — loads `~/.codrift/theme.json`; named themes: `default`, `dracula`, `nord`, `solarized`, `tokyo_night`; controls border colours, sidebar highlight, diff border, and CodeBlock syntax theme |
+
 ### ⬜ Upcoming
 
 | # | Step | Notes |
 |---|------|-------|
 | 31 | Session store: multi-agent per dir | Keys by `(initiative_id, dir)` — only one UUID per dir. Blocks multiple Claude agents in same dir from resuming independently. See *Upcoming: Multi-agent Session Store*. |
-| 32 | Keybinding config layer | Config-file override for all key bindings |
-| 33 | Theme chooser | Named themes (Dracula, Nord, Solarized, Tokyo Night) set border colors, highlight colors, and CodeBlock syntax theme in one config entry |
 | 34 | SQLite + vector memory | `ecto_sqlite3` + `sqlite-vec` for semantic search over project context |
 | 35 | Git worktrees per initiative | Per-initiative git worktree per dir; isolated branches; TUI shows worktree branch + dirty state |
 | 36 | Additional CLI adapters | Codex CLI, Opencode, Cursor Agent, Gemini CLI, Copilot CLI, and others. See *Upcoming: Additional CLI Adapters*. |
