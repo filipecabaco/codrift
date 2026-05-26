@@ -162,8 +162,8 @@ defmodule Codrift.TUI.Modals do
     inner = Layout.inset(rect, 1)
 
     items =
-      Enum.map(filtered, fn %{label: label, hint: hint} ->
-        if hint == "", do: label, else: "#{label}  (#{hint})"
+      Enum.map(filtered, fn %{label: label, hint: keybinding} ->
+        if keybinding == "", do: label, else: "#{label}  (#{keybinding})"
       end)
 
     [

@@ -66,9 +66,7 @@ defmodule Codrift do
       {:ok, pid} ->
         pid
         |> Codrift.AgentProcess.status()
-        |> Map.update!(:adapter, fn m ->
-          m |> Module.split() |> List.last() |> String.downcase()
-        end)
+        |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
         |> Map.update!(:status, &Atom.to_string/1)
 
       {:error, :not_found} ->

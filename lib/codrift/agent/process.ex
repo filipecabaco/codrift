@@ -90,7 +90,7 @@ defmodule Codrift.AgentProcess do
     mode = adapter.mode()
 
     if Process.whereis(Codrift.AgentRegistry) do
-      Registry.register(Codrift.AgentRegistry, id, nil)
+      Registry.register(Codrift.AgentRegistry, id, %{initiative_id: initiative_id})
     end
 
     base = %__MODULE__{
@@ -124,10 +124,14 @@ defmodule Codrift.AgentProcess do
 
         {:ok, exec_pid, ospid} = :exec.run(cmd, pty_opts)
 
-        # Schedule session UUID detection: Claude writes its session .jsonl within
-        # a few seconds of startup; we find the newest file modified after launch.
-        start_posix = :os.system_time(:second)
-        Process.send_after(self(), {:detect_session, start_posix}, 3_000)
+        # Schedule session UUID detection only for Claude — it writes a .jsonl
+        # under ~/.claude/projects/ on startup. Other PTY adapters (e.g. Terminal)
+        # don't write there and could accidentally pick up an unrelated Claude
+        # session if they happen to start in the same directory shortly after one.
+        if adapter == Codrift.Agent.Adapters.Claude do
+          start_posix = :os.system_time(:second)
+          Process.send_after(self(), {:detect_session, start_posix}, 3_000)
+        end
 
         {:ok, %{base | exec_pid: exec_pid, exec_ospid: ospid, status: :starting}}
 
@@ -379,27 +383,29 @@ defmodule Codrift.AgentProcess do
   defp detect_claude_session(dir, after_posix) do
     project_dir = Path.expand("~/.claude/projects/#{String.replace(dir, "/", "-")}")
 
-    with {:ok, files} <- File.ls(project_dir) do
-      files
-      |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
-      |> Enum.flat_map(fn f ->
-        full = Path.join(project_dir, f)
+    case File.ls(project_dir) do
+      {:ok, files} ->
+        files
+        |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+        |> Enum.flat_map(fn f ->
+          full = Path.join(project_dir, f)
 
-        case File.stat(full, time: :posix) do
-          {:ok, %{mtime: mtime}} when mtime >= after_posix ->
-            [{Path.basename(f, ".jsonl"), mtime}]
+          case File.stat(full, time: :posix) do
+            {:ok, %{mtime: mtime}} when mtime >= after_posix ->
+              [{Path.basename(f, ".jsonl"), mtime}]
 
-          _ ->
-            []
+            _ ->
+              []
+          end
+        end)
+        |> Enum.sort_by(&elem(&1, 1), :desc)
+        |> case do
+          [{uuid, _} | _] -> uuid
+          [] -> nil
         end
-      end)
-      |> Enum.sort_by(&elem(&1, 1), :desc)
-      |> case do
-        [{uuid, _} | _] -> uuid
-        [] -> nil
-      end
-    else
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
@@ -425,8 +431,7 @@ defmodule Codrift.AgentProcess do
       case File.ls(ctx_dir) do
         {:ok, names} ->
           names
-          |> Enum.reject(&String.starts_with?(&1, "."))
-          |> Enum.reject(&(&1 == "CLAUDE.md"))
+          |> Enum.reject(&(String.starts_with?(&1, ".") or &1 == "CLAUDE.md"))
           |> Enum.sort()
           |> Enum.map(&Path.join(ctx_dir, &1))
           |> Enum.filter(&File.regular?/1)

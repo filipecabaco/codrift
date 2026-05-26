@@ -57,10 +57,15 @@ defmodule Codrift.AgentSupervisor do
     end
   end
 
-  @doc "Returns PIDs of all agents whose `initiative_id` matches."
-  def list_agents_for_initiative(initiative_id, server \\ __MODULE__) do
-    Enum.filter(list_agents(server), fn pid ->
-      match?(%{initiative_id: ^initiative_id}, Codrift.AgentProcess.status(pid))
-    end)
+  @doc """
+  Returns PIDs of all agents whose `initiative_id` matches.
+
+  Uses the Registry (O(1) lookup) instead of calling `status/1` on every agent.
+  The `initiative_id` is stored as Registry metadata when each agent registers itself.
+  """
+  def list_agents_for_initiative(initiative_id, registry \\ Codrift.AgentRegistry) do
+    Registry.select(registry, [
+      {{:_, :"$1", %{initiative_id: initiative_id}}, [], [:"$1"]}
+    ])
   end
 end

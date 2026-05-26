@@ -22,6 +22,7 @@ defmodule Codrift.TUI.Sidebar do
   alias ExRatatui.Text.{Line, Span}
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.List, as: WidgetList
+  alias Codrift.Paths
   alias Codrift.TUI.Styles
 
   @type entry ::
@@ -69,8 +70,7 @@ defmodule Codrift.TUI.Sidebar do
       case File.ls(path) do
         {:ok, fs} ->
           fs
-          |> Enum.reject(&String.starts_with?(&1, "."))
-          |> Enum.reject(&(&1 == "CLAUDE.md"))
+          |> Enum.reject(&(String.starts_with?(&1, ".") or &1 == "CLAUDE.md"))
           |> Enum.sort()
 
         {:error, _} ->
@@ -212,7 +212,7 @@ defmodule Codrift.TUI.Sidebar do
     %Line{
       spans: [
         %Span{content: "  ▸ ", style: %Style{fg: :dark_gray}},
-        %Span{content: compact_path(path), style: %Style{fg: :dark_gray}}
+        %Span{content: Paths.compact(path), style: %Style{fg: :dark_gray}}
       ]
     }
   end
@@ -221,7 +221,7 @@ defmodule Codrift.TUI.Sidebar do
     %Line{
       spans: [
         %Span{content: "  ▸ ", style: %Style{fg: :cyan}},
-        %Span{content: compact_path(path), style: %Style{fg: :white}},
+        %Span{content: Paths.compact(path), style: %Style{fg: :white}},
         %Span{content: " [#{count}]", style: %Style{fg: :dark_gray}}
       ]
     }
@@ -229,13 +229,12 @@ defmodule Codrift.TUI.Sidebar do
 
   defp item({:agent, _id, adapter, status}) do
     color = Styles.status_color(status)
-    name = adapter |> Module.split() |> List.last() |> String.downcase()
 
     %Line{
       spans: [
         %Span{content: "    ◦ ", style: %Style{fg: color}},
-        %Span{content: name, style: %Style{fg: :white}},
-        %Span{content: " (#{format_agent_status(status)})", style: %Style{fg: color}}
+        %Span{content: Codrift.Agent.adapter_name(adapter), style: %Style{fg: :white}},
+        %Span{content: " (#{Styles.format_status(status)})", style: %Style{fg: color}}
       ]
     }
   end
@@ -267,7 +266,7 @@ defmodule Codrift.TUI.Sidebar do
     %Line{
       spans: [
         %Span{content: "  ▸ ", style: %Style{fg: :cyan}},
-        %Span{content: compact_path(dir), style: %Style{fg: :white}},
+        %Span{content: Paths.compact(dir), style: %Style{fg: :white}},
         %Span{content: " +#{adds}", style: %Style{fg: :green}},
         %Span{content: " -#{dels}", style: %Style{fg: :red}}
       ]
@@ -290,21 +289,4 @@ defmodule Codrift.TUI.Sidebar do
   defp status_display(:done), do: {"✓", :cyan}
   defp status_display(:archived), do: {"○", :dark_gray}
   defp status_display(_), do: {"○", :dark_gray}
-
-  defp format_agent_status(:awaiting_input), do: "ready"
-  defp format_agent_status(:starting), do: "starting"
-  defp format_agent_status(:running), do: "running"
-  defp format_agent_status(:idle), do: "idle"
-  defp format_agent_status(:stopped), do: "stopped"
-  defp format_agent_status(other), do: to_string(other)
-
-  defp compact_path(path) do
-    home = Path.expand("~")
-
-    if String.starts_with?(path, home) do
-      "~" <> String.slice(path, String.length(home)..-1//1)
-    else
-      path
-    end
-  end
 end

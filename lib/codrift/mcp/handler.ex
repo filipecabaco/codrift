@@ -88,7 +88,7 @@ defmodule Codrift.MCP.Handler do
       Enum.map(Codrift.AgentSupervisor.list_agents(), fn pid ->
         pid
         |> Codrift.AgentProcess.status()
-        |> Map.update!(:adapter, &adapter_name/1)
+        |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
         |> Map.update!(:status, &Atom.to_string/1)
       end)
 
@@ -97,13 +97,14 @@ defmodule Codrift.MCP.Handler do
 
   defp call_tool("start_agent", %{"initiative_id" => init_id, "dir" => dir, "adapter" => adapter}) do
     module = adapter_module(adapter)
+    expanded_dir = Path.expand(dir)
 
-    case Codrift.AgentSupervisor.start_agent(init_id, dir, module) do
+    case Codrift.AgentSupervisor.start_agent(init_id, expanded_dir, module) do
       {:ok, pid} ->
         status =
           pid
           |> Codrift.AgentProcess.status()
-          |> Map.update!(:adapter, &adapter_name/1)
+          |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
           |> Map.update!(:status, &Atom.to_string/1)
 
         {:ok, status}
@@ -161,15 +162,15 @@ defmodule Codrift.MCP.Handler do
   defp call_tool("set_initiative_status", %{"initiative_id" => id, "status" => status_str}) do
     valid = ~w(planning ongoing done archived)
 
-    if status_str not in valid do
-      {:error, "invalid status: #{status_str}. Must be one of: #{Enum.join(valid, ", ")}"}
-    else
+    if status_str in valid do
       status = String.to_existing_atom(status_str)
 
       case Codrift.Initiative.Store.set_status(id, status) do
         {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
         {:error, :not_found} -> {:error, "initiative not found: #{id}"}
       end
+    else
+      {:error, "invalid status: #{status_str}. Must be one of: #{Enum.join(valid, ", ")}"}
     end
   end
 
@@ -185,10 +186,6 @@ defmodule Codrift.MCP.Handler do
   defp adapter_module("claude"), do: Codrift.Agent.Adapters.Claude
   defp adapter_module("aider"), do: Codrift.Agent.Adapters.Aider
   defp adapter_module(name), do: raise("unknown adapter: #{name}")
-
-  defp adapter_name(module) do
-    module |> Module.split() |> List.last() |> String.downcase()
-  end
 
   defp encode_ok(id, result) do
     JSON.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => result})

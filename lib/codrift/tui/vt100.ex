@@ -112,6 +112,19 @@ defmodule Codrift.TUI.VT100 do
   end
 
   @doc """
+  Returns the index of the first row that contains at least one non-space
+  character. Useful for skipping leading blank rows (e.g. from a shell
+  prompt's `add_newline` separator) when setting the initial scroll offset.
+  Returns 0 when no blank leading rows are found or the screen is empty.
+  """
+  def first_content_row(%__MODULE__{} = screen) do
+    Enum.find(0..(screen.height - 1), 0, fn row ->
+      row_cells = Map.get(screen.cells, row, %{})
+      Enum.any?(row_cells, fn {_col, {ch, _style}} -> ch != " " end)
+    end)
+  end
+
+  @doc """
   Converts the current screen state to an `%ExRatatui.Text{}` ready for `Paragraph`.
 
   Pass `show_cursor: true` to render the cursor as a reversed cell. The cursor is

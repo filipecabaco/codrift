@@ -57,7 +57,7 @@ defmodule Codrift.TUI do
   alias ExRatatui.Widgets.Paragraph
   alias ExRatatui.Widgets.Textarea
 
-  alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative}
+  alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative, Paths}
   alias Codrift.Initiative.Store
   alias Codrift.TUI.{DirPicker, Modals, Sidebar, Styles, VT100}
 
@@ -101,7 +101,9 @@ defmodule Codrift.TUI do
     # diff sidebar (replaces context sidebar when active_tab == :diff)
     :diff_sidebar_entries,
     :diff_sidebar_cursor,
-    :sidebar_collapsed
+    :sidebar_collapsed,
+    # Timer ref for flash_status — cancelled before each new flash to prevent stacking.
+    :status_timer_ref
   ]
 
   @default_status "j/k:navigate  n:new  s:start  d:delete  t:terminal  Tab:agent pane  2:diff  Ctrl+P:palette  q:quit"
@@ -174,7 +176,8 @@ defmodule Codrift.TUI do
        diff_view_mode: :unified,
        diff_sidebar_entries: [],
        diff_sidebar_cursor: 0,
-       sidebar_collapsed: false
+       sidebar_collapsed: false,
+       status_timer_ref: nil
      }}
   end
 
@@ -216,32 +219,7 @@ defmodule Codrift.TUI do
 
   @impl true
   def handle_event(%Key{code: "b", kind: "press", modifiers: ["ctrl"]}, %{modal: :none} = state) do
-    new_collapsed = not state.sidebar_collapsed
-    {term_w, term_h} = state.term_size || {80, 24}
-    {pane_w, pane_h} = calc_pane_size(term_w, term_h, new_collapsed)
-
-    new_screens =
-      Map.new(state.vt100_screens, fn {id, screen} ->
-        {id, VT100.resize(screen, pane_w, pane_h)}
-      end)
-
-    resize_all_ptys(pane_w, pane_h)
-
-    # If the sidebar was focused while collapsing, shift focus to main so
-    # keyboard navigation doesn't silently move an invisible cursor.
-    new_focus =
-      if new_collapsed and Focus.focused?(state.focus, :sidebar),
-        do: Focus.new([:main, :sidebar]),
-        else: state.focus
-
-    {:noreply,
-     %{
-       state
-       | sidebar_collapsed: new_collapsed,
-         pane_size: {pane_w, pane_h},
-         vt100_screens: new_screens,
-         focus: new_focus
-     }}
+    {:noreply, toggle_sidebar(state)}
   end
 
   def handle_event(%Key{code: "c", kind: "press", modifiers: ["ctrl"]}, state) do
@@ -647,7 +625,7 @@ defmodule Codrift.TUI do
   end
 
   def handle_info({:agent_started, dir}, state) do
-    {:noreply, reload_sidebar(flash_status(state, "Agent started in #{compact_path(dir)}"))}
+    {:noreply, reload_sidebar(flash_status(state, "Agent started in #{Paths.compact(dir)}"))}
   end
 
   def handle_info({:agent_start_failed, reason}, state) do
@@ -709,6 +687,8 @@ defmodule Codrift.TUI do
 
   # Sends \r to Claude Code when it's sitting at the ❯ prompt.
   # This forces Ink to redraw the input line and positions the cursor correctly.
+  # Terminal/shell agents must NOT receive this — they interpret \r as an empty
+  # Enter keypress and print an extra prompt each time.
   def handle_info({:input_nudge, agent_id}, state) do
     if agent_id == state.selected_agent_id do
       screen = Map.get(state.vt100_screens, agent_id)
@@ -718,7 +698,8 @@ defmodule Codrift.TUI do
           {:ok, pid} ->
             status = AgentProcess.status(pid)
 
-            if status.status == :awaiting_input do
+            if status.status == :awaiting_input and
+                 status.adapter == Codrift.Agent.Adapters.Claude do
               AgentProcess.send_raw(pid, "\r")
             end
 
@@ -745,7 +726,7 @@ defmodule Codrift.TUI do
     # Silent save — don't interrupt the editing status hint.
     # Only surface errors. Guard against writing outside the managed context tree.
     new_state =
-      if codrift_context_path?(state.editing_file) do
+      if Store.context_file_path?(state.editing_file) do
         content = ExRatatui.textarea_get_value(state.editor_ref)
 
         case File.write(state.editing_file, content) do
@@ -760,7 +741,7 @@ defmodule Codrift.TUI do
   end
 
   def handle_info(:reset_status, state) do
-    {:noreply, %{state | status: @default_status}}
+    {:noreply, %{state | status: @default_status, status_timer_ref: nil}}
   end
 
   # Auto-restart Claude agents that were running when the TUI last exited.
@@ -788,6 +769,9 @@ defmodule Codrift.TUI do
       try do
         with {:ok, pid} <- AgentSupervisor.find_agent(agent_id),
              status <- AgentProcess.status(pid),
+             # Only persist Claude sessions — Terminal and other adapters don't
+             # use --resume and should never be auto-restarted on next launch.
+             true <- status.adapter == Codrift.Agent.Adapters.Claude,
              uuid when not is_nil(uuid) <- AgentProcess.session_uuid(pid) do
           Codrift.SessionStore.save(status.initiative_id, status.dir, uuid)
         end
@@ -819,9 +803,7 @@ defmodule Codrift.TUI do
   defp confirm_dir(%{modal_context: {:creating, name}} = state) do
     dir = typed_dir(state)
 
-    if not File.dir?(dir) do
-      flash_status(state, "Directory does not exist: #{compact_path(dir)}")
-    else
+    if File.dir?(dir) do
       case Store.create(name, [dir]) do
         {:ok, initiative} ->
           state
@@ -839,26 +821,28 @@ defmodule Codrift.TUI do
             "Create failed: #{inspect(reason)}"
           )
       end
+    else
+      flash_status(state, "Directory does not exist: #{Paths.compact(dir)}")
     end
   end
 
   defp confirm_dir(%{modal_context: {:add_dir, initiative_id}} = state) do
     dir = typed_dir(state)
 
-    if not File.dir?(dir) do
-      flash_status(state, "Directory does not exist: #{compact_path(dir)}")
-    else
+    if File.dir?(dir) do
       case Store.add_dir(initiative_id, dir) do
         {:ok, _} ->
           state
           |> reload_sidebar()
           |> then(fn s ->
-            flash_status(%{s | modal: :none, modal_context: nil}, "Added: #{compact_path(dir)}")
+            flash_status(%{s | modal: :none, modal_context: nil}, "Added: #{Paths.compact(dir)}")
           end)
 
         {:error, reason} ->
           flash_status(%{state | modal: :none, modal_context: nil}, "Failed: #{inspect(reason)}")
       end
+    else
+      flash_status(state, "Directory does not exist: #{Paths.compact(dir)}")
     end
   end
 
@@ -953,7 +937,7 @@ defmodule Codrift.TUI do
         |> then(fn s ->
           flash_status(
             %{s | modal: :none, modal_context: nil, cursor_info: nil},
-            "Removed: #{compact_path(dir)}"
+            "Removed: #{Paths.compact(dir)}"
           )
         end)
 
@@ -963,7 +947,7 @@ defmodule Codrift.TUI do
   end
 
   defp do_delete(%{modal_context: {:delete_context_file, path, name}} = state) do
-    if codrift_context_path?(path) do
+    if Store.context_file_path?(path) do
       case File.rm(path) do
         :ok ->
           state
@@ -1015,30 +999,7 @@ defmodule Codrift.TUI do
       # ── Navigation ────────────────────────────────────────────────────────────
 
       %{id: :toggle_sidebar} ->
-        new_collapsed = not state.sidebar_collapsed
-        {term_w, term_h} = state.term_size || {80, 24}
-        {pane_w, pane_h} = calc_pane_size(term_w, term_h, new_collapsed)
-
-        new_screens =
-          Map.new(state.vt100_screens, fn {id, screen} ->
-            {id, VT100.resize(screen, pane_w, pane_h)}
-          end)
-
-        resize_all_ptys(pane_w, pane_h)
-
-        new_focus =
-          if new_collapsed and Focus.focused?(state.focus, :sidebar),
-            do: Focus.new([:main, :sidebar]),
-            else: state.focus
-
-        %{
-          state
-          | modal: :none,
-            sidebar_collapsed: new_collapsed,
-            pane_size: {pane_w, pane_h},
-            vt100_screens: new_screens,
-            focus: new_focus
-        }
+        toggle_sidebar(%{state | modal: :none})
 
       %{id: :context_mode} ->
         %{state | modal: :none, active_tab: :context, main_scroll: 0}
@@ -1256,12 +1217,19 @@ defmodule Codrift.TUI do
       # Already receiving live updates — switch display without re-subscribing.
       # Send a deferred SIGWINCH so Claude Code repaints at the current pane size,
       # which corrects any scroll drift without rebuilding the VT100 from scratch.
+      # Skip the nudge for Terminal agents — the two-step resize is Ink-specific
+      # and would just cause the shell to print a spurious extra prompt.
       status =
         case AgentSupervisor.find_agent(agent_id) do
           {:ok, pid} ->
-            {w, h} = state.pane_size
-            Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 80)
-            AgentProcess.status(pid).mode
+            agent_status = AgentProcess.status(pid)
+
+            if agent_status.adapter == Codrift.Agent.Adapters.Claude do
+              {w, h} = state.pane_size
+              Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 80)
+            end
+
+            agent_status.mode
 
           _ ->
             state.selected_agent_mode
@@ -1282,26 +1250,45 @@ defmodule Codrift.TUI do
           status = AgentProcess.status(pid)
           {w, h} = state.pane_size
 
-          # Resize the PTY first so any subsequent output arrives at the correct
-          # size. Use two-step (w-1 → w) to force Ink's full \e[2J repaint even
-          # when dimensions would otherwise be unchanged.
-          # 150 ms gap: gives Claude Code time to finish initializing before the
-          # restore arrives (60 ms was too short for agents still in startup).
-          # A second nudge at 600 ms catches agents that start slowly.
-          AgentProcess.resize(pid, max(w - 1, 1), h)
-          Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
-          Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
+          # Claude Code (Ink renderer): use two-step resize (w-1 → w) to force a
+          # full \e[2J repaint even when dimensions would otherwise be unchanged.
+          # A second nudge at 600 ms catches slow-starting agents.
+          # Terminal/shell agents: a single resize to the correct size is enough.
+          # The two-step and the \r nudge cause the shell to print extra prompts.
+          if status.adapter == Codrift.Agent.Adapters.Claude do
+            AgentProcess.resize(pid, max(w - 1, 1), h)
+            Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
+            Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
+          else
+            AgentProcess.resize(pid, w, h)
+          end
 
           existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
 
-          # Start replay only from the last full-screen clear (\e[2J or \ec).
-          # IL/DL operations need correct scroll-region context; replaying chunks
-          # that predate DECSTBM setup corrupts row-shift arithmetic. A clear is
-          # always followed by a full repaint, so we lose nothing by truncating.
-          replay = chunks_from_last_clear(existing)
+          # Claude Code (Ink): only replay from the last \e[2J / \ec anchor.
+          # IL/DL operations (insert/delete line) need the correct scroll-region
+          # context; replaying from before DECSTBM is set up corrupts row-shift
+          # arithmetic. A clear is always followed by a full repaint, so nothing
+          # is lost by truncating.
+          #
+          # Terminal/shell agents: replay all buffered output. Shells (zsh, bash)
+          # never send \e[2J to draw their prompt, so chunks_from_last_clear would
+          # return [] and the pane would be blank until the next keypress.
+          replay =
+            if status.adapter == Codrift.Agent.Adapters.Claude,
+              do: chunks_from_last_clear(existing),
+              else: existing
 
           screen =
             Enum.reduce(replay, VT100.new(w, h), fn chunk, s -> VT100.process(s, chunk) end)
+
+          # For Terminal agents, shells like zsh with starship emit \n before
+          # each prompt (add_newline = true). Replaying from scratch leaves row 0
+          # blank. Scroll past any leading blank rows so the prompt sits at the top.
+          initial_scroll =
+            if status.adapter == Codrift.Agent.Adapters.Claude,
+              do: 0,
+              else: VT100.first_content_row(screen)
 
           short = String.slice(agent_id, 0, 8)
 
@@ -1312,6 +1299,7 @@ defmodule Codrift.TUI do
               subscribed_agents: MapSet.put(state.subscribed_agents, agent_id),
               agent_outputs: Map.put(state.agent_outputs, agent_id, existing),
               vt100_screens: Map.put(state.vt100_screens, agent_id, screen),
+              main_scroll: initial_scroll,
               status: "Subscribed to #{short} — Tab to focus, then type"
           }
         catch
@@ -1358,7 +1346,7 @@ defmodule Codrift.TUI do
       end
     end)
 
-    %{state | status: "Starting agent in #{compact_path(dir)}..."}
+    %{state | status: "Starting agent in #{Paths.compact(dir)}..."}
   end
 
   defp cycle_initiative_status(state, direction) do
@@ -1422,7 +1410,7 @@ defmodule Codrift.TUI do
       true ->
         path = Path.join(ctx_dir, filename)
 
-        if codrift_context_path?(path) do
+        if Store.context_file_path?(path) do
           case File.write(path, "") do
             :ok ->
               state
@@ -1611,12 +1599,12 @@ defmodule Codrift.TUI do
     text =
       case state.cursor_info do
         %{type: :context_dir, files: []} ->
-          "No files yet.\n\nPress 'c' to create a new file here.\nDrop any files into this folder to share context with agents.\n\n◈ #{compact_path(path)}"
+          "No files yet.\n\nPress 'c' to create a new file here.\nDrop any files into this folder to share context with agents.\n\n◈ #{Paths.compact(path)}"
 
         %{type: :context_dir, files: files} ->
           file_list = Enum.map_join(files, "\n", fn f -> "  #{f}" end)
 
-          "◈ #{compact_path(path)}\n\n#{file_list}\n\nPress 'c' to create a new file · 's' to start Claude · 't' for a terminal"
+          "◈ #{Paths.compact(path)}\n\n#{file_list}\n\nPress 'c' to create a new file · 's' to start Claude · 't' for a terminal"
 
         _ ->
           "Loading…"
@@ -1698,7 +1686,7 @@ defmodule Codrift.TUI do
     %Paragraph{
       text: text,
       block: %Block{
-        title: " ▸ #{compact_path(dir)} ",
+        title: " ▸ #{Paths.compact(dir)} ",
         borders: [:all],
         border_type: :rounded,
         border_style: Styles.pane_border(state.focus, :main)
@@ -1710,8 +1698,7 @@ defmodule Codrift.TUI do
 
   defp render_agent_pane(state, agent_id, adapter, status) do
     focused = Focus.focused?(state.focus, :main)
-    adapter_name = adapter |> Module.split() |> List.last() |> String.downcase()
-    title = " #{adapter_name} (#{format_status(status)}) "
+    title = " #{Codrift.Agent.adapter_name(adapter)} (#{Styles.format_status(status)}) "
     border = Styles.pane_border(state.focus, :main)
     block = %Block{title: title, borders: [:all], border_type: :rounded, border_style: border}
 
@@ -1725,13 +1712,6 @@ defmodule Codrift.TUI do
       render_agent_hint(status, focused, block)
     end
   end
-
-  defp format_status(:awaiting_input), do: "ready"
-  defp format_status(:starting), do: "starting"
-  defp format_status(:running), do: "running"
-  defp format_status(:idle), do: "idle"
-  defp format_status(:stopped), do: "stopped"
-  defp format_status(other), do: to_string(other)
 
   defp render_agent_hint(status, focused, block) do
     hint =
@@ -1933,7 +1913,7 @@ defmodule Codrift.TUI do
 
     case entry do
       {:diff_all, _, _} -> " Diff #{mode_hint}"
-      {:diff_dir, dir, _, _} -> " ▸ #{compact_path(dir)} #{mode_hint}"
+      {:diff_dir, dir, _, _} -> " ▸ #{Paths.compact(dir)} #{mode_hint}"
       {:diff_file, _, path, _, _} -> " #{Path.basename(path)} #{mode_hint}"
       nil -> " Diff "
     end
@@ -2029,12 +2009,6 @@ defmodule Codrift.TUI do
     %Paragraph{text: state.status, style: %Style{fg: :dark_gray}}
   end
 
-  defp compact_path(path) do
-    home = Path.expand("~")
-    relative = Path.relative_to(path, home)
-    if relative == path, do: path, else: "~/#{relative}"
-  end
-
   # Ratatui allocates sidebar first (floor(w * 30/100)), main gets the remainder.
   # Using `w - floor(w*30/100)` matches that exactly; `floor(w*70/100)` diverges
   # by 1 on odd widths, causing Claude Code to draw at the wrong column count.
@@ -2089,45 +2063,23 @@ defmodule Codrift.TUI do
   # the default shortcuts hint after 2 s.
   defp save_and_close_editing(state) do
     if state.autosave_ref, do: Process.cancel_timer(state.autosave_ref)
+    base = %{state | editing_file: nil, autosave_ref: nil}
 
-    if codrift_context_path?(state.editing_file) do
+    if Store.context_file_path?(state.editing_file) do
       content = ExRatatui.textarea_get_value(state.editor_ref)
 
       case File.write(state.editing_file, content) do
         :ok ->
-          Process.send_after(self(), :reset_status, 2000)
-
-          state
+          base
           |> reload_sidebar()
           |> update_context_from_cursor()
-          |> then(
-            &%{
-              &1
-              | editing_file: nil,
-                autosave_ref: nil,
-                status: "Saved #{Path.basename(state.editing_file)}"
-            }
-          )
+          |> flash_status("Saved #{Path.basename(state.editing_file)}")
 
         {:error, reason} ->
-          Process.send_after(self(), :reset_status, 3000)
-
-          %{
-            state
-            | editing_file: nil,
-              autosave_ref: nil,
-              status: "Save failed: #{inspect(reason)}"
-          }
+          flash_status(base, "Save failed: #{inspect(reason)}", 3000)
       end
     else
-      Process.send_after(self(), :reset_status, 3000)
-
-      %{
-        state
-        | editing_file: nil,
-          autosave_ref: nil,
-          status: "Refused: path outside Codrift context folder"
-      }
+      flash_status(base, "Refused: path outside Codrift context folder", 3000)
     end
   end
 
@@ -2151,23 +2103,42 @@ defmodule Codrift.TUI do
 
   # ── Safety guards ─────────────────────────────────────────────────────────────
 
-  # Returns true only when `path` (expanded) is strictly inside
-  # ~/.codrift/initiatives/. Used to prevent any read/write/delete from
-  # accidentally touching project directories that live outside our managed tree.
-  defp codrift_context_path?(nil), do: false
-
-  defp codrift_context_path?(path) do
-    base = Path.expand("~/.codrift/initiatives")
-    expanded = Path.expand(path)
-    String.starts_with?(expanded, base <> "/")
-  end
-
   # ── Transient status helper ───────────────────────────────────────────────────
 
-  # Sets a temporary status and schedules :reset_status after `ms` milliseconds.
+  # Toggles the sidebar collapsed/expanded, resizes VT100 screens and PTYs to
+  # match, and shifts focus to the main pane when collapsing a focused sidebar.
+  defp toggle_sidebar(state) do
+    new_collapsed = not state.sidebar_collapsed
+    {term_w, term_h} = state.term_size || {80, 24}
+    {pane_w, pane_h} = calc_pane_size(term_w, term_h, new_collapsed)
+
+    new_screens =
+      Map.new(state.vt100_screens, fn {id, screen} ->
+        {id, VT100.resize(screen, pane_w, pane_h)}
+      end)
+
+    resize_all_ptys(pane_w, pane_h)
+
+    new_focus =
+      if new_collapsed and Focus.focused?(state.focus, :sidebar),
+        do: Focus.new([:main, :sidebar]),
+        else: state.focus
+
+    %{
+      state
+      | sidebar_collapsed: new_collapsed,
+        pane_size: {pane_w, pane_h},
+        vt100_screens: new_screens,
+        focus: new_focus
+    }
+  end
+
+  # Sets a temporary status message and schedules :reset_status after `ms` ms.
+  # Cancels any previously pending reset so rapid calls don't stack timers.
   defp flash_status(state, message, ms \\ 2000) do
-    Process.send_after(self(), :reset_status, ms)
-    %{state | status: message}
+    if state.status_timer_ref, do: Process.cancel_timer(state.status_timer_ref)
+    ref = Process.send_after(self(), :reset_status, ms)
+    %{state | status: message, status_timer_ref: ref}
   end
 
   # `find_syntax_by_token` in syntect resolves tokens against the syntax's
@@ -2227,7 +2198,7 @@ defmodule Codrift.TUI do
 
     files_section =
       if files == [] do
-        "## Context Files\n\n_(empty — drop files into `#{compact_path(ctx_dir)}`)_"
+        "## Context Files\n\n_(empty — drop files into `#{Paths.compact(ctx_dir)}`)_"
       else
         file_lines = Enum.map_join(files, "\n", fn f -> "- #{f}" end)
         "## Context Files\n\n#{file_lines}"
@@ -2241,6 +2212,6 @@ defmodule Codrift.TUI do
   defp format_dir_info_md(%{path: path, branch: branch, last_commit: commit, agent_count: count}) do
     agents_label = if count == 0, do: "none", else: "#{count} running"
 
-    "**#{compact_path(path)}**  \nbranch: `#{branch}` · commit: `#{commit}` · agents: #{agents_label}"
+    "**#{Paths.compact(path)}**  \nbranch: `#{branch}` · commit: `#{commit}` · agents: #{agents_label}"
   end
 end

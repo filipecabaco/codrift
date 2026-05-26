@@ -50,34 +50,6 @@ defmodule Codrift.Diff do
     end)
   end
 
-  @doc """
-  Converts a `FileDiff` to a list of `{old_line | nil, new_line | nil}` tuples
-  for side-by-side (split) diff rendering.
-
-  Context lines appear on both sides. Adjacent remove/add blocks are paired
-  row-by-row; excess removes or adds get a `nil` partner.
-  """
-  def to_split_lines(%FileDiff{} = f) do
-    Enum.flat_map(f.hunks, fn hunk ->
-      [{hunk.header, hunk.header} | pair_hunk_lines(hunk.lines)]
-    end)
-  end
-
-  defp pair_hunk_lines(lines) do
-    lines
-    |> chunk_by_change()
-    |> Enum.flat_map(fn
-      {:context, items} ->
-        Enum.map(items, &{&1, &1})
-
-      {:change, removes, adds} ->
-        count = max(length(removes), length(adds))
-        removes_padded = removes ++ List.duplicate(nil, count - length(removes))
-        adds_padded = adds ++ List.duplicate(nil, count - length(adds))
-        Enum.zip(removes_padded, adds_padded)
-    end)
-  end
-
   # Groups consecutive context lines together and consecutive change lines
   # (removes + adds in any order) into `{:change, removes, adds}` tuples.
   defp chunk_by_change(lines) do
@@ -165,11 +137,19 @@ defmodule Codrift.Diff do
   end
 
   defp build_args(opts) do
-    base = ["diff", "--patch", "-U#{opts[:context] || 3}"]
-    base = if opts[:staged], do: base ++ ["--cached"], else: base
-    base = if opts[:from], do: base ++ [opts[:from]], else: base
-    base = if opts[:to], do: base ++ [opts[:to]], else: base
     paths = opts[:paths] || []
+
+    base =
+      [
+        "diff",
+        "--patch",
+        "-U#{opts[:context] || 3}",
+        if(opts[:staged], do: "--cached"),
+        opts[:from],
+        opts[:to]
+      ]
+      |> Enum.reject(&is_nil/1)
+
     if paths == [], do: base, else: base ++ ["--"] ++ paths
   end
 
@@ -273,12 +253,12 @@ defmodule Codrift.Diff do
 
   @hunk_header_re ~r/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
   defp parse_hunk_header(header) do
+    # Regex.run/2 always returns all capture groups (empty optional groups come
+    # back as ""). parse_count/1 converts "" → 1, so one clause handles both
+    # "@@ -1,5 +2,3 @@" and "@@ -1 +2 @@" (no count suffix).
     case Regex.run(@hunk_header_re, header) do
       [_, os, oc, ns, nc] ->
         {String.to_integer(os), parse_count(oc), String.to_integer(ns), parse_count(nc)}
-
-      [_, os, "", ns, ""] ->
-        {String.to_integer(os), 1, String.to_integer(ns), 1}
 
       _ ->
         {0, 0, 0, 0}

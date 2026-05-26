@@ -18,12 +18,29 @@ defmodule Codrift.Initiative.Store do
 
   use GenServer
 
+  require Logger
+
   alias Codrift.Initiative
 
   @default_path "~/.config/codrift/initiatives.json"
 
   @doc "Returns the context folder path for an initiative (pure function, no GenServer call)."
   def context_path(id), do: Path.expand("~/.codrift/initiatives/#{id}")
+
+  @doc """
+  Returns `true` when `path` is strictly inside `~/.codrift/initiatives/`.
+
+  Used as a safety guard before any read, write, or delete operation on
+  context files, preventing accidental access to project directories outside
+  the managed tree.
+  """
+  def context_file_path?(nil), do: false
+
+  def context_file_path?(path) do
+    base = Path.expand("~/.codrift/initiatives")
+    expanded = Path.expand(path)
+    String.starts_with?(expanded, base <> "/")
+  end
 
   @doc "Starts the store, optionally accepting `:name` and `:path` opts."
   def start_link(opts \\ []) do
@@ -110,15 +127,25 @@ defmodule Codrift.Initiative.Store do
   end
 
   def handle_call({:add_dir, id, dir}, _from, state) do
-    result = update_initiative(state, id, fn i -> %{i | dirs: Enum.uniq([dir | i.dirs])} end)
-    with {:reply, {:ok, initiative}, _} <- result, do: update_initiative_md_dirs(initiative)
-    result
+    case update_initiative(state, id, fn i -> %{i | dirs: Enum.uniq([dir | i.dirs])} end) do
+      {:reply, {:ok, initiative}, new_state} ->
+        update_initiative_md_dirs(initiative)
+        {:reply, {:ok, initiative}, new_state}
+
+      error_reply ->
+        error_reply
+    end
   end
 
   def handle_call({:remove_dir, id, dir}, _from, state) do
-    result = update_initiative(state, id, fn i -> %{i | dirs: List.delete(i.dirs, dir)} end)
-    with {:reply, {:ok, initiative}, _} <- result, do: update_initiative_md_dirs(initiative)
-    result
+    case update_initiative(state, id, fn i -> %{i | dirs: List.delete(i.dirs, dir)} end) do
+      {:reply, {:ok, initiative}, new_state} ->
+        update_initiative_md_dirs(initiative)
+        {:reply, {:ok, initiative}, new_state}
+
+      error_reply ->
+        error_reply
+    end
   end
 
   def handle_call({:delete, id}, _from, state) do
@@ -177,7 +204,6 @@ defmodule Codrift.Initiative.Store do
         end)
         |> Enum.each(fn name ->
           full = Path.join(base, name)
-          require Logger
           Logger.info("Codrift.Initiative.Store: removing orphaned context dir #{full}")
           safe_rm_context_dir!(full)
         end)
@@ -283,18 +309,10 @@ defmodule Codrift.Initiative.Store do
           "(no project directories configured yet — use 'a' in the TUI to add one)"
 
         dirs ->
-          Enum.map_join(dirs, "\n", fn dir -> "- #{shorten_home(dir)}" end)
+          Enum.map_join(dirs, "\n", fn dir -> "- #{Codrift.Paths.compact(dir)}" end)
       end
 
     "<!-- codrift:dirs:start -->\n## Directories\n\n#{body}\n<!-- codrift:dirs:end -->"
-  end
-
-  defp shorten_home(path) do
-    home = Path.expand("~")
-
-    if String.starts_with?(path, home),
-      do: "~" <> String.slice(path, String.length(home)..-1//1),
-      else: path
   end
 
   defp persist(%{initiatives: initiatives, path: path}) do
@@ -308,7 +326,18 @@ defmodule Codrift.Initiative.Store do
     with true <- File.exists?(path),
          {:ok, content} <- File.read(path),
          {:ok, %{"initiatives" => raw}} <- JSON.decode(content) do
-      Map.new(raw, fn {id, data} -> {id, Initiative.from_map(data)} end)
+      raw
+      |> Enum.flat_map(fn {id, data} ->
+        case Initiative.from_map(data) do
+          {:ok, initiative} ->
+            [{id, initiative}]
+
+          {:error, reason} ->
+            Logger.warning("Skipping malformed initiative #{inspect(id)}: #{inspect(reason)}")
+            []
+        end
+      end)
+      |> Map.new()
     else
       _ -> %{}
     end

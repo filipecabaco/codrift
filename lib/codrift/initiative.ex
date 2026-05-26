@@ -63,10 +63,18 @@ defmodule Codrift.Initiative do
     }
   end
 
-  @doc "Deserialises an initiative from a plain map (as returned by JSON decoding)."
+  @doc """
+  Deserialises an initiative from a plain map (as returned by JSON decoding).
+
+  Returns `{:ok, %Initiative{}}` on success, or `{:error, reason}` when the
+  map is malformed (e.g. an invalid ISO-8601 timestamp).
+  """
   def from_map(%{"id" => id, "name" => name, "dirs" => dirs, "created_at" => ts} = data) do
-    {:ok, dt, _} = DateTime.from_iso8601(ts)
-    status = data |> Map.get("status", "ongoing") |> String.to_existing_atom()
-    %__MODULE__{id: id, name: name, dirs: dirs, created_at: dt, status: status}
+    with {:ok, dt, _} <- DateTime.from_iso8601(ts) do
+      status = data |> Map.get("status", "ongoing") |> String.to_existing_atom()
+      {:ok, %__MODULE__{id: id, name: name, dirs: dirs, created_at: dt, status: status}}
+    end
   end
+
+  def from_map(data), do: {:error, {:invalid_initiative_map, data}}
 end

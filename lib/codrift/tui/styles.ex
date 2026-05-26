@@ -16,4 +16,12 @@ defmodule Codrift.TUI.Styles do
   def status_color(:idle), do: :cyan
   def status_color(:stopped), do: :red
   def status_color(_), do: :dark_gray
+
+  @doc "Returns a human-readable label for an agent status atom."
+  def format_status(:awaiting_input), do: "ready"
+  def format_status(:starting), do: "starting"
+  def format_status(:running), do: "running"
+  def format_status(:idle), do: "idle"
+  def format_status(:stopped), do: "stopped"
+  def format_status(other), do: to_string(other)
 end

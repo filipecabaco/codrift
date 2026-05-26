@@ -52,11 +52,12 @@ defmodule Codrift.Agent do
   Returns CLI arguments for the first invocation in the given directory.
 
   `opts` may contain:
-  - `initiative_md_path: path` — absolute path to the initiative's `initiative.md`
+  - `context_dir: path`   — absolute path to the initiative's context folder
+  - `context_files: [path]` — list of absolute paths to context files
+  - `session_id: uuid`    — Claude Code session UUID for `--resume`
 
-  Adapters that understand initiative context (Claude, Aider) should use this to
-  inject context at startup via their native mechanism (`--append-system-prompt`,
-  `--read`, etc.).
+  Adapters that understand initiative context (Claude, Aider) should use these to
+  inject context at startup via their native mechanism (`--add-dir`, `--read`, etc.).
   """
   @callback args(dir :: String.t(), opts :: keyword()) :: [String.t()]
 
@@ -77,4 +78,7 @@ defmodule Codrift.Agent do
   Return `:idle | :running | :awaiting_input`, or `nil` to leave unchanged.
   """
   @callback parse_status(output :: binary()) :: :idle | :running | :awaiting_input | nil
+
+  @doc "Returns the human-readable adapter name (e.g. \"claude\", \"aider\", \"terminal\")."
+  def adapter_name(module), do: module |> Module.split() |> List.last() |> String.downcase()
 end
