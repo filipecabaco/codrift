@@ -22,9 +22,16 @@ defmodule Codrift.AgentSupervisor do
     DynamicSupervisor.init(strategy: :one_for_one)
   end
 
-  @doc "Spawns a new agent for the given initiative directory and adapter module."
-  def start_agent(initiative_id, dir, adapter, server \\ __MODULE__) do
-    id = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+  @doc """
+  Spawns a new agent for the given initiative directory and adapter module.
+
+  Accepts keyword opts:
+  - `:id` — reuse a specific agent ID (e.g. from `SessionStore` on restart); defaults to a new random ID
+  - `:server` — supervisor to start the child under; defaults to `__MODULE__`
+  """
+  def start_agent(initiative_id, dir, adapter, opts \\ []) do
+    id = Keyword.get(opts, :id, Base.encode16(:crypto.strong_rand_bytes(8), case: :lower))
+    server = Keyword.get(opts, :server, __MODULE__)
 
     spec =
       {Codrift.AgentProcess, [id: id, initiative_id: initiative_id, dir: dir, adapter: adapter]}

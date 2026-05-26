@@ -745,14 +745,31 @@ defmodule Codrift.TUI do
   end
 
   # Auto-restart Claude agents that were running when the TUI last exited.
+  # Deduplicates by (initiative_id, dir): keeps the last-saved agent per slot
+  # and deletes any extras so they don't accumulate across restarts.
   def handle_info(:autostart_sessions, state) do
     sessions = Codrift.SessionStore.list_all()
+    valid_ids = Store.list() |> Enum.map(& &1.id)
+    Codrift.SessionStore.prune_deleted_initiatives(valid_ids)
+
+    # Group by slot, keep one agent ID per slot, delete the rest.
+    {to_start, to_delete} =
+      sessions
+      |> Enum.group_by(fn {_agent_id, initiative_id, dir, _uuid} -> {initiative_id, dir} end)
+      |> Enum.reduce({[], []}, fn {_slot, entries}, {keep, drop} ->
+        [head | tail] = entries
+        {[head | keep], tail ++ drop}
+      end)
+
+    Enum.each(to_delete, fn {agent_id, _initiative_id, _dir, _uuid} ->
+      Codrift.SessionStore.delete_by_agent(agent_id)
+    end)
 
     new_state =
-      Enum.reduce(sessions, state, fn {initiative_id, dir, _uuid}, acc ->
+      Enum.reduce(to_start, state, fn {agent_id, initiative_id, dir, _uuid}, acc ->
         case Store.get(initiative_id) do
           {:ok, _initiative} ->
-            do_start_agent(acc, initiative_id, dir, Codrift.Agent.Adapters.Claude)
+            do_start_agent(acc, initiative_id, dir, Codrift.Agent.Adapters.Claude, agent_id)
 
           _ ->
             acc
@@ -773,7 +790,7 @@ defmodule Codrift.TUI do
              # use --resume and should never be auto-restarted on next launch.
              true <- status.adapter == Codrift.Agent.Adapters.Claude,
              uuid when not is_nil(uuid) <- AgentProcess.session_uuid(pid) do
-          Codrift.SessionStore.save(status.initiative_id, status.dir, uuid)
+          Codrift.SessionStore.save(agent_id, status.initiative_id, status.dir, uuid)
         end
       catch
         :exit, _ -> :ok
@@ -1331,12 +1348,13 @@ defmodule Codrift.TUI do
     end
   end
 
-  defp do_start_agent(state, initiative_id, dir, adapter) do
+  defp do_start_agent(state, initiative_id, dir, adapter, agent_id \\ nil) do
     tui = self()
     {cols, rows} = state.pane_size
+    opts = if agent_id, do: [id: agent_id], else: []
 
     Task.Supervisor.start_child(Codrift.TaskSupervisor, fn ->
-      case AgentSupervisor.start_agent(initiative_id, dir, adapter) do
+      case AgentSupervisor.start_agent(initiative_id, dir, adapter, opts) do
         {:ok, pid} ->
           AgentProcess.resize(pid, cols, rows)
           send(tui, {:agent_started, dir})

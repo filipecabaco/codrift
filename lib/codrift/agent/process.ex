@@ -109,7 +109,16 @@ defmodule Codrift.AgentProcess do
       raw_line_buf: ""
     }
 
-    context_opts = initiative_context_opts(initiative_id, dir)
+    # Generate or retrieve a stable session UUID before launching the process.
+    # For Claude adapters this is passed as --session-id (first run) or
+    # --resume (subsequent runs). Storing it upfront means we never need to
+    # scan the filesystem after startup to discover which UUID was created.
+    session_id =
+      if adapter == Codrift.Agent.Adapters.Claude,
+        do: ensure_session_id(id, initiative_id, dir),
+        else: nil
+
+    context_opts = [session_id: session_id] ++ initiative_context_opts(initiative_id)
 
     case mode do
       :pty ->
@@ -124,16 +133,14 @@ defmodule Codrift.AgentProcess do
 
         {:ok, exec_pid, ospid} = :exec.run(cmd, pty_opts)
 
-        # Schedule session UUID detection only for Claude — it writes a .jsonl
-        # under ~/.claude/projects/ on startup. Other PTY adapters (e.g. Terminal)
-        # don't write there and could accidentally pick up an unrelated Claude
-        # session if they happen to start in the same directory shortly after one.
-        if adapter == Codrift.Agent.Adapters.Claude do
-          start_posix = :os.system_time(:second)
-          Process.send_after(self(), {:detect_session, start_posix}, 3_000)
-        end
-
-        {:ok, %{base | exec_pid: exec_pid, exec_ospid: ospid, status: :starting}}
+        {:ok,
+         %{
+           base
+           | exec_pid: exec_pid,
+             exec_ospid: ospid,
+             status: :starting,
+             session_uuid: session_id
+         }}
 
       :interactive ->
         port = open_port(adapter, dir, adapter.args(dir, context_opts))
@@ -272,26 +279,6 @@ defmodule Codrift.AgentProcess do
     {:noreply, %{state | subscribers: Map.delete(state.subscribers, pid)}}
   end
 
-  # Detect which session UUID Claude created/used for this agent by finding the
-  # .jsonl file in ~/.claude/projects/<encoded-dir>/ that was modified at or
-  # after `start_posix`. Retries once 5 s later if nothing is found yet.
-  def handle_info({:detect_session, start_posix}, state) do
-    case detect_claude_session(state.dir, start_posix) do
-      nil ->
-        # Not found yet — retry once more in 5 s
-        Process.send_after(self(), {:detect_session_retry, start_posix}, 5_000)
-        {:noreply, state}
-
-      uuid ->
-        {:noreply, %{state | session_uuid: uuid}}
-    end
-  end
-
-  def handle_info({:detect_session_retry, start_posix}, state) do
-    uuid = detect_claude_session(state.dir, start_posix)
-    {:noreply, %{state | session_uuid: uuid}}
-  end
-
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
@@ -376,37 +363,28 @@ defmodule Codrift.AgentProcess do
   defp once_args(adapter, dir, false), do: adapter.args(dir, [])
   defp once_args(adapter, dir, true), do: adapter.args_continue(dir)
 
-  # Finds the session UUID by looking for .jsonl files in Claude's projects dir
-  # that were modified at or after `after_posix` (POSIX seconds). Returns the
-  # UUID string (filename without .jsonl) of the most recently modified match,
-  # or nil if nothing was found.
-  defp detect_claude_session(dir, after_posix) do
-    project_dir = Path.expand("~/.claude/projects/#{String.replace(dir, "/", "-")}")
+  # Returns the stored session UUID for this agent, or generates and stores a
+  # new one. Called before the process launches so the UUID is always known
+  # upfront and can be passed directly as --session-id or --resume.
+  defp ensure_session_id(agent_id, initiative_id, dir) do
+    case Codrift.SessionStore.get_by_agent(agent_id) do
+      {:ok, uuid} ->
+        uuid
 
-    case File.ls(project_dir) do
-      {:ok, files} ->
-        files
-        |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
-        |> Enum.flat_map(fn f ->
-          full = Path.join(project_dir, f)
-
-          case File.stat(full, time: :posix) do
-            {:ok, %{mtime: mtime}} when mtime >= after_posix ->
-              [{Path.basename(f, ".jsonl"), mtime}]
-
-            _ ->
-              []
-          end
-        end)
-        |> Enum.sort_by(&elem(&1, 1), :desc)
-        |> case do
-          [{uuid, _} | _] -> uuid
-          [] -> nil
-        end
-
-      _ ->
-        nil
+      {:error, :not_found} ->
+        uuid = generate_uuid()
+        Codrift.SessionStore.save(agent_id, initiative_id, dir, uuid)
+        uuid
     end
+  end
+
+  defp generate_uuid do
+    <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
+    c4 = :erlang.bor(:erlang.band(c, 0x0FFF), 0x4000)
+    d8 = :erlang.bor(:erlang.band(d, 0x3FFF), 0x8000)
+
+    :io_lib.format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b", [a, b, c4, d8, e])
+    |> IO.chardata_to_string()
   end
 
   # Collects all non-hidden files in the initiative's context folder (excluding
@@ -415,17 +393,10 @@ defmodule Codrift.AgentProcess do
   #
   #   context_dir:   the context folder path (for --add-dir in Claude adapter)
   #   context_files: list of absolute file paths (for --read in Aider, etc.)
-  #   session_id:    UUID from SessionStore for --resume (if any)
-  defp initiative_context_opts(initiative_id, dir) do
+  defp initiative_context_opts(initiative_id) do
     ctx_dir = Codrift.Initiative.Store.context_path(initiative_id)
 
     base = if File.dir?(ctx_dir), do: [context_dir: ctx_dir], else: []
-
-    session_opts =
-      case Codrift.SessionStore.get(initiative_id, dir) do
-        {:ok, uuid} -> [session_id: uuid]
-        {:error, :not_found} -> []
-      end
 
     files =
       case File.ls(ctx_dir) do
@@ -440,7 +411,7 @@ defmodule Codrift.AgentProcess do
           []
       end
 
-    base ++ session_opts ++ if(files == [], do: [], else: [context_files: files])
+    base ++ if(files == [], do: [], else: [context_files: files])
   end
 
   defp open_port(adapter, dir, args) do

@@ -18,36 +18,33 @@ defmodule Codrift.Agent.Adapters.Claude do
 
   @impl true
   def args(dir, opts) do
-    resume =
+    resume_args =
       case opts[:session_id] do
         nil ->
-          # No stored UUID yet (first run). Use --continue if any previous session
-          # exists in this directory so the user can pick up where they left off.
-          if has_session?(dir), do: ["--continue"], else: []
+          []
 
         uuid ->
-          # Resume the exact session we previously detected for this initiative+dir.
-          ["--resume", uuid]
+          if session_file_exists?(dir, uuid),
+            do: ["--resume", uuid],
+            else: ["--session-id", uuid]
       end
 
     dir_arg =
       case opts[:context_dir] do
+        # Agent is already running inside the context dir — --add-dir would be
+        # a no-op at best and an error at worst; skip it.
         nil -> []
+        ^dir -> []
         ctx -> ["--add-dir", ctx]
       end
 
-    resume ++ dir_arg
+    resume_args ++ dir_arg
   end
 
-  # Returns true when ~/.claude/projects/<encoded-dir>/ has any .jsonl session file.
-  defp has_session?(dir) do
-    project_name = String.replace(dir, "/", "-")
-    sessions_dir = Path.expand("~/.claude/projects/#{project_name}")
-
-    case File.ls(sessions_dir) do
-      {:ok, files} -> Enum.any?(files, &String.ends_with?(&1, ".jsonl"))
-      {:error, _} -> false
-    end
+  defp session_file_exists?(dir, uuid) do
+    project_name = dir |> String.replace("/", "-") |> String.replace(".", "-")
+    path = Path.expand("~/.claude/projects/#{project_name}/#{uuid}.jsonl")
+    File.exists?(path)
   end
 
   @impl true

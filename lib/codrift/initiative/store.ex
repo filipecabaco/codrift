@@ -88,11 +88,14 @@ defmodule Codrift.Initiative.Store do
   def init(opts) do
     path = Path.expand(Keyword.get(opts, :path, @default_path))
     initiatives = load(path)
-    # Ensure CLAUDE.md symlinks exist for all previously-created initiatives
-    # (backfills anything created before this feature was added).
+    # Ensure context dirs, CLAUDE.md symlinks, and git repos exist for all
+    # previously-created initiatives (backfills anything created before these
+    # features were added, and recreates dirs that were accidentally deleted).
     Enum.each(initiatives, fn {_id, initiative} ->
       ctx = context_path(initiative.id)
-      if File.dir?(ctx), do: ensure_claude_md_symlink(ctx)
+      File.mkdir_p!(ctx)
+      ensure_git_repo(ctx)
+      ensure_claude_md_symlink(ctx)
     end)
 
     clean_orphaned_context_dirs(initiatives)
@@ -105,6 +108,7 @@ defmodule Codrift.Initiative.Store do
     initiative = Initiative.new(name, dirs)
     ctx = context_path(initiative.id)
     File.mkdir_p!(ctx)
+    ensure_git_repo(ctx)
     write_initiative_md(ctx, initiative)
     new_state = put_initiative(state, initiative)
     {:reply, {:ok, initiative}, new_state}
@@ -210,6 +214,12 @@ defmodule Codrift.Initiative.Store do
 
       {:error, _} ->
         :ok
+    end
+  end
+
+  defp ensure_git_repo(path) do
+    unless File.dir?(Path.join(path, ".git")) do
+      System.cmd("git", ["init"], cd: path, stderr_to_stdout: true)
     end
   end
 
