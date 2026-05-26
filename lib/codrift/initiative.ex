@@ -66,7 +66,14 @@ defmodule Codrift.Initiative do
   @doc "Deserialises an initiative from a plain map (as returned by JSON decoding)."
   def from_map(%{"id" => id, "name" => name, "dirs" => dirs, "created_at" => ts} = data) do
     {:ok, dt, _} = DateTime.from_iso8601(ts)
-    status = data |> Map.get("status", "ongoing") |> String.to_existing_atom()
+    status = data |> Map.get("status", "ongoing") |> parse_status()
     %__MODULE__{id: id, name: name, dirs: dirs, created_at: dt, status: status}
   end
+
+  # Safe status deserialisation: unknown values (manual edits, downgrades) fall
+  # back to :ongoing rather than raising ArgumentError and crashing Store.init/1.
+  defp parse_status(s) when s in ["planning", "ongoing", "done", "archived"],
+    do: String.to_existing_atom(s)
+
+  defp parse_status(_), do: :ongoing
 end

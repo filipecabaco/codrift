@@ -242,7 +242,10 @@ defmodule Codrift.AgentProcess do
     error = "\n[agent exited with code #{code}]\n"
     state = push_buffer(state, error)
     for {sub, _} <- state.subscribers, do: send(sub, {:agent_stopped, state.id, code})
-    {:noreply, %{state | port: nil, status: :idle, conversation_started: true}}
+    # Do NOT set conversation_started: true on failure — the next send_input must
+    # use args/2 (fresh invocation), not args_continue/1 (resume flags), because
+    # no successful conversation was established.
+    {:noreply, %{state | port: nil, status: :idle}}
   end
 
   # Port exit in :interactive mode

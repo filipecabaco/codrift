@@ -467,12 +467,18 @@ defmodule Codrift.TUI.VT100 do
     end
   end
 
-  defp advance_line(%{cursor_row: row, scroll_bottom: bottom} = screen) when row >= bottom do
+  # Per VT100 spec, LF scrolls the scroll region only when the cursor is WITHIN
+  # the region and at its bottom edge.  If the cursor is below scroll_bottom
+  # (e.g. a status bar rendered by Ink below its scroll region), a LF must
+  # simply move the cursor down one row (clamped to height-1) without touching
+  # the scroll region content.
+  defp advance_line(%{cursor_row: row, scroll_top: top, scroll_bottom: bottom} = screen)
+       when row >= top and row >= bottom do
     %{scroll_up(screen, 1) | cursor_row: bottom}
   end
 
-  defp advance_line(screen) do
-    %{screen | cursor_row: screen.cursor_row + 1}
+  defp advance_line(%{cursor_row: row, height: height} = screen) do
+    %{screen | cursor_row: min(row + 1, height - 1)}
   end
 
   defp reverse_index(%{cursor_row: row, scroll_top: top} = screen) when row <= top do

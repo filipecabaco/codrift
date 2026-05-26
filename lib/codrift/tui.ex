@@ -1043,7 +1043,9 @@ defmodule Codrift.TUI do
           Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
           Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
 
-          existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
+          # recent_output/2 already returns chunks in chronological (oldest-first)
+          # order — do NOT reverse again here.
+          existing = AgentProcess.recent_output(pid, 200)
 
           # Start replay only from the last full-screen clear (\e[2J or \ec).
           # IL/DL operations need correct scroll-region context; replaying chunks

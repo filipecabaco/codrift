@@ -87,8 +87,11 @@ defmodule Codrift.Initiative.Store do
     ctx = context_path(initiative.id)
     File.mkdir_p!(ctx)
     write_initiative_md(ctx, initiative)
-    new_state = put_initiative(state, initiative)
-    {:reply, {:ok, initiative}, new_state}
+
+    case put_initiative(state, initiative) do
+      {:ok, new_state} -> {:reply, {:ok, initiative}, new_state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call({:get, id}, _from, state) do
@@ -126,9 +129,21 @@ defmodule Codrift.Initiative.Store do
 
       {_, initiatives} ->
         new_state = %{state | initiatives: initiatives}
-        persist(new_state)
-        safe_rm_context_dir!(context_path(id))
-        {:reply, :ok, new_state}
+
+        case persist(new_state) do
+          :ok ->
+            # Best-effort context dir removal — log but don't crash the GenServer.
+            try do
+              safe_rm_context_dir!(context_path(id))
+            rescue
+              e -> Logger.warning("Failed to remove context dir for #{id}: #{Exception.message(e)}")
+            end
+
+            {:reply, :ok, new_state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -136,18 +151,25 @@ defmodule Codrift.Initiative.Store do
     update_initiative(state, id, fn i -> %{i | status: status} end)
   end
 
+  # Returns {:ok, new_state} or {:error, reason} — never raises.
   defp put_initiative(state, initiative) do
     new_state = %{state | initiatives: Map.put(state.initiatives, initiative.id, initiative)}
-    persist(new_state)
-    new_state
+
+    case persist(new_state) do
+      :ok -> {:ok, new_state}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp update_initiative(state, id, fun) do
     case Map.fetch(state.initiatives, id) do
       {:ok, initiative} ->
         updated = fun.(initiative)
-        new_state = put_initiative(state, updated)
-        {:reply, {:ok, updated}, new_state}
+
+        case put_initiative(state, updated) do
+          {:ok, new_state} -> {:reply, {:ok, updated}, new_state}
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
 
       :error ->
         {:reply, {:error, :not_found}, state}
@@ -188,14 +210,31 @@ defmodule Codrift.Initiative.Store do
     ensure_claude_md_symlink(ctx_path)
   end
 
-  # Creates CLAUDE.md as a symlink to initiative.md in `ctx_path` if absent.
-  # Uses a relative target so the symlink stays valid if the whole initiatives
-  # folder is moved.
+  # Creates (or repairs) CLAUDE.md as a symlink → initiative.md in `ctx_path`.
+  # Uses a relative target so the symlink stays valid if the folder is moved.
+  #
+  # Three cases handled:
+  #   1. CLAUDE.md is a working regular file or symlink → leave it alone.
+  #   2. CLAUDE.md is a broken symlink (File.exists? = false, File.lstat succeeds)
+  #      → remove the dangling link and recreate it.
+  #   3. CLAUDE.md does not exist at all → create the symlink.
   defp ensure_claude_md_symlink(ctx_path) do
     claude_md = Path.join(ctx_path, "CLAUDE.md")
 
-    unless File.exists?(claude_md) or match?({:ok, _}, File.read_link(claude_md)) do
-      File.ln_s!("initiative.md", claude_md)
+    cond do
+      # Working file/symlink — nothing to do.
+      File.exists?(claude_md) ->
+        :ok
+
+      # Dangling symlink or any other inode that stat can see (lstat succeeds
+      # even when the target is missing).  Remove and recreate.
+      match?({:ok, _}, File.lstat(claude_md)) ->
+        File.rm!(claude_md)
+        File.ln_s!("initiative.md", claude_md)
+
+      # Truly absent — create fresh.
+      true ->
+        File.ln_s!("initiative.md", claude_md)
     end
   end
 
@@ -267,11 +306,18 @@ defmodule Codrift.Initiative.Store do
       else: path
   end
 
+  # Returns :ok or {:error, reason} — never raises — so callers inside
+  # handle_call can return a proper error reply instead of crashing the GenServer.
+  # JSON.encode!/1 is safe here because we own the data structure; the only
+  # realistic failure modes are the filesystem operations below.
   defp persist(%{initiatives: initiatives, path: path}) do
     data = Map.new(initiatives, fn {id, i} -> {id, Initiative.to_map(i)} end)
     json = JSON.encode!(%{"initiatives" => data})
-    path |> Path.dirname() |> File.mkdir_p!()
-    File.write!(path, json)
+
+    with :ok <- path |> Path.dirname() |> File.mkdir_p(),
+         :ok <- File.write(path, json) do
+      :ok
+    end
   end
 
   defp load(path) do
