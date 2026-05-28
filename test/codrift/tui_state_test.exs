@@ -419,18 +419,321 @@ defmodule Codrift.TUIStateTest do
   # ── Focus and input buffer ─────────────────────────────────────────────────
 
   describe "focus cycling" do
-    test "Tab key clears the input buffer" do
-      state = base_state(%{input_buffer: "unfinished input"})
+    test "Tab from sidebar cycles focus to main and clears input buffer" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:sidebar, :main]), input_buffer: "old"})
       {:noreply, new_state} = TUI.handle_event(key("tab"), state)
+
+      assert ExRatatui.Focus.focused?(new_state.focus, :main)
+      assert new_state.input_buffer == ""
+    end
+
+    test "Shift+Tab (back_tab) from main cycles focus back to sidebar and clears input buffer" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: "old"})
+      {:noreply, new_state} = TUI.handle_event(key("back_tab"), state)
+
+      assert ExRatatui.Focus.focused?(new_state.focus, :sidebar)
+      assert new_state.input_buffer == ""
+    end
+
+    test "Tab+Shift modifier from main cycles focus (some terminals send this instead of back_tab)" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: "old"})
+      {:noreply, new_state} = TUI.handle_event(shift_key("tab"), state)
+
+      assert ExRatatui.Focus.focused?(new_state.focus, :sidebar)
+      assert new_state.input_buffer == ""
+    end
+
+    test "Ctrl+Tab from main cycles focus" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: "old"})
+      {:noreply, new_state} = TUI.handle_event(ctrl_key("tab"), state)
+
+      assert ExRatatui.Focus.focused?(new_state.focus, :sidebar)
+      assert new_state.input_buffer == ""
+    end
+
+    test "Tab with no modifiers from main still inserts \\t (not a focus switch)" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+      {:noreply, new_state} = TUI.handle_event(key("tab"), state)
+
+      assert new_state.input_buffer == "\t"
+      assert ExRatatui.Focus.focused?(new_state.focus, :main)
+    end
+  end
+
+  # ── Quit keybinding ────────────────────────────────────────────────────────
+
+  describe "quit keybinding" do
+    test "q appends to input buffer when main pane is focused (not a quit key)" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+      {:noreply, new_state} = TUI.handle_event(key("q"), state)
+
+      assert new_state.input_buffer == "q"
+    end
+
+    test "q from sidebar quits via Ctrl+Q binding (not single-char q)" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:sidebar, :main])})
+      result = TUI.handle_event(key("q"), state)
+
+      assert {:noreply, _} = result
+    end
+
+    test "Ctrl+Q from sidebar quits the TUI" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:sidebar, :main])})
+      result = TUI.handle_event(ctrl_key("q"), state)
+
+      assert {:stop, _} = result
+    end
+
+    test "Ctrl+Q from main pane also quits" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar])})
+      result = TUI.handle_event(ctrl_key("q"), state)
+
+      assert {:stop, _} = result
+    end
+  end
+
+  # ── Tab key in main pane ───────────────────────────────────────────────────
+
+  describe "tab key in main pane (non-PTY)" do
+    defp main_focused_state(overrides \\ %{}) do
+      base_state(Map.merge(%{focus: ExRatatui.Focus.new([:main, :sidebar])}, overrides))
+    end
+
+    test "Tab inserts a literal tab into the input buffer" do
+      state = main_focused_state(%{input_buffer: "hello"})
+      {:noreply, new_state} = TUI.handle_event(key("tab"), state)
+
+      assert new_state.input_buffer == "hello\t"
+    end
+
+    test "Tab does not cycle focus away from main" do
+      state = main_focused_state()
+      {:noreply, new_state} = TUI.handle_event(key("tab"), state)
+
+      assert ExRatatui.Focus.focused?(new_state.focus, :main)
+    end
+
+    test "multiple tabs accumulate in the buffer" do
+      state = main_focused_state(%{input_buffer: ""})
+      {:noreply, s1} = TUI.handle_event(key("tab"), state)
+      {:noreply, s2} = TUI.handle_event(key("tab"), s1)
+
+      assert s2.input_buffer == "\t\t"
+    end
+
+    test "tab can be mixed with regular characters" do
+      state = main_focused_state(%{input_buffer: "key"})
+      {:noreply, s1} = TUI.handle_event(key("tab"), state)
+      {:noreply, s2} = TUI.handle_event(key("="), s1)
+
+      assert s2.input_buffer == "key\t="
+    end
+  end
+
+  # ── Shift+Enter newline insertion ──────────────────────────────────────────
+
+  describe "Shift+Enter in main pane (non-PTY)" do
+    test "Shift+Enter appends \\n to the input buffer without submitting" do
+      state =
+        base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: "line one"})
+
+      {:noreply, new_state} = TUI.handle_event(shift_key("enter"), state)
+
+      assert new_state.input_buffer == "line one\n"
+    end
+
+    test "Shift+Enter on an empty buffer just inserts a newline" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+      {:noreply, new_state} = TUI.handle_event(shift_key("enter"), state)
+
+      assert new_state.input_buffer == "\n"
+    end
+
+    test "Shift+Enter when sidebar is focused is a no-op" do
+      state =
+        base_state(%{focus: ExRatatui.Focus.new([:sidebar, :main]), input_buffer: "unchanged"})
+
+      {:noreply, new_state} = TUI.handle_event(shift_key("enter"), state)
+
+      assert new_state.input_buffer == "unchanged"
+    end
+
+    test "composing a multi-line message with Shift+Enter then Enter" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+
+      {:noreply, s1} = TUI.handle_event(key("a"), state)
+      {:noreply, s2} = TUI.handle_event(shift_key("enter"), s1)
+      {:noreply, s3} = TUI.handle_event(key("b"), s2)
+
+      assert s3.input_buffer == "a\nb"
+    end
+  end
+
+  # ── Paste mode ────────────────────────────────────────────────────────────
+
+  describe "paste mode (Ctrl+V toggle)" do
+    defp main_state(overrides) do
+      base_state(Map.merge(%{focus: ExRatatui.Focus.new([:main, :sidebar])}, overrides))
+    end
+
+    test "Ctrl+V in main non-PTY pane enables paste mode" do
+      state = main_state(%{paste_mode: false})
+      {:noreply, new_state} = TUI.handle_event(ctrl_key("v"), state)
+
+      assert new_state.paste_mode == true
+    end
+
+    test "Ctrl+V again disables paste mode" do
+      state = main_state(%{paste_mode: true})
+      {:noreply, new_state} = TUI.handle_event(ctrl_key("v"), state)
+
+      assert new_state.paste_mode == false
+    end
+
+    test "Enter in paste mode inserts newline instead of submitting" do
+      state = main_state(%{input_buffer: "line one", paste_mode: true})
+      {:noreply, new_state} = TUI.handle_event(key("enter"), state)
+
+      assert new_state.input_buffer == "line one\n"
+    end
+
+    test "Enter outside paste mode still submits (clears buffer)" do
+      state = main_state(%{input_buffer: "send me", paste_mode: false})
+      {:noreply, new_state} = TUI.handle_event(key("enter"), state)
 
       assert new_state.input_buffer == ""
     end
 
-    test "Tab key cycles focus away from sidebar to main" do
-      state = base_state(%{focus: ExRatatui.Focus.new([:sidebar, :main])})
-      {:noreply, new_state} = TUI.handle_event(key("tab"), state)
+    test "toggling paste mode off then Enter clears buffer and paste_mode remains false" do
+      state = main_state(%{input_buffer: "some text", paste_mode: true})
+      {:noreply, off_state} = TUI.handle_event(ctrl_key("v"), state)
+      assert off_state.paste_mode == false
 
-      assert ExRatatui.Focus.focused?(new_state.focus, :main)
+      {:noreply, sent_state} = TUI.handle_event(key("enter"), off_state)
+      assert sent_state.input_buffer == ""
+      assert sent_state.paste_mode == false
+    end
+
+    test "Ctrl+V in sidebar has no paste mode effect" do
+      state = base_state(%{paste_mode: false, focus: ExRatatui.Focus.new([:sidebar, :main])})
+      {:noreply, new_state} = TUI.handle_event(ctrl_key("v"), state)
+
+      assert new_state.paste_mode == false
+    end
+  end
+
+  # ── Bracketed paste events ─────────────────────────────────────────────────
+
+  describe "bracketed paste event (%Paste{})" do
+    test "paste content is appended to buffer atomically in main non-PTY mode" do
+      state =
+        base_state(%{
+          focus: ExRatatui.Focus.new([:main, :sidebar]),
+          input_buffer: "before: "
+        })
+
+      event = %ExRatatui.Event.Paste{content: "hello\nworld"}
+      {:noreply, new_state} = TUI.handle_event(event, state)
+
+      assert new_state.input_buffer == "before: hello\nworld"
+    end
+
+    test "paste event disables paste_mode (no longer needed)" do
+      state =
+        base_state(%{
+          focus: ExRatatui.Focus.new([:main, :sidebar]),
+          input_buffer: "",
+          paste_mode: true
+        })
+
+      {:noreply, new_state} = TUI.handle_event(%ExRatatui.Event.Paste{content: "x"}, state)
+
+      assert new_state.paste_mode == false
+    end
+
+    test "paste event is a no-op when sidebar is focused" do
+      state =
+        base_state(%{
+          focus: ExRatatui.Focus.new([:sidebar, :main]),
+          input_buffer: "unchanged"
+        })
+
+      {:noreply, new_state} = TUI.handle_event(%ExRatatui.Event.Paste{content: "ignored"}, state)
+
+      assert new_state.input_buffer == "unchanged"
+    end
+
+    test "paste preserves tabs, newlines, and Unicode intact" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+
+      content = "line1\tindented\nline2 — em dash\n"
+      {:noreply, new_state} = TUI.handle_event(%ExRatatui.Event.Paste{content: content}, state)
+
+      assert new_state.input_buffer == content
+    end
+  end
+
+  # ── Multi-byte Unicode input ───────────────────────────────────────────────
+
+  describe "multi-byte Unicode character input" do
+    test "em dash is appended to the input buffer" do
+      state =
+        base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: "text"})
+
+      {:noreply, new_state} =
+        TUI.handle_event(%Key{code: "—", kind: "press", modifiers: []}, state)
+
+      assert new_state.input_buffer == "text—"
+    end
+
+    test "opening curly quote is appended to the input buffer" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+
+      {:noreply, new_state} =
+        TUI.handle_event(%Key{code: "“", kind: "press", modifiers: []}, state)
+
+      assert new_state.input_buffer == "“"
+    end
+
+    test "closing curly quote is appended to the input buffer" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+
+      {:noreply, new_state} =
+        TUI.handle_event(%Key{code: "”", kind: "press", modifiers: []}, state)
+
+      assert new_state.input_buffer == "”"
+    end
+
+    test "en dash is appended to the input buffer" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+
+      {:noreply, new_state} =
+        TUI.handle_event(%Key{code: "–", kind: "press", modifiers: []}, state)
+
+      assert new_state.input_buffer == "–"
+    end
+
+    test "multi-byte Unicode when sidebar focused is a no-op" do
+      state =
+        base_state(%{focus: ExRatatui.Focus.new([:sidebar, :main]), input_buffer: "unchanged"})
+
+      {:noreply, new_state} =
+        TUI.handle_event(%Key{code: "—", kind: "press", modifiers: []}, state)
+
+      assert new_state.input_buffer == "unchanged"
+    end
+
+    test "ASCII characters still work alongside Unicode" do
+      state = base_state(%{focus: ExRatatui.Focus.new([:main, :sidebar]), input_buffer: ""})
+
+      {:noreply, s1} = TUI.handle_event(key("x"), state)
+
+      {:noreply, s2} =
+        TUI.handle_event(%Key{code: "—", kind: "press", modifiers: []}, s1)
+
+      {:noreply, s3} = TUI.handle_event(key("y"), s2)
+
+      assert s3.input_buffer == "x—y"
     end
   end
 
@@ -580,4 +883,5 @@ defmodule Codrift.TUIStateTest do
 
   defp key(code), do: %Key{code: code, kind: "press", modifiers: []}
   defp ctrl_key(code), do: %Key{code: code, kind: "press", modifiers: ["ctrl"]}
+  defp shift_key(code), do: %Key{code: code, kind: "press", modifiers: ["shift"]}
 end

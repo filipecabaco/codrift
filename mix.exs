@@ -61,7 +61,7 @@ defmodule Codrift.MixProject do
   defp deps do
     [
       {:francis, "~> 0.2"},
-      {:ex_ratatui, "~> 0.10"},
+      {:ex_ratatui, path: "vendor/ex_ratatui", override: true},
       {:erlexec, "~> 2.0"},
       {:exqlite, "~> 0.23"},
       # Code quality

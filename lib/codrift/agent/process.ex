@@ -160,10 +160,12 @@ defmodule Codrift.AgentProcess do
   def handle_cast({:input, _text}, %{mode: :interactive, status: :stopped} = state),
     do: {:noreply, state}
 
-  def handle_cast({:raw, data}, %{mode: :pty} = state) do
-    :exec.send(state.exec_pid, data)
+  def handle_cast({:raw, data}, %{mode: :pty, exec_pid: pid} = state) when not is_nil(pid) do
+    :exec.send(pid, data)
     {:noreply, state}
   end
+
+  def handle_cast({:raw, _data}, %{mode: :pty} = state), do: {:noreply, state}
 
   def handle_cast({:raw, data}, %{mode: :interactive} = state) do
     Port.command(state.port, data)

@@ -34,13 +34,13 @@ defmodule Codrift.Config.Keybindings do
   | `diff_mode` | `2` | Switch to diff view |
   | `toggle_diff_view` | `v` | Toggle unified/split diff |
   | `diff_all_files` | `*` | Show all changed files |
-  | `quit` | `q` | Quit Codrift |
+  | `quit` | `ctrl+q` | Quit Codrift |
   | `toggle_sidebar` | `ctrl+b` | Collapse/expand sidebar |
   | `palette` | `ctrl+p` | Open command palette |
 
   ## Key spec format
 
-  - Single character: `"j"`, `"q"`, `"["`, `"*"`
+  - Single character: `"j"`, `"["`, `"*"`
   - Modifier combo: `"ctrl+b"`, `"ctrl+p"`, `"alt+x"`, `"shift+r"`
   """
 
@@ -61,7 +61,7 @@ defmodule Codrift.Config.Keybindings do
     diff_mode: "2",
     toggle_diff_view: "v",
     diff_all_files: "*",
-    quit: "q",
+    quit: "ctrl+q",
     toggle_sidebar: "ctrl+b",
     palette: "ctrl+p"
   }

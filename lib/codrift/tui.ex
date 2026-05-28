@@ -34,7 +34,10 @@ defmodule Codrift.TUI do
   |-----|--------|
   | `j` / `↓` | Move down / scroll main pane |
   | `k` / `↑` | Move up / scroll main pane |
-  | `Tab` / `Shift+Tab` | Cycle focus (sidebar ↔ main) |
+  | `Tab` | Cycle focus sidebar→main; insert `\t` in input (main pane) |
+  | `Shift+Tab` | Cycle focus main→sidebar |
+  | `Shift+Enter` | Insert newline in input buffer (non-PTY) |
+  | `Ctrl+V` | Toggle paste mode — Enter inserts `\n` instead of submitting |
   | `n` | New initiative |
   | `a` | Add directory (context-sensitive) |
   | `s` | Start Claude agent (context-sensitive) |
@@ -47,7 +50,7 @@ defmodule Codrift.TUI do
   | `*` | Reset diff sidebar to "all files" (diff mode only) |
   | `r` | Refresh current pane |
   | `Ctrl+D` / `Ctrl+U` | Scroll half-page |
-  | `q` / `Ctrl+C` | Quit (kills all running agents) |
+  | `Ctrl+Q` / `Ctrl+C` | Quit (kills all running agents) |
 
   ## Themes
 
@@ -61,7 +64,7 @@ defmodule Codrift.TUI do
 
   use ExRatatui.App
 
-  alias ExRatatui.Event.{Key, Mouse}
+  alias ExRatatui.Event.{Key, Mouse, Paste}
   alias ExRatatui.{Focus, Layout, Style}
   alias ExRatatui.Layout.Rect
   alias ExRatatui.Widgets.Block
@@ -100,6 +103,7 @@ defmodule Codrift.TUI do
     :status,
     :input_buffer,
     :theme,
+    paste_mode: false,
     kb: %{bindings: %{}, reverse: %{}},
     sidebar: %SidebarState{},
     selection: %Selection{},
@@ -210,6 +214,28 @@ defmodule Codrift.TUI do
         [{render_footer(state), footer_rect}]
 
     base ++ render_main_area(state, main_rect) ++ Modals.render(state, frame)
+  end
+
+  @impl true
+  def handle_event(%Paste{content: text}, %{modal: %{type: :none}} = state) do
+    if Focus.focused?(state.focus, :main) do
+      case state.selection.agent_mode do
+        :pty ->
+          forwarded = String.replace(text, "\n", "\r")
+          {:noreply, forward_raw(state, forwarded)}
+
+        _ ->
+          chars = String.length(text)
+
+          {:noreply,
+           flash_status(
+             %{state | input_buffer: state.input_buffer <> text, paste_mode: false},
+             "Pasted #{chars} chars"
+           )}
+      end
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
@@ -382,10 +408,35 @@ defmodule Codrift.TUI do
   #   :sidebar → j/k navigate, letters are management shortcuts
   #   :main    → all printable chars go to the agent input buffer
 
-  def handle_event(%Key{code: code, kind: "press"} = key, %{modal: %{type: :none}} = state)
-      when code in ["tab", "back_tab"] do
+  # Shift+Tab (back_tab) and Tab+Shift/Tab+Ctrl all cycle focus regardless of pane.
+  def handle_event(%Key{code: "back_tab", kind: "press"} = key, %{modal: %{type: :none}} = state) do
     {new_focus, _} = Focus.handle_key(state.focus, key)
     {:noreply, %{state | focus: new_focus, input_buffer: ""}}
+  end
+
+  def handle_event(
+        %Key{code: "tab", kind: "press", modifiers: modifiers},
+        %{modal: %{type: :none}} = state
+      )
+      when modifiers != [] do
+    tab_key = %Key{code: "tab", kind: "press", modifiers: []}
+    {new_focus, _} = Focus.handle_key(state.focus, tab_key)
+    {:noreply, %{state | focus: new_focus, input_buffer: ""}}
+  end
+
+  # Plain Tab (no modifiers): insert \t in main non-PTY, forward in PTY, cycle from sidebar.
+  def handle_event(%Key{code: "tab", kind: "press"} = key, %{modal: %{type: :none}} = state) do
+    cond do
+      Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\t")}
+
+      Focus.focused?(state.focus, :main) ->
+        {:noreply, %{state | input_buffer: state.input_buffer <> "\t"}}
+
+      true ->
+        {new_focus, _} = Focus.handle_key(state.focus, key)
+        {:noreply, %{state | focus: new_focus, input_buffer: ""}}
+    end
   end
 
   def handle_event(
@@ -420,8 +471,26 @@ defmodule Codrift.TUI do
     end
   end
 
+  # Ctrl+V toggles paste accumulation mode (non-PTY main pane).
+  # In paste mode, Enter inserts \n instead of submitting, so pasted
+  # multi-line text lands in the buffer as one block. Press Ctrl+V again
+  # to exit paste mode (Enter reverts to submitting).
+  def handle_event(
+        %Key{code: "v", kind: "press", modifiers: ["ctrl"]},
+        %{modal: %{type: :none}} = state
+      ) do
+    if Focus.focused?(state.focus, :main) and state.selection.agent_mode != :pty do
+      new_mode = not state.paste_mode
+      msg = if new_mode, do: "Paste mode ON — Enter inserts newline", else: "Paste mode OFF"
+      {:noreply, flash_status(%{state | paste_mode: new_mode}, msg)}
+    else
+      action = Map.get(state.kb.reverse, "ctrl+v")
+      dispatch_sidebar_action(action, state)
+    end
+  end
+
   # Generic ctrl-key handler — dispatches configured actions (toggle_sidebar, palette, …).
-  # Must come after ctrl+c/d/u which have PTY-forwarding logic.
+  # Must come after ctrl+c/d/u/v which have PTY-forwarding logic.
   def handle_event(
         %Key{code: code, kind: "press", modifiers: ["ctrl"]},
         %{modal: %{type: :none}} = state
@@ -430,12 +499,33 @@ defmodule Codrift.TUI do
     dispatch_sidebar_action(action, state)
   end
 
-  # Main pane focused — route to agent based on its mode
-  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :none}} = state) do
+  def handle_event(
+        %Key{code: "enter", kind: "press", modifiers: ["shift"]},
+        %{modal: %{type: :none}} = state
+      ) do
     if Focus.focused?(state.focus, :main) do
       case state.selection.agent_mode do
         :pty -> {:noreply, forward_raw(state, "\r")}
-        _ -> {:noreply, send_agent_input(state)}
+        _ -> {:noreply, %{state | input_buffer: state.input_buffer <> "\n"}}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  # Main pane focused — route to agent based on its mode.
+  # In paste_mode, Enter inserts \n so multi-line pastes land as one block.
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :none}} = state) do
+    if Focus.focused?(state.focus, :main) do
+      case state.selection.agent_mode do
+        :pty ->
+          {:noreply, forward_raw(state, "\r")}
+
+        _ when state.paste_mode ->
+          {:noreply, %{state | input_buffer: state.input_buffer <> "\n"}}
+
+        _ ->
+          {:noreply, send_agent_input(state)}
       end
     else
       {:noreply, state}
@@ -471,7 +561,7 @@ defmodule Codrift.TUI do
   # Generic single-character key handler.
   #
   # Routing priority:
-  #   1. Configured quit key → always quit (even from PTY pane, matching legacy `q` behaviour)
+  #   1. Configured quit key (single-char override only) → always quit
   #   2. Main pane + PTY agent → forward raw to PTY
   #   3. Main pane + non-PTY + edit_context key on a context_file → open editor
   #   4. Main pane + non-PTY → append to input buffer
@@ -532,6 +622,16 @@ defmodule Codrift.TUI do
   def handle_event(%Key{code: "left", kind: "press"}, %{modal: %{type: :none}} = state) do
     if Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty do
       {:noreply, forward_raw(state, "\e[D")}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_event(%Key{code: code, kind: "press"}, %{modal: %{type: :none}} = state)
+      when byte_size(code) > 1 and byte_size(code) <= 4 do
+    if String.length(code) == 1 do
+      focus = Focus.focused?(state.focus, :main)
+      dispatch_char(nil, code, focus, state)
     else
       {:noreply, state}
     end
@@ -1926,20 +2026,36 @@ defmodule Codrift.TUI do
     if has_output do
       render_agent_output(state, screen, focused, block)
     else
-      render_agent_hint(status, focused, block)
+      render_agent_hint(status, focused, state.paste_mode, block)
     end
   end
 
-  defp render_agent_hint(status, focused, block) do
+  defp render_agent_hint(status, focused, paste_mode, block) do
     hint =
       cond do
-        status == :stopped -> "Agent stopped. Press s to restart."
-        status == :starting -> "Starting… waiting for the agent prompt to appear."
-        status == :awaiting_input and focused -> "Agent ready. Type your message and press Enter."
-        status == :awaiting_input -> "Agent ready. Tab to focus, then type your message."
-        status == :running -> "Agent is working…"
-        focused -> "Tab to focus · type · Enter to send"
-        true -> "Navigate here then Tab to focus. Type to interact."
+        status == :stopped ->
+          "Agent stopped. Press s to restart."
+
+        status == :starting ->
+          "Starting… waiting for the agent prompt to appear."
+
+        paste_mode and focused ->
+          "PASTE MODE — Enter inserts newline · Ctrl+V to exit · Enter to send after"
+
+        status == :awaiting_input and focused ->
+          "Agent ready. Type your message. Ctrl+V for paste mode, Enter to send."
+
+        status == :awaiting_input ->
+          "Agent ready. Tab to focus, then type your message."
+
+        status == :running ->
+          "Agent is working…"
+
+        focused ->
+          "Shift+Tab to sidebar · Ctrl+V paste mode · Enter to send"
+
+        true ->
+          "Navigate here then Tab to focus. Type to interact."
       end
 
     %Paragraph{text: hint, block: block, wrap: true}
@@ -2186,21 +2302,22 @@ defmodule Codrift.TUI do
 
   defp send_agent_input(state) do
     text = String.trim(state.input_buffer)
+    base = %{state | input_buffer: "", paste_mode: false}
 
     if text == "" or is_nil(state.selection.agent_id) do
-      %{state | input_buffer: ""}
+      base
     else
       case AgentSupervisor.find_agent(state.selection.agent_id) do
         {:ok, pid} ->
           AgentProcess.send_input(pid, text)
 
           flash_status(
-            %{state | input_buffer: ""},
+            base,
             "Sent → #{String.slice(state.selection.agent_id, 0, 8)}"
           )
 
         {:error, :not_found} ->
-          flash_status(%{state | input_buffer: ""}, "Agent not found")
+          flash_status(base, "Agent not found")
       end
     end
   end
