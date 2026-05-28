@@ -142,7 +142,7 @@ defmodule Codrift.TUIStateTest do
         ),
       refs:
         Map.merge(
-          %{resize: nil, sidebar_tick: nil, status_timer: nil},
+          %{resize: nil, sidebar_tick: nil, status_timer: nil, nudge: nil, restore: nil},
           refs_mapped
         )
     }
@@ -195,7 +195,7 @@ defmodule Codrift.TUIStateTest do
       assert new_state.modal.type == :none
     end
 
-    test "n key opens :new_name modal when sidebar is focused" do
+    test "n opens :new_name modal when sidebar is focused" do
       state = base_state()
       {:noreply, new_state} = TUI.handle_event(key("n"), state)
 
@@ -267,14 +267,14 @@ defmodule Codrift.TUIStateTest do
       ]
     end
 
-    test "j key moves the sidebar cursor down by 1" do
+    test "j moves the sidebar cursor down by 1" do
       state = base_state(%{sidebar_entries: context_dir_entries(), sidebar_cursor: 0})
       {:noreply, new_state} = TUI.handle_event(key("j"), state)
 
       assert new_state.sidebar.cursor == 1
     end
 
-    test "k key moves the sidebar cursor up by 1" do
+    test "k moves the sidebar cursor up by 1" do
       state = base_state(%{sidebar_entries: context_dir_entries(), sidebar_cursor: 1})
       {:noreply, new_state} = TUI.handle_event(key("k"), state)
 
@@ -347,21 +347,21 @@ defmodule Codrift.TUIStateTest do
   # ── Diff mode controls ─────────────────────────────────────────────────────
 
   describe "diff mode controls" do
-    test "v key toggles diff_view_mode from unified to split" do
+    test "v toggles diff_view_mode from unified to split" do
       state = base_state(%{active_tab: :diff, diff_view_mode: :unified, diff_scroll: 10})
       {:noreply, new_state} = TUI.handle_event(key("v"), state)
 
       assert new_state.diff.view_mode == :split
     end
 
-    test "v key toggles diff_view_mode from split back to unified" do
+    test "v toggles diff_view_mode from split back to unified" do
       state = base_state(%{active_tab: :diff, diff_view_mode: :split, diff_scroll: 5})
       {:noreply, new_state} = TUI.handle_event(key("v"), state)
 
       assert new_state.diff.view_mode == :unified
     end
 
-    test "v key resets diff_scroll to 0" do
+    test "v resets diff_scroll to 0" do
       state = base_state(%{active_tab: :diff, diff_view_mode: :unified, diff_scroll: 8})
       {:noreply, new_state} = TUI.handle_event(key("v"), state)
 
@@ -751,7 +751,7 @@ defmodule Codrift.TUIStateTest do
           pane_size: {80, 20}
         })
 
-      {:noreply, new_state} = TUI.handle_info({:agent_output, agent_id, "Hello world"}, state)
+      {:noreply, new_state, _} = TUI.handle_info({:agent_output, agent_id, "Hello world"}, state)
 
       assert ["Hello world"] = Map.get(new_state.agents.outputs, agent_id)
     end
@@ -767,7 +767,7 @@ defmodule Codrift.TUIStateTest do
           pane_size: {80, 20}
         })
 
-      {:noreply, new_state} = TUI.handle_info({:agent_output, agent_id, "some output"}, state)
+      {:noreply, new_state, _} = TUI.handle_info({:agent_output, agent_id, "some output"}, state)
 
       assert Map.has_key?(new_state.agents.screens, agent_id)
     end
@@ -784,7 +784,7 @@ defmodule Codrift.TUIStateTest do
           main_scroll: 7
         })
 
-      {:noreply, new_state} = TUI.handle_info({:agent_output, agent_id, "data"}, state)
+      {:noreply, new_state, _} = TUI.handle_info({:agent_output, agent_id, "data"}, state)
 
       assert new_state.main_scroll == 0
     end
@@ -802,7 +802,7 @@ defmodule Codrift.TUIStateTest do
           main_scroll: 7
         })
 
-      {:noreply, new_state} = TUI.handle_info({:agent_output, other_id, "data"}, state)
+      {:noreply, new_state, _} = TUI.handle_info({:agent_output, other_id, "data"}, state)
 
       assert new_state.main_scroll == 7
     end

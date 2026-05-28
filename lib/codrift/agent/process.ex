@@ -48,7 +48,8 @@ defmodule Codrift.AgentProcess do
     :subscribers,
     :conversation_started,
     :raw_line_buf,
-    :session_uuid
+    :session_uuid,
+    last_size: nil
   ]
 
   @doc false
@@ -175,9 +176,9 @@ defmodule Codrift.AgentProcess do
   def handle_cast({:raw, _data}, state), do: {:noreply, state}
 
   def handle_cast({:resize, cols, rows}, %{mode: :pty, exec_ospid: ospid} = state)
-      when not is_nil(ospid) do
+      when not is_nil(ospid) and {cols, rows} != state.last_size do
     :exec.winsz(ospid, rows, cols)
-    {:noreply, state}
+    {:noreply, %{state | last_size: {cols, rows}}}
   rescue
     _ -> {:noreply, state}
   end

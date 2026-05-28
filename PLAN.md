@@ -98,19 +98,19 @@ project memory.
 | 35 | Distribution & installation | `install.sh` (curl-pipe-sh, 4-platform detection, `~/.local/share/codrift` + symlink); `.github/workflows/release.yml` (matrix: macOS ARM/Intel + Linux x86_64/ARM64 via `erlef/setup-beam`, `softprops/action-gh-release`) |
 | 36 | GitHub Actions CI | `.github/workflows/ci.yml` — `mix deps.get` → `compile --warnings-as-errors` → `format --check-formatted` → `credo --strict` → `test`; deps + build cache keyed on `mix.lock` |
 
-### 🔬 Sidequests (future optimisations, not blocking)
-
-| Sidequest | Notes |
-|-----------|-------|
-| Reduce TUI flickering | Render loop triggers frequent terminal resizes causing visible flicker. Correctness and features take priority. See [flickering sidequest](docs/flickering.md). |
-
----
-
-### 🚨 Upcoming — Critical (blocking UX)
+### ✅ Done — Safe paste + input hardening
 
 | # | Step | Notes |
 |---|------|-------|
-| 41 | Safe paste + input hardening | Shift+Enter fails to paste; certain chars (e.g. tab, special Unicode, multi-line pastes) crash or corrupt the TUI input buffer. Goal: 1:1 paste experience — any text a user can type or paste in a normal terminal works, with the only intended difference being Tab (map to Ctrl+Tab to preserve focus-switch behaviour). See *Upcoming: Safe Paste + Input Hardening*. |
+| 41 | Safe paste + input hardening | Full 1:1 paste experience via bracketed paste mode. Forked `ex_ratatui` as `vendor/ex_ratatui` git submodule; NIF extended to deliver `Event::Paste(String)` → `%ExRatatui.Event.Paste{content}` atomically. `EnableBracketedPaste` in `init_terminal` (Rust), `DisableBracketedPaste` in `restore_terminal` and `Drop`. TUI: `handle_event(%Paste{})` appends whole string to buffer; PTY mode forwards as raw `\r`-normalised bytes. Additional fixes: Tab inserts `\t` in main non-PTY (any Tab+modifier cycles focus, covering Ctrl+Tab and Shift+Tab from all terminal emulators); Shift+Enter inserts `\n`; multi-byte Unicode input (em dash, curly quotes) handled by `byte_size > 1 and <= 4` guard placed after all named-key handlers; quit key changed from `q` to `Ctrl+Q` so `q` is safe to type in input buffer; `AgentProcess.handle_cast({:raw, _})` guards `nil` exec_pid; `paste_mode` (`Ctrl+V`) toggle preserved as fallback for terminals without bracketed paste. 67 tests. |
+
+### ✅ Done — Sidequests
+
+| Sidequest | Notes |
+|-----------|-------|
+| Reduce TUI flickering | **Done.** Five-layer fix: (1) `AgentProcess.resize` dedup via `last_size`; (2) resize only selected PTY — `resize_selected_pty` replaces `resize_all_ptys`; (3) `apply_resize` no-op guard + `render?: false`; (4) skip 600 ms nudge when agent has existing output; (5) cancel stale nudge/restore timers before scheduling. NIF layer: `BeginSynchronizedUpdate`/`EndSynchronizedUpdate` wrap every `draw_frame`; `render?: false` on pure side-effect callbacks (`nudge_agent`, `restore_agent_size`, `input_nudge`, non-selected `agent_output`, focus events). Fork also gains: `FocusGained`/`FocusLost` events, `copy_to_clipboard/1` (OSC 52), `set_title/1`. See [flickering sidequest](docs/flickering.md). |
+
+---
 
 ### ⬜ Upcoming
 
@@ -410,49 +410,93 @@ end
 
 ---
 
-## Upcoming: Safe Paste + Input Hardening (Step 41)
+## ex_ratatui fork improvements (vendor/ex_ratatui)
 
-### Problem
+Codrift now owns a fork of ex_ratatui at `vendor/ex_ratatui` (git submodule, `github.com/filipecabaco/ex_ratatui`). The NIF is always built from source (`force_build: true`). This unlocks a set of low-cost improvements that were previously blocked by the upstream's "ignore for now" stubs.
 
-Two related bugs make copy-paste dangerous in the TUI input box:
+### Already done
 
-1. **Shift+Enter paste fails** — the intended shortcut to paste multi-line clipboard content does not work; pasted text is either dropped or corrupted.
-2. **Crash-on-paste** — certain characters in real-world text cause the TUI to break completely. Reproduction text includes: mixed Unicode (tables, em dashes, curly quotes), raw tab characters, multi-line blocks, and code fences. A paste that "looks normal" in a browser can bring down the TUI.
+| Feature | Where | Notes |
+|---------|-------|-------|
+| `Event::Paste(String)` | `events.rs`, `event.ex`, `ex_ratatui.ex` | Delivers bracketed paste content atomically as `%ExRatatui.Event.Paste{content}` |
+| `EnableBracketedPaste` | `terminal.rs` `init_terminal` | Sends `\e[?2004h` after `EnterAlternateScreen`; disabled in `restore_terminal` and `Drop` |
+| Synchronized output | `terminal.rs` `with_terminal_draw` | `BeginSynchronizedUpdate`/`EndSynchronizedUpdate` wrap every crossterm draw; terminal composites the full frame at once. Safe no-op on unsupported terminals. |
+| Focus events | `events.rs`, `event.ex`, `ex_ratatui.ex`, `terminal.rs` | `FocusGained`/`FocusLost` delivered as `%ExRatatui.Event.FocusGained{}`/`%ExRatatui.Event.FocusLost{}`; `EnableFocusChange` in `init_terminal`, `DisableFocusChange` in `restore_terminal` and `Drop` |
+| OSC 52 clipboard write | `terminal.rs`, `ex_ratatui.ex`, `native.ex` | `ExRatatui.copy_to_clipboard/1` — base64 encoding done in Elixir via `Base.encode64/1`. Works in iTerm2, WezTerm, kitty. |
+| Window title | `terminal.rs`, `ex_ratatui.ex`, `native.ex` | `ExRatatui.set_title/1` wraps `crossterm::terminal::SetTitle`. |
 
-Together these make pasting initiative context (issue descriptions, Notion excerpts, Slack threads) unreliable. Users are forced to manually retype or strip content before pasting, which defeats the purpose of the context-file workflow.
+### Candidates — low effort, remaining
 
-### Goal
+**Kitty keyboard protocol — richer modifier detection**
 
-**1:1 paste experience.** Any text that a user can paste into a standard terminal or text editor must work in the Codrift input box without corruption or crash. The only intentional difference from a plain `textarea` is that **Tab** triggers focus-switching in the TUI rather than inserting a literal tab — remap that to **Ctrl+Tab** so Tab behaviour is preserved for users who want it.
+`PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)` in `init_terminal` lets crossterm distinguish e.g. Ctrl+Enter from Enter, and Shift+Space from Space. No NIF enum changes needed — the existing `Key` variant gains richer modifier data automatically. Deferred: requires testing on multiple terminal emulators to confirm no regressions.
 
-### Scope
+**Wire up `set_title` to initiative selection** — call `ExRatatui.set_title("Codrift — #{name}")` when the selected initiative changes. Currently the API exists but is not called.
 
-| Area | Fix |
-|------|-----|
-| Shift+Enter | Wire Shift+Enter in `handle_event/2` to trigger a bracketed-paste or newline insert into the input buffer instead of being silently swallowed |
-| Tab key | Change TUI dispatch: bare Tab → insert `\t` in input buffer; focus-switch moves to Ctrl+Tab (or a configurable binding) |
-| Bracket paste mode | Enable xterm bracketed paste (`\e[?2004h`) on TUI start and disable on exit; wrap paste chunks in the input handler so the full paste is applied atomically |
-| Input buffer validation | Sanitise incoming bytes before appending to the buffer: strip ANSI escape sequences, handle multi-byte UTF-8 correctly, replace lone surrogates and null bytes |
-| Crash path | Audit all `handle_event` clauses that touch the input buffer for unguarded pattern matches that crash on unexpected byte values; add a catch-all that logs and discards rather than crashing |
-| Keybinding config | Expose `tab` and `paste` actions in `Codrift.Config.Keybindings` so power users can remap them |
+**Wire up `copy_to_clipboard` to a yank keybinding** — `y` in agent pane to copy visible output. Currently the API exists but has no TUI binding.
 
-### Known triggering characters
+### Removed candidates
 
-From user-reported paste (real issue description text):
+**1. Synchronized output — fixes flickering (sidequest)**
 
-- Raw `\t` tab characters inside pasted text
-- Unicode en/em dashes (`–`, `—`), curly quotes (`"`, `"`, `'`, `'`)
-- Markdown table rows with `|` characters
-- Backtick fences (` ``` `)
-- Newlines mid-paste (Shift+Enter was the intended escape hatch but is broken)
+Wrap every `draw_frame` call in `EnterSynchronizedOutput` / `LeaveSynchronizedOutput` (`\e[?2026h` / `\e[?2026l`). The terminal composites the frame only once it sees the closing marker, eliminating mid-render flicker. One change to `rendering.rs`:
 
-### Testing
+```rust
+// in draw_frame, around the terminal.draw() call:
+stdout.execute(EnterSynchronizedOutput)?;
+let result = terminal_guard.draw(f);
+stdout.execute(LeaveSynchronizedOutput)?;
+```
 
-Add `async: true` unit tests covering:
-- Multi-line paste via bracketed paste sequence
-- Each known-bad character class applied to input buffer
-- Tab key inserts `\t` instead of switching focus
-- Ctrl+Tab switches focus correctly
+Supported by iTerm2, WezTerm, kitty, foot, and most modern terminals. Safe no-op on terminals that don't recognise it.
+
+**2. Focus events — auto-adjust status when window focus changes**
+
+`FocusGained` / `FocusLost` are currently in the `_ => Ok(None)` arm. Add:
+
+```rust
+NifEvent enum:
+  FocusGained,
+  FocusLost,
+
+match event:
+  Event::FocusGained => Ok(Some(NifEvent::FocusGained)),
+  Event::FocusLost   => Ok(Some(NifEvent::FocusLost)),
+```
+
+Then `EnableFocusChange` in `init_terminal` (crossterm already has it). TUI can dim the status bar or pause tickers when the window loses focus.
+
+**3. Kitty keyboard protocol — richer modifier detection**
+
+`PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)` in `init_terminal` lets crossterm distinguish e.g. Ctrl+Enter from Enter, and Shift+Space from Space. No NIF enum changes needed — the existing `Key` variant gains richer modifier data automatically.
+
+**4. OSC 52 clipboard write — enables copy**
+
+Terminal clipboard write is a pure escape sequence: `\e]52;c;{base64}\a`. No crossterm API needed. Add a NIF function:
+
+```rust
+#[rustler::nif]
+fn copy_to_clipboard(text: String) -> Result<Atom, Error> {
+    let encoded = base64::encode(text.as_bytes());
+    print!("\x1b]52;c;{encoded}\x07");
+    std::io::stdout().flush()?;
+    Ok(atoms::ok())
+}
+```
+
+Expose as `ExRatatui.copy_to_clipboard/1`. TUI can then offer `y` to yank agent output or diff hunks. Works in iTerm2, WezTerm, kitty; no-op in Terminal.app (which blocks OSC 52 by default).
+
+**5. Window title — show active initiative**
+
+```rust
+#[rustler::nif]
+fn set_title(title: String) -> Result<Atom, Error> {
+    std::io::stdout().execute(crossterm::terminal::SetTitle(title))?;
+    Ok(atoms::ok())
+}
+```
+
+TUI calls `ExRatatui.set_title("Codrift — #{initiative_name}")` on initiative selection change.
 
 ---
 

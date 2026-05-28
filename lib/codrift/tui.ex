@@ -36,6 +36,7 @@ defmodule Codrift.TUI do
   | `k` / `↑` | Move up / scroll main pane |
   | `Tab` | Cycle focus sidebar→main; insert `\t` in input (main pane) |
   | `Shift+Tab` | Cycle focus main→sidebar |
+  | `Esc` | Clear input buffer (non-PTY); forward `\e` to PTY |
   | `Shift+Enter` | Insert newline in input buffer (non-PTY) |
   | `Ctrl+V` | Toggle paste mode — Enter inserts `\n` instead of submitting |
   | `n` | New initiative |
@@ -111,7 +112,7 @@ defmodule Codrift.TUI do
     editor: %EditorState{},
     modal: %ModalState{},
     diff: %{files: [], scroll: 0, view_mode: :unified, sidebar_entries: [], sidebar_cursor: 0},
-    refs: %{resize: nil, sidebar_tick: nil, status_timer: nil}
+    refs: %{resize: nil, sidebar_tick: nil, status_timer: nil, nudge: nil, restore: nil}
   ]
 
   @impl true
@@ -167,7 +168,9 @@ defmodule Codrift.TUI do
       refs: %{
         resize: nil,
         sidebar_tick: Process.send_after(self(), :sidebar_tick, 2000),
-        status_timer: nil
+        status_timer: nil,
+        nudge: nil,
+        restore: nil
       }
     }
 
@@ -252,6 +255,10 @@ defmodule Codrift.TUI do
     ref = Process.send_after(self(), {:apply_resize, w, h}, 50)
     {:noreply, %{state | refs: %{state.refs | resize: ref}, term_size: {w, h}}}
   end
+
+  def handle_event(%ExRatatui.Event.FocusGained{}, state), do: {:noreply, state, [render?: false]}
+
+  def handle_event(%ExRatatui.Event.FocusLost{}, state), do: {:noreply, state, [render?: false]}
 
   # ── Mouse events ─────────────────────────────────────────────────────────────
 
@@ -771,48 +778,46 @@ defmodule Codrift.TUI do
         Enum.take([data | buf], 200)
       end)
 
+    selected = agent_id == state.selection.agent_id
+
     new_scroll =
-      if agent_id == state.selection.agent_id do
+      if selected,
         # VT100 screen is sized exactly to the pane; it manages its own viewport.
         # Always snap to 0 so new output shows the current terminal state.
-        0
-      else
-        state.main_scroll
-      end
+        do: 0,
+        else: state.main_scroll
 
-    {:noreply,
-     %{
-       state
-       | agents: %{state.agents | screens: new_screens, outputs: outputs},
-         main_scroll: new_scroll
-     }}
+    new_state = %{
+      state
+      | agents: %{state.agents | screens: new_screens, outputs: outputs},
+        main_scroll: new_scroll
+    }
+
+    {:noreply, new_state, [render?: selected]}
   end
 
   def handle_info({:apply_resize, w, h}, state) do
     {pane_w, pane_h} = calc_pane_size(w, h, state.sidebar.collapsed)
 
-    new_screens =
-      Map.new(state.agents.screens, fn {id, screen} ->
-        {id, VT100.resize(screen, pane_w, pane_h)}
-      end)
+    if {pane_w, pane_h} == state.pane_size do
+      {:noreply, %{state | refs: %{state.refs | resize: nil}}, [render?: false]}
+    else
+      new_screens =
+        Map.new(state.agents.screens, fn {id, screen} ->
+          {id, VT100.resize(screen, pane_w, pane_h)}
+        end)
 
-    resize_all_ptys(pane_w, pane_h)
+      resize_selected_pty(state.selection.agent_id, pane_w, pane_h)
 
-    new_scroll =
-      case Map.get(new_screens, state.selection.agent_id) do
-        nil -> 0
-        # VT100 screen resized in place; snap to 0 to show current terminal state.
-        _screen -> 0
-      end
-
-    {:noreply,
-     %{
-       state
-       | pane_size: {pane_w, pane_h},
-         agents: %{state.agents | screens: new_screens},
-         main_scroll: new_scroll,
-         refs: %{state.refs | resize: nil}
-     }}
+      {:noreply,
+       %{
+         state
+         | pane_size: {pane_w, pane_h},
+           agents: %{state.agents | screens: new_screens},
+           main_scroll: 0,
+           refs: %{state.refs | resize: nil}
+       }}
+    end
   end
 
   def handle_info({:agent_ready, agent_id}, state) do
@@ -857,21 +862,27 @@ defmodule Codrift.TUI do
   # Force a full \e[2J + redraw by briefly sending a different size, then
   # restoring the correct one. Two distinct SIGWINCHes guarantee a full clear.
   def handle_info({:nudge_agent, agent_id, w, h}, state) do
+    state = %{state | refs: %{state.refs | nudge: nil}}
+
     if agent_id == state.selection.agent_id do
       case AgentSupervisor.find_agent(agent_id) do
         {:ok, pid} ->
+          if state.refs.restore, do: Process.cancel_timer(state.refs.restore)
           AgentProcess.resize(pid, max(w - 1, 1), h)
-          Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 60)
+          restore_ref = Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 60)
+          {:noreply, %{state | refs: %{state.refs | restore: restore_ref}}, [render?: false]}
 
         _ ->
-          :ok
+          {:noreply, state, [render?: false]}
       end
+    else
+      {:noreply, state, [render?: false]}
     end
-
-    {:noreply, state}
   end
 
   def handle_info({:restore_agent_size, agent_id, w, h}, state) do
+    state = %{state | refs: %{state.refs | restore: nil}}
+
     if agent_id == state.selection.agent_id do
       case AgentSupervisor.find_agent(agent_id) do
         {:ok, pid} ->
@@ -881,13 +892,14 @@ defmodule Codrift.TUI do
           # the cursor at the input line.  Only fires when Claude is at the
           # prompt (awaiting_input) — harmless no-op otherwise.
           Process.send_after(self(), {:input_nudge, agent_id}, 100)
+          {:noreply, state, [render?: false]}
 
         _ ->
-          :ok
+          {:noreply, state, [render?: false]}
       end
+    else
+      {:noreply, state, [render?: false]}
     end
-
-    {:noreply, state}
   end
 
   # Sends \r to Claude Code when it's sitting at the ❯ prompt.
@@ -896,7 +908,7 @@ defmodule Codrift.TUI do
   # Enter keypress and print an extra prompt each time.
   def handle_info({:input_nudge, agent_id}, state) do
     maybe_nudge_agent(agent_id, state)
-    {:noreply, state}
+    {:noreply, state, [render?: false]}
   end
 
   def handle_info(:sidebar_tick, state) do
@@ -1542,19 +1554,6 @@ defmodule Codrift.TUI do
           status = AgentProcess.status(pid)
           {w, h} = state.pane_size
 
-          # Claude Code (Ink renderer): use two-step resize (w-1 → w) to force a
-          # full \e[2J repaint even when dimensions would otherwise be unchanged.
-          # A second nudge at 600 ms catches slow-starting agents.
-          # Terminal/shell agents: a single resize to the correct size is enough.
-          # The two-step and the \r nudge cause the shell to print extra prompts.
-          if status.adapter == Claude do
-            AgentProcess.resize(pid, max(w - 1, 1), h)
-            Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
-            Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
-          else
-            AgentProcess.resize(pid, w, h)
-          end
-
           existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
 
           # Claude Code (Ink): only replay from the last \e[2J / \ec anchor.
@@ -1571,6 +1570,32 @@ defmodule Codrift.TUI do
               do: chunks_from_last_clear(existing),
               else: existing
 
+          # Claude Code (Ink renderer): use two-step resize (w-1 → w) to force a
+          # full \e[2J repaint even when dimensions would otherwise be unchanged.
+          # A second nudge at 600 ms only fires when there is no existing output —
+          # it's for slow-starting agents that haven't painted yet.
+          # Cancel any stale pending timers from a previous subscription before
+          # scheduling new ones.
+          # Terminal/shell agents: a single resize to the correct size is enough.
+          # The two-step and the \r nudge cause the shell to print extra prompts.
+          new_refs =
+            if status.adapter == Claude do
+              if state.refs.nudge, do: Process.cancel_timer(state.refs.nudge)
+              if state.refs.restore, do: Process.cancel_timer(state.refs.restore)
+
+              AgentProcess.resize(pid, max(w - 1, 1), h)
+              restore_ref = Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
+
+              nudge_ref =
+                if Enum.empty?(replay),
+                  do: Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
+
+              %{state.refs | nudge: nudge_ref, restore: restore_ref}
+            else
+              AgentProcess.resize(pid, w, h)
+              state.refs
+            end
+
           screen =
             Enum.reduce(replay, VT100.new(w, h), fn chunk, s -> VT100.process(s, chunk) end)
 
@@ -1586,7 +1611,8 @@ defmodule Codrift.TUI do
 
           %{
             state
-            | selection: %{state.selection | agent_id: agent_id, agent_mode: status.mode},
+            | refs: new_refs,
+              selection: %{state.selection | agent_id: agent_id, agent_mode: status.mode},
               agents: %{
                 state.agents
                 | subscribed: MapSet.put(state.agents.subscribed, agent_id),
@@ -2088,9 +2114,12 @@ defmodule Codrift.TUI do
     %{text | lines: lines ++ extra}
   end
 
-  defp resize_all_ptys(w, h) do
-    for pid <- AgentSupervisor.list_agents() do
-      AgentProcess.resize(pid, w, h)
+  defp resize_selected_pty(nil, _w, _h), do: :ok
+
+  defp resize_selected_pty(agent_id, w, h) do
+    case AgentSupervisor.find_agent(agent_id) do
+      {:ok, pid} -> AgentProcess.resize(pid, w, h)
+      _ -> :ok
     end
   end
 
@@ -2448,7 +2477,7 @@ defmodule Codrift.TUI do
         {id, VT100.resize(screen, pane_w, pane_h)}
       end)
 
-    resize_all_ptys(pane_w, pane_h)
+    resize_selected_pty(state.selection.agent_id, pane_w, pane_h)
 
     new_focus =
       if new_collapsed and Focus.focused?(state.focus, :sidebar),
