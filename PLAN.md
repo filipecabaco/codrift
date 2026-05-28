@@ -65,6 +65,7 @@ project memory.
 | 22 | Multi-agent per initiative | Registry lookup + initiative filter |
 | 23 | Session persistence | `Codrift.SessionStore` (SQLite via Exqlite) stores Claude session UUIDs per initiative+dir; agents auto-detect session file and `--resume` on next start |
 | 24 | Session auto-restart | TUI re-launches Claude agents from saved sessions on boot (`:autostart_sessions`) |
+| 31 | Session store: multi-agent per dir | Schema keyed by `agent_id TEXT PRIMARY KEY`; `save/4`, `get_by_agent/1`, `list_by_dir/2`; migration drops old `(initiative_id, dir)` PK on first boot |
 
 ### ✅ Done — Integrations
 
@@ -89,6 +90,14 @@ project memory.
 | 32 | Keybinding config layer | `Codrift.Config.Keybindings` — loads `~/.codrift/keybindings.json`, merges over defaults; TUI dispatch uses reverse map; palette hints and footer status bar reflect configured keys |
 | 33 | Theme chooser | `Codrift.Config.Theme` — loads `~/.codrift/theme.json`; named themes: `default`, `dracula`, `nord`, `solarized`, `tokyo_night`; controls border colours, sidebar highlight, diff border, and CodeBlock syntax theme |
 
+### ✅ Done — Memory store, CLI & distribution
+
+| # | Step | Notes |
+|---|------|-------|
+| 34 | Per-initiative memory store + CLI | `Codrift.Memory` (FTS5, pure module); `Codrift.CLI.{TUI,MCP,Initiative,Session,Memory}`; `rel/commands/` shell scripts; `releases:` in `mix.exs`; Mix tasks delegate to CLI modules; 5 new MCP tools (`memory_search/add/delete/recent/list`); `initiative.md` template includes hardcoded ID + CLI/MCP usage block |
+| 35 | Distribution & installation | `install.sh` (curl-pipe-sh, 4-platform detection, `~/.local/share/codrift` + symlink); `.github/workflows/release.yml` (matrix: macOS ARM/Intel + Linux x86_64/ARM64 via `erlef/setup-beam`, `softprops/action-gh-release`) |
+| 36 | GitHub Actions CI | `.github/workflows/ci.yml` — `mix deps.get` → `compile --warnings-as-errors` → `format --check-formatted` → `credo --strict` → `test`; deps + build cache keyed on `mix.lock` |
+
 ### 🔬 Sidequests (future optimisations, not blocking)
 
 | Sidequest | Notes |
@@ -97,22 +106,24 @@ project memory.
 
 ---
 
+### 🚨 Upcoming — Critical (blocking UX)
+
+| # | Step | Notes |
+|---|------|-------|
+| 41 | Safe paste + input hardening | Shift+Enter fails to paste; certain chars (e.g. tab, special Unicode, multi-line pastes) crash or corrupt the TUI input buffer. Goal: 1:1 paste experience — any text a user can type or paste in a normal terminal works, with the only intended difference being Tab (map to Ctrl+Tab to preserve focus-switch behaviour). See *Upcoming: Safe Paste + Input Hardening*. |
+
 ### ⬜ Upcoming
 
 | # | Step | Notes |
 |---|------|-------|
-| 31 | Session store: multi-agent per dir | Keys by `(initiative_id, dir)` — only one UUID per dir. Blocks multiple Claude agents in same dir from resuming independently. See *Upcoming: Multi-agent Session Store*. |
-| 34 | SQLite + vector memory | `ecto_sqlite3` + `sqlite-vec` for semantic search over project context |
-| 35 | Git worktrees per initiative | Per-initiative git worktree per dir; isolated branches; TUI shows worktree branch + dirty state |
-| 36 | Additional CLI adapters | Codex CLI, Opencode, Cursor Agent, Gemini CLI, Copilot CLI, and others. See *Upcoming: Additional CLI Adapters*. |
-| 37 | External integrations | Import initiatives + context from Linear, GitHub, Jira, Notion, GitLab, Shortcut, Asana. See *Upcoming: External Integrations*. |
-| 38 | Distribution & installation | `mix release` + bundled ERTS → platform tarballs on GitHub Releases + curl-pipe-sh installer. See *Upcoming: Distribution & Installation*. |
-| 39 | GitHub Actions CI | PR checks (tests, Credo, format), release workflow (tags → tarballs on GitHub Releases). See *Upcoming: GitHub Actions CI*. |
+| 37 | Git worktrees per initiative | Per-initiative git worktree per dir; isolated branches; TUI shows worktree branch + dirty state. See *Upcoming: Git Worktrees per Initiative*. |
+| 38 | Additional CLI adapters | Codex CLI, Opencode, Cursor Agent, Gemini CLI, Copilot CLI, and others. See *Upcoming: Additional CLI Adapters*. |
+| 39 | External integrations | Import initiatives + context from Linear, GitHub, Jira, Notion, GitLab, Shortcut, Asana. See *Upcoming: External Integrations*. |
 | 40 | Website | Landing page showcasing features, demo, install one-liner. See *Upcoming: Website*. |
 
 ---
 
-## Upcoming: Additional CLI Adapters (Step 36)
+## Upcoming: Additional CLI Adapters (Step 38)
 
 The `Codrift.Agent` behaviour already abstracts all CLI differences. Adding a new
 agent type is purely a matter of creating a new adapter module under
@@ -160,7 +171,7 @@ return `args/2` from `args_continue/1`.
 
 ---
 
-## Upcoming: External Integrations (Step 37)
+## Upcoming: External Integrations (Step 39)
 
 Connect Codrift to external project management and collaboration tools so that initiatives can be seeded with real context (issue title, description, labels, linked PRs) and kept in sync as work progresses.
 
@@ -204,44 +215,248 @@ Connect Codrift to external project management and collaboration tools so that i
 
 ---
 
-## Upcoming: Multi-agent Session Store (Step 31)
+## Done: Per-initiative Memory Store + CLI, Distribution & CI (Steps 34–36)
 
-`Codrift.SessionStore` currently keys sessions by `(initiative_id, dir)` — only **one** Claude session UUID per directory. When two Claude agents run in the same dir, the second session overwrites the first.
+### Purpose
 
-### Fix: key by agent ID
+A shared, searchable knowledge base for every agent working on an initiative —
+regardless of which directory they are in. Agents use it to **offload context**
+(summaries, decisions, discovered patterns) instead of re-reading files or
+re-deriving knowledge each session. Fewer tokens spent re-discovering the past
+means faster, cheaper, more consistent work.
+
+### Memory store
+
+Each initiative gets a dedicated SQLite database at
+`~/.codrift/initiatives/{id}/memory.db` alongside the existing `initiative.md`.
+Uses SQLite's built-in FTS5 extension — no new dependencies, no vector
+embeddings, no ORM.
 
 ```sql
-CREATE TABLE IF NOT EXISTS claude_sessions (
-  agent_id      TEXT PRIMARY KEY,
-  initiative_id TEXT NOT NULL,
-  dir           TEXT NOT NULL,
-  session_id    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL
-)
+CREATE VIRTUAL TABLE IF NOT EXISTS memory USING fts5(
+  chunk_type,  -- see vocabulary below
+  content,
+  source,      -- who wrote it: agent_id, "user", file path
+  tokenize = 'porter unicode61'
+);
+-- rowid is implicit and used as the stable delete handle
 ```
 
-API changes:
-- `save/3` → `save(agent_id, initiative_id, dir, session_id)`
-- `get/2` → `get_by_agent(agent_id)`
-- Keep `list_by_dir(initiative_id, dir)` for `:autostart_sessions` flow
+**chunk_type vocabulary** (agents must use one of these):
 
-### Migration
+| Type | When to use |
+|------|-------------|
+| `decision` | Architectural or design choices made during this initiative |
+| `summary` | Completion summary after finishing a task or subtask |
+| `snippet` | Reusable code pattern or config fragment worth remembering |
+| `file_context` | What a key file does and why — saves re-reading it next session |
+| `note` | Free-form observation that doesn't fit another type |
 
-On `SessionStore.init/1`: if old schema detected (no `agent_id` column), drop and recreate the table.
+**`Codrift.Memory`** — pure module, no process, opens/closes its own DB
+connection (safe for `eval` context, GenServer delegation, and direct test calls):
+
+```elixir
+Codrift.Memory.search(initiative_id, "authentication middleware")
+# → [%{id: rowid, chunk_type, content, source, rank}]
+
+Codrift.Memory.add(initiative_id, "decision", "Use JWT, not sessions", "agent-abc")
+# → {:ok, rowid}
+
+Codrift.Memory.delete(initiative_id, rowid)
+# → :ok | {:error, :not_found}
+
+Codrift.Memory.recent(initiative_id, limit \\ 20)
+# → [%{id: rowid, chunk_type, content, source}]
+
+Codrift.Memory.list(initiative_id, chunk_type)
+# → [%{id: rowid, chunk_type, content, source}]  (filter by type)
+
+Codrift.Memory.stats(initiative_id)
+# → %{total: n, by_type: %{"decision" => 3, "snippet" => 7, ...}}
+```
+
+All results include `id` (the FTS5 rowid) so agents can delete stale or
+incorrect entries they previously wrote.
+
+The DB is removed automatically when the initiative is deleted.
+
+### Agent discoverability: initiative.md template
+
+`Initiative.Store.create/2` writes the following into `initiative.md` at
+creation time, with the initiative ID **hardcoded** so agents running in any
+subdirectory always have it without discovery:
+
+```markdown
+## Initiative
+
+ID: <initiative_id>
+Name: <initiative_name>
+
+## Memory Store
+
+Shared knowledge base for all agents on this initiative.
+Search it before starting work; update it when you finish or make a decision.
+This saves tokens and keeps all agents aligned.
+
+### Via MCP tool (Claude Code — preferred):
+Use the structured tools: memory_search, memory_add, memory_delete,
+memory_recent, memory_list. Pass initiative_id: "<initiative_id>" to each.
+
+### Via CLI (any agent):
+    codrift memory search <initiative_id> "your query"
+    codrift memory add    <initiative_id> decision "we use JWT not sessions"
+    codrift memory add    <initiative_id> summary  "completed auth module"
+    codrift memory add    <initiative_id> snippet  "pattern or code fragment"
+    codrift memory delete <initiative_id> <id>
+    codrift memory recent <initiative_id>
+    codrift memory list   <initiative_id> decision
+
+Results include an `id` field — use it with `memory delete` to remove
+outdated entries.
+```
+
+Every agent already reads `initiative.md` via `--add-dir` — no extra tool
+registration or wiring needed.
+
+### MCP tools
+
+Four new tools added to `Codrift.MCP.Handler`, available to any MCP client
+(Claude Code, etc.) whenever the TUI is running. These are first-class tools,
+not a bonus — Claude Code agents prefer structured tool calls over shell
+commands.
+
+| Tool | Arguments | Notes |
+|------|-----------|-------|
+| `memory_search` | `initiative_id`, `query` | FTS5 full-text search; returns `[{id, chunk_type, content, source, rank}]` |
+| `memory_add` | `initiative_id`, `chunk_type`, `content`, `source?` | Stores a new entry; returns `{id}` |
+| `memory_delete` | `initiative_id`, `id` | Deletes by rowid; agents can correct past entries |
+| `memory_recent` | `initiative_id`, `limit?` | Last N entries across all types |
+| `memory_list` | `initiative_id`, `chunk_type` | All entries of a specific type |
+
+The CLI path (`codrift memory ...`) works identically when the TUI is not
+running — both paths call the same `Codrift.Memory` functions.
+
+### CLI layer
+
+A first-class CLI exposed through the release binary. Each command group is a
+thin shell script in `rel/commands/` that calls `eval` with `System.argv()`,
+passing arguments via the `--` separator (supported natively by Elixir releases):
+
+```bash
+# rel/commands/memory.sh
+exec "$RELEASE_ROOT/bin/codrift" eval 'Codrift.CLI.Memory.run(System.argv())' -- "$@"
+```
+
+`eval` does not start the supervision tree, so all `Codrift.CLI.*` modules
+read storage directly — no GenServers required, works with TUI closed.
+
+#### Full command surface
+
+```
+codrift tui                                    # replaces: mix codrift.tui
+codrift mcp install                            # replaces: mix codrift.mcp.install
+
+codrift initiative list
+codrift initiative show   <id>
+codrift initiative create <name>
+codrift initiative add-dir <id> <path>
+codrift initiative status  <id> <status>
+codrift initiative delete  <id>
+
+codrift session list  [<initiative_id>]
+codrift session prune
+
+codrift memory search <id> <query>
+codrift memory add    <id> <type> <content>
+codrift memory delete <id> <rowid>
+codrift memory recent <id> [<limit>]
+codrift memory list   <id> <type>
+codrift memory stats  <id>
+```
+
+All `memory` commands print JSON to stdout and exit 0 on success, non-zero on
+error — suitable for agent shell tool calls and piping.
+
+#### Module layout
+
+```
+rel/
+  commands/
+    tui.sh
+    mcp.sh
+    initiative.sh
+    session.sh
+    memory.sh
+
+lib/codrift/
+  memory.ex              # pure module: FTS5 CRUD, opens/closes own DB conn
+  cli/
+    initiative.ex        # reads ~/.config/codrift/initiatives.json directly
+    session.ex           # opens ~/.codrift/codrift.db directly
+    memory.ex            # delegates to Codrift.Memory
+    mcp.ex               # mirrors Mix.Tasks.Codrift.Mcp.Install logic
+```
+
+#### Dev parity
+
+Mix tasks stay for dev convenience but delegate to CLI modules — no duplicated
+logic:
+
+```elixir
+defmodule Mix.Tasks.Codrift.Mcp.Install do
+  def run(args), do: Codrift.CLI.MCP.run(args)
+end
+```
 
 ---
 
-## Upcoming: SQLite + Vector Memory (Step 34)
+## Upcoming: Safe Paste + Input Hardening (Step 41)
 
-Extends `~/.codrift/codrift.db` (already used by `SessionStore`):
-- `ecto_sqlite3` or raw Exqlite
-- `sqlite-vec` extension for vector embeddings
-- Stores: conversation summaries, code snippets, file context, agent outputs
-- Retrieval: semantic similarity search on embeddings from a local/API model
+### Problem
+
+Two related bugs make copy-paste dangerous in the TUI input box:
+
+1. **Shift+Enter paste fails** — the intended shortcut to paste multi-line clipboard content does not work; pasted text is either dropped or corrupted.
+2. **Crash-on-paste** — certain characters in real-world text cause the TUI to break completely. Reproduction text includes: mixed Unicode (tables, em dashes, curly quotes), raw tab characters, multi-line blocks, and code fences. A paste that "looks normal" in a browser can bring down the TUI.
+
+Together these make pasting initiative context (issue descriptions, Notion excerpts, Slack threads) unreliable. Users are forced to manually retype or strip content before pasting, which defeats the purpose of the context-file workflow.
+
+### Goal
+
+**1:1 paste experience.** Any text that a user can paste into a standard terminal or text editor must work in the Codrift input box without corruption or crash. The only intentional difference from a plain `textarea` is that **Tab** triggers focus-switching in the TUI rather than inserting a literal tab — remap that to **Ctrl+Tab** so Tab behaviour is preserved for users who want it.
+
+### Scope
+
+| Area | Fix |
+|------|-----|
+| Shift+Enter | Wire Shift+Enter in `handle_event/2` to trigger a bracketed-paste or newline insert into the input buffer instead of being silently swallowed |
+| Tab key | Change TUI dispatch: bare Tab → insert `\t` in input buffer; focus-switch moves to Ctrl+Tab (or a configurable binding) |
+| Bracket paste mode | Enable xterm bracketed paste (`\e[?2004h`) on TUI start and disable on exit; wrap paste chunks in the input handler so the full paste is applied atomically |
+| Input buffer validation | Sanitise incoming bytes before appending to the buffer: strip ANSI escape sequences, handle multi-byte UTF-8 correctly, replace lone surrogates and null bytes |
+| Crash path | Audit all `handle_event` clauses that touch the input buffer for unguarded pattern matches that crash on unexpected byte values; add a catch-all that logs and discards rather than crashing |
+| Keybinding config | Expose `tab` and `paste` actions in `Codrift.Config.Keybindings` so power users can remap them |
+
+### Known triggering characters
+
+From user-reported paste (real issue description text):
+
+- Raw `\t` tab characters inside pasted text
+- Unicode en/em dashes (`–`, `—`), curly quotes (`"`, `"`, `'`, `'`)
+- Markdown table rows with `|` characters
+- Backtick fences (` ``` `)
+- Newlines mid-paste (Shift+Enter was the intended escape hatch but is broken)
+
+### Testing
+
+Add `async: true` unit tests covering:
+- Multi-line paste via bracketed paste sequence
+- Each known-bad character class applied to input buffer
+- Tab key inserts `\t` instead of switching focus
+- Ctrl+Tab switches focus correctly
 
 ---
 
-## Upcoming: Git Worktrees per Initiative (Step 35)
+## Upcoming: Git Worktrees per Initiative (Step 37)
 
 **New module: `Codrift.Worktree`** (pure, no process)
 - `ensure/2` — idempotently creates the worktree + branch, returns path
@@ -255,41 +470,6 @@ Branch: `codrift/<initiative-slug>/<dir-slug>`
 `AgentProcess` spawns with the worktree path as working dir. `Initiative.Store` persists `%{worktree_path, branch}` per dir entry. TUI sidebar shows branch + dirty indicator.
 
 ---
-
-## Upcoming: Distribution & Installation (Step 38)
-
-`curl -fsSL https://codrift.sh/install | sh` install experience. Uses `mix release` with bundled ERTS (not Burrito — see [decisions](docs/decisions.md)).
-
-### Platform matrix
-
-| Target | Runner |
-|--------|--------|
-| `aarch64-apple-darwin` | `macos-14` |
-| `x86_64-apple-darwin` | `macos-13` |
-| `x86_64-linux-gnu` | `ubuntu-latest` |
-| `aarch64-linux-gnu` | `ubuntu-24.04-arm` |
-
-### mix.exs release config
-
-```elixir
-releases: [
-  codrift: [
-    include_erts: true,
-    strip_beams: true,
-    steps: [:assemble, :tar]
-  ]
-]
-```
-
----
-
-## Upcoming: GitHub Actions CI (Step 39)
-
-Two workflows: `ci.yml` (push/PR checks) and `release.yml` (tag → tarballs on GitHub Releases).
-
-CI steps: `mix deps.get` → `mix format --check-formatted` → `mix credo --strict` → `mix test`
-
-Release matrix: builds on `macos-14`, `macos-13`, `ubuntu-latest`, `ubuntu-24.04-arm`; uploads tarballs via `softprops/action-gh-release`.
 
 ---
 

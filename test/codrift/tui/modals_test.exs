@@ -1,4 +1,5 @@
 defmodule Codrift.TUI.ModalsTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias Codrift.TUI.Modals

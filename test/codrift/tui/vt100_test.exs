@@ -1,4 +1,5 @@
 defmodule Codrift.TUI.VT100Test do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias Codrift.TUI.VT100

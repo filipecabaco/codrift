@@ -1,4 +1,5 @@
 defmodule Codrift.Web.RoutesTest do
+  @moduledoc false
   use ExUnit.Case, async: true
   import Plug.Test
   import Plug.Conn

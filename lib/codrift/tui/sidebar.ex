@@ -18,12 +18,14 @@ defmodule Codrift.TUI.Sidebar do
           {:diff_file, dir, path, adds, dels}
   """
 
+  alias Codrift.Initiative.Store
+  alias Codrift.Paths
+  alias Codrift.TUI.Styles
+
   alias ExRatatui.Style
   alias ExRatatui.Text.{Line, Span}
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.List, as: WidgetList
-  alias Codrift.Paths
-  alias Codrift.TUI.Styles
 
   @type entry ::
           {:initiative, id :: String.t(), name :: String.t(), dir_count :: non_neg_integer(),
@@ -55,7 +57,7 @@ defmodule Codrift.TUI.Sidebar do
         {:initiative, initiative.id, initiative.name, length(initiative.dirs),
          length(initiative_agents), initiative.status || :ongoing}
 
-      ctx_path = Codrift.Initiative.Store.context_path(initiative.id)
+      ctx_path = Store.context_path(initiative.id)
       context_rows = context_dir_entries(initiative.id, ctx_path, by_dir)
       dir_rows = Enum.flat_map(initiative.dirs, &dir_entries(initiative.id, &1, by_dir))
 
@@ -106,20 +108,16 @@ defmodule Codrift.TUI.Sidebar do
       all_files = Enum.flat_map(nonempty, fn {_, fs} -> fs end)
       total_adds = Enum.sum(Enum.map(all_files, & &1.additions))
       total_dels = Enum.sum(Enum.map(all_files, & &1.deletions))
-
-      dir_rows =
-        Enum.flat_map(nonempty, fn {dir, files} ->
-          dir_adds = Enum.sum(Enum.map(files, & &1.additions))
-          dir_dels = Enum.sum(Enum.map(files, & &1.deletions))
-
-          file_rows =
-            Enum.map(files, fn f -> {:diff_file, dir, f.path, f.additions, f.deletions} end)
-
-          [{:diff_dir, dir, dir_adds, dir_dels} | file_rows]
-        end)
-
+      dir_rows = Enum.flat_map(nonempty, &build_dir_row/1)
       [{:diff_all, total_adds, total_dels} | dir_rows]
     end
+  end
+
+  defp build_dir_row({dir, files}) do
+    dir_adds = Enum.sum(Enum.map(files, & &1.additions))
+    dir_dels = Enum.sum(Enum.map(files, & &1.deletions))
+    file_rows = Enum.map(files, fn f -> {:diff_file, dir, f.path, f.additions, f.deletions} end)
+    [{:diff_dir, dir, dir_adds, dir_dels} | file_rows]
   end
 
   @doc "Renders the sidebar `%WidgetList{}` widget for the diff tab."

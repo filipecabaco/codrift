@@ -16,12 +16,15 @@ defmodule Codrift do
 
   use Francis
 
+  alias Codrift.Initiative.Store
+  alias Codrift.MCP.Handler
+
   @impl true
   def start(_type, _args) do
     children = [
       {Registry, keys: :unique, name: Codrift.AgentRegistry},
       Codrift.SessionStore,
-      Codrift.Initiative.Store,
+      Store,
       Codrift.AgentSupervisor,
       {Task.Supervisor, name: Codrift.TaskSupervisor},
       {Bandit,
@@ -35,13 +38,13 @@ defmodule Codrift do
   get("/", fn _ -> "ok" end)
 
   get("/api/initiatives", fn _conn ->
-    Enum.map(Codrift.Initiative.Store.list(), &Codrift.Initiative.to_map/1)
+    Enum.map(Store.list(), &Codrift.Initiative.to_map/1)
   end)
 
   get("/api/diff/:initiative_id", fn conn ->
     initiative_id = conn.params["initiative_id"]
 
-    case Codrift.Initiative.Store.get(initiative_id) do
+    case Store.get(initiative_id) do
       {:ok, initiative} ->
         diffs =
           Enum.flat_map(initiative.dirs, fn dir ->
@@ -99,7 +102,7 @@ defmodule Codrift do
   post("/mcp", fn conn ->
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(200, Codrift.MCP.Handler.dispatch(conn.body_params))
+    |> Plug.Conn.send_resp(200, Handler.dispatch(conn.body_params))
   end)
 
   sse("/mcp/sse", fn

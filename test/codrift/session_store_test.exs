@@ -1,4 +1,5 @@
 defmodule Codrift.SessionStoreTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias Codrift.SessionStore

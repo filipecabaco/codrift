@@ -1,4 +1,5 @@
 defmodule Codrift.TUI.DirPickerTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias Codrift.TUI.DirPicker

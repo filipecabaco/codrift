@@ -6,13 +6,15 @@ defmodule Codrift.TUI.Modals do
   main layout. Delegates layout math to `Codrift.TUI.Layout`.
   """
 
+  alias Codrift.Config.Theme
+  alias Codrift.TUI.Layout
+
   alias ExRatatui.Style
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.Clear
   alias ExRatatui.Widgets.List, as: WidgetList
   alias ExRatatui.Widgets.Paragraph
   alias ExRatatui.Widgets.TextInput
-  alias Codrift.TUI.Layout
 
   @type render_result :: [{term(), term()}]
 
@@ -20,13 +22,16 @@ defmodule Codrift.TUI.Modals do
   Returns `{widget, rect}` pairs for the active modal, or `[]` when no
   modal is open. Append the result to the base widget list in `render/2`.
   """
-  def render(%{modal: :none}, _frame), do: []
-  def render(%{modal: :new_name} = state, frame), do: new_name(state, frame)
-  def render(%{modal: :new_dir} = state, frame), do: new_dir(state, frame)
-  def render(%{modal: :confirm_delete} = state, frame), do: confirm_delete(state, frame)
-  def render(%{modal: :palette} = state, frame), do: palette(state, frame)
-  def render(%{modal: :new_context_file} = state, frame), do: new_context_file(state, frame)
-  def render(%{modal: :theme_picker} = state, frame), do: theme_picker(state, frame)
+  def render(%{modal: %{type: :none}}, _frame), do: []
+  def render(%{modal: %{type: :new_name}} = state, frame), do: new_name(state, frame)
+  def render(%{modal: %{type: :new_dir}} = state, frame), do: new_dir(state, frame)
+  def render(%{modal: %{type: :confirm_delete}} = state, frame), do: confirm_delete(state, frame)
+  def render(%{modal: %{type: :palette}} = state, frame), do: palette(state, frame)
+
+  def render(%{modal: %{type: :new_context_file}} = state, frame),
+    do: new_context_file(state, frame)
+
+  def render(%{modal: %{type: :theme_picker}} = state, frame), do: theme_picker(state, frame)
 
   @doc """
   Filters `actions` whose label contains `query` (case-insensitive).
@@ -47,19 +52,19 @@ defmodule Codrift.TUI.Modals do
       {%Clear{}, rect},
       {bordered(rect, " New Initiative ", :yellow), rect},
       {%Paragraph{text: "Name:", style: %Style{fg: :white}}, %{inner | height: 1}},
-      {input(state.modal_input, "e.g. my-project"), %{inner | y: inner.y + 1, height: 1}},
+      {input(state.modal.input, "e.g. my-project"), %{inner | y: inner.y + 1, height: 1}},
       {hint("Enter: next  Esc: cancel"), %{inner | y: inner.y + 3, height: 1}}
     ]
   end
 
   defp new_dir(state, frame) do
-    suggestions = state.dir_suggestions
+    suggestions = state.modal.dir_picker.suggestions
     total_height = if suggestions == [], do: 7, else: min(4 + length(suggestions) + 1, 18)
     rect = Layout.center_rect(frame, 65, total_height)
     inner = Layout.inset(rect, 1)
 
     title =
-      case state.modal_context do
+      case state.modal.context do
         {:creating, name} -> " New Initiative: directory for '#{name}' "
         :add_dir -> " Add Directory "
         _ -> " Directory "
@@ -68,7 +73,7 @@ defmodule Codrift.TUI.Modals do
     base = [
       {%Clear{}, rect},
       {bordered(rect, title, :yellow), rect},
-      {input(state.modal_input, "~/projects/my-repo  (↑/↓ browse  Tab: descend)"),
+      {input(state.modal.input, "~/projects/my-repo  (↑/↓ browse  Tab: descend)"),
        %{inner | height: 1}}
     ]
 
@@ -82,7 +87,7 @@ defmodule Codrift.TUI.Modals do
         [
           {%WidgetList{
              items: items,
-             selected: state.dir_suggestion_cursor,
+             selected: state.modal.dir_picker.cursor,
              highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
              highlight_symbol: "▶ "
            }, %{inner | y: inner.y + 2, height: inner.height - 2}}
@@ -90,7 +95,7 @@ defmodule Codrift.TUI.Modals do
     end
   end
 
-  defp confirm_delete(%{modal_context: {:delete_initiative, _id, name}}, frame) do
+  defp confirm_delete(%{modal: %{context: {:delete_initiative, _id, name}}}, frame) do
     rect = Layout.center_rect(frame, 52, 8)
     inner = Layout.inset(rect, 1)
 
@@ -107,7 +112,7 @@ defmodule Codrift.TUI.Modals do
     ]
   end
 
-  defp confirm_delete(%{modal_context: {:remove_dir, _initiative_id, dir}}, frame) do
+  defp confirm_delete(%{modal: %{context: {:remove_dir, _initiative_id, dir}}}, frame) do
     rect = Layout.center_rect(frame, 60, 7)
     inner = Layout.inset(rect, 1)
 
@@ -123,7 +128,7 @@ defmodule Codrift.TUI.Modals do
     ]
   end
 
-  defp confirm_delete(%{modal_context: {:delete_context_file, _path, name}}, frame) do
+  defp confirm_delete(%{modal: %{context: {:delete_context_file, _path, name}}}, frame) do
     rect = Layout.center_rect(frame, 52, 7)
     inner = Layout.inset(rect, 1)
 
@@ -139,7 +144,7 @@ defmodule Codrift.TUI.Modals do
     ]
   end
 
-  defp confirm_delete(%{modal_context: {:stop_agent, agent_id}}, frame) do
+  defp confirm_delete(%{modal: %{context: {:stop_agent, agent_id}}}, frame) do
     rect = Layout.center_rect(frame, 52, 7)
     inner = Layout.inset(rect, 1)
     short = String.slice(agent_id, 0, 12)
@@ -157,7 +162,7 @@ defmodule Codrift.TUI.Modals do
   end
 
   defp palette(state, frame) do
-    filtered = filter_actions(state.actions, state.palette_filter)
+    filtered = filter_actions(state.modal.actions, state.modal.palette.filter)
     height = min(length(filtered) + 5, 20)
     rect = Layout.center_rect(frame, 60, height)
     inner = Layout.inset(rect, 1)
@@ -170,10 +175,10 @@ defmodule Codrift.TUI.Modals do
     [
       {%Clear{}, rect},
       {bordered(rect, " Command Palette ", :yellow), rect},
-      {input(state.modal_input, "Type to filter…"), %{inner | height: 1}},
+      {input(state.modal.input, "Type to filter…"), %{inner | height: 1}},
       {%WidgetList{
          items: items,
-         selected: state.palette_cursor,
+         selected: state.modal.palette.cursor,
          highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
          highlight_symbol: "▶ "
        }, %{inner | y: inner.y + 2, height: max(inner.height - 2, 1)}}
@@ -182,7 +187,7 @@ defmodule Codrift.TUI.Modals do
 
   defp new_context_file(state, frame) do
     ctx_dir =
-      case state.modal_context do
+      case state.modal.context do
         {:new_context_file, path} -> path
         _ -> "context folder"
       end
@@ -199,21 +204,21 @@ defmodule Codrift.TUI.Modals do
        }, %{inner | height: 1}},
       {%Paragraph{text: "Filename:", style: %Style{fg: :white}},
        %{inner | y: inner.y + 2, height: 1}},
-      {input(state.modal_input, "e.g. README.md  plan.md  context.txt"),
+      {input(state.modal.input, "e.g. README.md  plan.md  context.txt"),
        %{inner | y: inner.y + 3, height: 1}},
       {hint("Enter: create  Esc: cancel"), %{inner | y: inner.y + 5, height: 1}}
     ]
   end
 
   defp theme_picker(state, frame) do
-    themes = Codrift.Config.Theme.all() |> Enum.sort_by(fn {name, _} -> name end)
+    themes = Theme.all() |> Enum.sort_by(fn {name, _} -> name end)
     height = length(themes) + 4
     rect = Layout.center_rect(frame, 40, height)
     inner = Layout.inset(rect, 1)
 
     items =
       Enum.map(themes, fn {_name, theme} ->
-        marker = if theme.name == state.theme_before_picker.name, do: " ●", else: "  "
+        marker = if theme.name == state.modal.theme_picker.before.name, do: " ●", else: "  "
         "#{marker} #{theme.name}"
       end)
 
@@ -222,7 +227,7 @@ defmodule Codrift.TUI.Modals do
       {bordered(rect, " Choose Theme ", :yellow), rect},
       {%WidgetList{
          items: items,
-         selected: state.theme_picker_cursor,
+         selected: state.modal.theme_picker.cursor,
          highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
          highlight_symbol: "▶ "
        }, %{inner | height: max(inner.height - 1, 1)}},

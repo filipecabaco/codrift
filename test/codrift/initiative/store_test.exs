@@ -1,4 +1,5 @@
 defmodule Codrift.Initiative.StoreTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
   alias Codrift.Initiative

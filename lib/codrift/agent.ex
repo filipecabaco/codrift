@@ -69,7 +69,7 @@ defmodule Codrift.Agent do
   """
   @callback args_continue(dir :: String.t()) :: [String.t()]
 
-  @doc "Returns additional environment variables as `{\"KEY\", \"VALUE\"}` tuples."
+  @doc ~S[Returns additional environment variables as `{"KEY", "VALUE"}` tuples.]
   @callback env(dir :: String.t()) :: [{String.t(), String.t()}]
 
   @doc """
@@ -79,6 +79,6 @@ defmodule Codrift.Agent do
   """
   @callback parse_status(output :: binary()) :: :idle | :running | :awaiting_input | nil
 
-  @doc "Returns the human-readable adapter name (e.g. \"claude\", \"aider\", \"terminal\")."
+  @doc ~S[Returns the human-readable adapter name (e.g. "claude", "aider", "terminal").]
   def adapter_name(module), do: module |> Module.split() |> List.last() |> String.downcase()
 end

@@ -21,3 +21,7 @@ erl_crash.dump
 
 # Claude Code agent worktrees and session data
 .claude/
+
+# Dialyzer PLT files (cached in CI, not committed)
+/priv/plts/*.plt
+/priv/plts/*.plt.hash

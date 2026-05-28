@@ -1,0 +1,11 @@
+defmodule Codrift.TUI.ModalState do
+  @moduledoc false
+
+  defstruct type: :none,
+            input: nil,
+            context: nil,
+            actions: [],
+            palette: %{cursor: 0, filter: ""},
+            theme_picker: %{cursor: 0, before: nil},
+            dir_picker: %{suggestions: [], cursor: 0}
+end

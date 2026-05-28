@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build · ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: x86_64-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-linux-gnu
+            runner: ubuntu-24.04-arm
+
+    env:
+      MIX_ENV: prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        id: deps-cache
+        with:
+          path: deps
+          key: ${{ runner.os }}-${{ matrix.target }}-prod-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-prod-mix-
+
+      - name: Install dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: mix deps.get --only prod
+
+      - name: Build release
+        run: mix release
+
+      - name: Rename tarball with platform suffix
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mv _build/prod/rel/codrift/codrift-*.tar.gz \
+             "codrift-${VERSION}-${{ matrix.target }}.tar.gz"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "codrift-*.tar.gz"
+          generate_release_notes: true

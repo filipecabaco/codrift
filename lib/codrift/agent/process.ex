@@ -30,6 +30,9 @@ defmodule Codrift.AgentProcess do
   use GenServer
   require Logger
 
+  alias Codrift.Agent.Adapters.Claude
+  alias Codrift.Initiative.Store
+
   defstruct [
     :id,
     :initiative_id,
@@ -114,9 +117,11 @@ defmodule Codrift.AgentProcess do
     # --resume (subsequent runs). Storing it upfront means we never need to
     # scan the filesystem after startup to discover which UUID was created.
     session_id =
-      if adapter == Codrift.Agent.Adapters.Claude,
-        do: ensure_session_id(id, initiative_id, dir),
-        else: nil
+      if adapter == Claude do
+        ensure_session_id(id, initiative_id, dir)
+      else
+        nil
+      end
 
     context_opts = [session_id: session_id] ++ initiative_context_opts(initiative_id)
 
@@ -394,7 +399,7 @@ defmodule Codrift.AgentProcess do
   #   context_dir:   the context folder path (for --add-dir in Claude adapter)
   #   context_files: list of absolute file paths (for --read in Aider, etc.)
   defp initiative_context_opts(initiative_id) do
-    ctx_dir = Codrift.Initiative.Store.context_path(initiative_id)
+    ctx_dir = Store.context_path(initiative_id)
 
     base = if File.dir?(ctx_dir), do: [context_dir: ctx_dir], else: []
 

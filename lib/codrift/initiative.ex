@@ -70,9 +70,13 @@ defmodule Codrift.Initiative do
   map is malformed (e.g. an invalid ISO-8601 timestamp).
   """
   def from_map(%{"id" => id, "name" => name, "dirs" => dirs, "created_at" => ts} = data) do
-    with {:ok, dt, _} <- DateTime.from_iso8601(ts) do
-      status = data |> Map.get("status", "ongoing") |> String.to_existing_atom()
-      {:ok, %__MODULE__{id: id, name: name, dirs: dirs, created_at: dt, status: status}}
+    case DateTime.from_iso8601(ts) do
+      {:ok, dt, _} ->
+        status = data |> Map.get("status", "ongoing") |> String.to_existing_atom()
+        {:ok, %__MODULE__{id: id, name: name, dirs: dirs, created_at: dt, status: status}}
+
+      error ->
+        error
     end
   end
 

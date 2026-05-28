@@ -1,6 +1,8 @@
 defmodule Codrift.TUI.SidebarTest do
+  @moduledoc false
   use ExUnit.Case, async: true
 
+  alias Codrift.Agent.Adapters.Claude
   alias Codrift.Diff.FileDiff
   alias Codrift.Initiative
   alias Codrift.TUI.Sidebar
@@ -31,7 +33,7 @@ defmodule Codrift.TUI.SidebarTest do
         id: "agent-1",
         initiative_id: "init-1",
         dir: "/repo",
-        adapter: Codrift.Agent.Adapters.Claude,
+        adapter: Claude,
         status: :running,
         mode: :pty
       },
