@@ -22,13 +22,13 @@ defmodule Codrift.MixProject do
   end
 
   def application do
-    [mod: {Codrift, []}, extra_applications: [:logger]]
+    [mod: {Codrift, []}, extra_applications: [:logger, :inets, :ssl]]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  @cli_commands ~w(tui mcp initiative session memory)
+  @cli_commands ~w(tui mcp initiative session memory integration)
 
   defp releases do
     [

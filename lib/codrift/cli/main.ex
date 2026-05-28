@@ -16,6 +16,7 @@ defmodule Codrift.CLI.Main do
   """
 
   alias Codrift.CLI.Initiative
+  alias Codrift.CLI.Integration
   alias Codrift.CLI.MCP
   alias Codrift.CLI.Memory
   alias Codrift.CLI.Session
@@ -26,6 +27,7 @@ defmodule Codrift.CLI.Main do
 
   @spec run([String.t()]) :: :ok
   def run(["initiative" | rest]), do: Initiative.run(rest)
+  def run(["integration" | rest]), do: Integration.run(rest)
   def run(["session" | rest]), do: Session.run(rest)
   def run(["memory" | rest]), do: Memory.run(rest)
   def run(["tui" | rest]), do: TUI.run(rest)
@@ -34,11 +36,12 @@ defmodule Codrift.CLI.Main do
   def run(_) do
     IO.puts("""
     Usage:
-      codrift initiative <subcommand>
-      codrift session    <subcommand>
-      codrift memory     <subcommand>
+      codrift initiative  <subcommand>
+      codrift integration <subcommand>
+      codrift session     <subcommand>
+      codrift memory      <subcommand>
       codrift tui
-      codrift mcp        <subcommand>
+      codrift mcp         <subcommand>
 
     Run `codrift <command>` with no arguments for per-command help.
     """)

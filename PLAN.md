@@ -112,13 +112,18 @@ project memory.
 
 ---
 
+### ✅ Done — External integrations
+
+| # | Step | Notes |
+|---|------|-------|
+| 39 | External integrations | `Codrift.Integration` behaviour + `%Item{}` struct; `Codrift.Integration.HTTP` (`:httpc`, no extra deps); 9 adapters: GitHub Issues, GitHub Projects v2, Linear Issues, Linear Projects, GitLab, Jira, Notion, Shortcut, Asana; 3 new MCP tools (`list_integration_items`, `import_from_integration`, `sync_initiative_context`); `Codrift.CLI.Integration` (`codrift integration services/list/import/sync`); credentials in env vars; context written to `~/.codrift/initiatives/{id}/integration.md`; metadata in `integration.json` for sync. |
+
 ### ⬜ Upcoming
 
 | # | Step | Notes |
 |---|------|-------|
 | 37 | Git worktrees per initiative | Per-initiative git worktree per dir; isolated branches; TUI shows worktree branch + dirty state. See *Upcoming: Git Worktrees per Initiative*. |
 | 38 | Additional CLI adapters | Codex CLI, Opencode, Cursor Agent, Gemini CLI, Copilot CLI, and others. See *Upcoming: Additional CLI Adapters*. |
-| 39 | External integrations | Import initiatives + context from Linear, GitHub, Jira, Notion, GitLab, Shortcut, Asana. See *Upcoming: External Integrations*. |
 | 40 | Website | Landing page showcasing features, demo, install one-liner. See *Upcoming: Website*. |
 
 ---
@@ -372,6 +377,11 @@ codrift memory delete <id> <rowid>
 codrift memory recent <id> [<limit>]
 codrift memory list   <id> <type>
 codrift memory stats  <id>
+
+codrift integration services
+codrift integration list   <service> [filter]
+codrift integration import <service> <item_id> [--dir=<path>]
+codrift integration sync   <initiative_id>
 ```
 
 All `memory` commands print JSON to stdout and exit 0 on success, non-zero on

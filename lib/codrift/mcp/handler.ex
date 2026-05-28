@@ -28,6 +28,9 @@ defmodule Codrift.MCP.Handler do
     - `memory_delete` — delete a memory entry by id
     - `memory_recent` — return the most recent memory entries
     - `memory_list` — return all entries of a specific type
+    - `list_integration_items` — list issues/tasks from a connected external service
+    - `import_from_integration` — create an initiative from an external item
+    - `sync_initiative_context` — re-fetch and overwrite the integration context file
   """
 
   alias Codrift.Agent.Adapters.Aider
@@ -237,7 +240,46 @@ defmodule Codrift.MCP.Handler do
     end
   end
 
+  defp call_tool("list_integration_items", %{"service" => service} = args) do
+    opts = if filter = args["filter"], do: [filter: filter], else: []
+
+    with {:ok, adapter} <- Codrift.Integration.adapter_for(service),
+         {:ok, items} <- adapter.list_items(opts) do
+      {:ok, Enum.map(items, &integration_item_to_map/1)}
+    end
+  end
+
+  defp call_tool(
+         "import_from_integration",
+         %{"service" => service, "item_id" => item_id} = args
+       ) do
+    opts = if dir = args["dir"], do: [dir: dir], else: []
+
+    case Codrift.Integration.import_item(service, item_id, opts) do
+      {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
+  defp call_tool("sync_initiative_context", %{"initiative_id" => id}) do
+    case Codrift.Integration.sync_initiative(id) do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
   defp call_tool(name, _args), do: {:error, "unknown tool: #{name}"}
+
+  defp integration_item_to_map(%Codrift.Integration.Item{} = item) do
+    %{
+      id: item.id,
+      title: item.title,
+      url: item.url,
+      status: item.status,
+      assignee: item.assignee,
+      labels: item.labels || []
+    }
+  end
 
   defp dir_diffs(dir) do
     case Codrift.Diff.generate(dir) do
@@ -454,6 +496,73 @@ defmodule Codrift.MCP.Handler do
             }
           },
           "required" => ["initiative_id", "chunk_type"]
+        }
+      },
+      %{
+        "name" => "list_integration_items",
+        "description" =>
+          "List open issues or tasks from a connected external service. " <>
+            "Returns id, title, url, status, assignee, and labels for each item. " <>
+            "Use import_from_integration to turn one into an initiative.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "service" => %{
+              "type" => "string",
+              "enum" => Codrift.Integration.valid_services(),
+              "description" => "Integration service name"
+            },
+            "filter" => %{
+              "type" => "string",
+              "description" =>
+                "Service-specific filter: GitHub/GitLab state (open/closed/all), " <>
+                  "Linear team key, Jira JQL query, Notion database ID, " <>
+                  "GitHub Projects owner/number (e.g. acme/5), Asana project GID"
+            }
+          },
+          "required" => ["service"]
+        }
+      },
+      %{
+        "name" => "import_from_integration",
+        "description" =>
+          "Create a Codrift initiative from a single item in an external service. " <>
+            "Fetches the item, creates an initiative named after it, and writes " <>
+            "integration.md with full context into the initiative folder.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "service" => %{
+              "type" => "string",
+              "enum" => Codrift.Integration.valid_services()
+            },
+            "item_id" => %{
+              "type" => "string",
+              "description" =>
+                "Service-specific item identifier: " <>
+                  "GitHub owner/repo#number, Linear ENG-123 or UUID, " <>
+                  "GitLab project#iid, Jira ENG-42, Notion page ID, " <>
+                  "Shortcut story ID, Asana task GID"
+            },
+            "dir" => %{
+              "type" => "string",
+              "description" => "Optional working directory path to add to the initiative"
+            }
+          },
+          "required" => ["service", "item_id"]
+        }
+      },
+      %{
+        "name" => "sync_initiative_context",
+        "description" =>
+          "Re-fetch the external item and overwrite integration.md for an initiative " <>
+            "that was previously created via import_from_integration.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"}
+          },
+          "required" => ["initiative_id"]
         }
       }
     ]
