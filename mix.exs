@@ -22,13 +22,13 @@ defmodule Codrift.MixProject do
   end
 
   def application do
-    [mod: {Codrift, []}, extra_applications: [:logger]]
+    [mod: {Codrift, []}, extra_applications: [:logger, :inets, :ssl]]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  @cli_commands ~w(tui mcp initiative session memory)
+  @cli_commands ~w(tui mcp initiative session memory integration)
 
   defp releases do
     [
@@ -64,6 +64,7 @@ defmodule Codrift.MixProject do
       {:ex_ratatui, path: "vendor/ex_ratatui", override: true},
       {:erlexec, "~> 2.0"},
       {:exqlite, "~> 0.23"},
+      {:quantum, "~> 3.0"},
       # Code quality
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},

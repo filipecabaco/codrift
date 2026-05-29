@@ -18,6 +18,8 @@ defmodule Codrift do
 
   alias Codrift.Initiative.Store
   alias Codrift.MCP.Handler
+  alias Codrift.OAuth
+  alias Codrift.OAuth.Config, as: OAuthConfig
 
   @impl true
   def start(_type, _args) do
@@ -27,6 +29,8 @@ defmodule Codrift do
       Store,
       Codrift.AgentSupervisor,
       {Task.Supervisor, name: Codrift.TaskSupervisor},
+      Codrift.OAuth.StateStore,
+      Codrift.Scheduler,
       {Bandit,
        [plug: __MODULE__, startup_log: false] ++
          Application.get_env(:codrift, :bandit_opts, [])}
@@ -98,6 +102,142 @@ defmodule Codrift do
     {:close, _reason}, _socket ->
       :ok
   end)
+
+  # ── OAuth2 routes ────────────────────────────────────────────────────────────
+
+  get("/oauth/start/:service", fn conn ->
+    service = conn.params["service"]
+
+    case OAuth.start_flow(service) do
+      {:ok, %{flow: :pkce_browser, auth_url: url}} ->
+        %{
+          "flow" => "pkce_browser",
+          "service" => service,
+          "auth_url" => url,
+          "redirect_uri" => OAuthConfig.redirect_uri(service),
+          "message" => "Open auth_url in your browser to authorize #{service}"
+        }
+
+      {:ok, %{flow: :guided_token, instructions: instructions}} ->
+        %{
+          "flow" => "guided_token",
+          "service" => service,
+          "instructions" => instructions,
+          "message" => "Follow the instructions to create an integration token"
+        }
+
+      {:error, reason} ->
+        json(conn, 400, %{"error" => to_string(reason)})
+    end
+  end)
+
+  get("/oauth/callback/:service", fn conn ->
+    service = conn.params["service"]
+    code = conn.params["code"]
+    state = conn.params["state"]
+    error = conn.params["error"]
+
+    cond do
+      error ->
+        description = conn.params["error_description"] || error
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/html")
+        |> Plug.Conn.send_resp(400, oauth_error_html(service, description))
+
+      is_nil(code) or is_nil(state) ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/html")
+        |> Plug.Conn.send_resp(400, oauth_error_html(service, "Missing code or state parameter"))
+
+      true ->
+        case OAuth.handle_callback(service, code, state) do
+          {:ok, _service} ->
+            conn
+            |> Plug.Conn.put_resp_content_type("text/html")
+            |> Plug.Conn.send_resp(200, oauth_success_html(service))
+
+          {:error, reason} ->
+            conn
+            |> Plug.Conn.put_resp_content_type("text/html")
+            |> Plug.Conn.send_resp(400, oauth_error_html(service, to_string(reason)))
+        end
+    end
+  end)
+
+  get("/oauth/status", fn _conn ->
+    all_services = OAuthConfig.supported_services()
+
+    status =
+      Map.new(all_services, fn service ->
+        {service, %{"connected" => OAuth.connected?(service)}}
+      end)
+
+    %{"services" => status}
+  end)
+
+  defp oauth_success_html(service) do
+    """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Codrift — Connected</title>
+      <style>
+        body { font-family: system-ui, sans-serif; max-width: 480px; margin: 80px auto; padding: 0 16px; color: #1a1a1a; }
+        h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+        .service { font-weight: 600; text-transform: capitalize; }
+        p { color: #555; line-height: 1.5; }
+        .ok { color: #16a34a; font-size: 2rem; }
+      </style>
+    </head>
+    <body>
+      <p class="ok">&#10003;</p>
+      <h1>Connected to <span class="service">#{service}</span></h1>
+      <p>Codrift now has access to your #{service} account. You can close this window.</p>
+      <p>Run <code>codrift integration list #{service}</code> to see your items.</p>
+    </body>
+    </html>
+    """
+  end
+
+  defp oauth_error_html(service, reason) do
+    safe_reason = html_escape(reason)
+
+    """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Codrift — Authorization failed</title>
+      <style>
+        body { font-family: system-ui, sans-serif; max-width: 480px; margin: 80px auto; padding: 0 16px; color: #1a1a1a; }
+        h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+        p { color: #555; line-height: 1.5; }
+        .err { color: #dc2626; font-size: 2rem; }
+        .reason { font-family: monospace; background: #f5f5f5; padding: 8px 12px; border-radius: 4px; }
+      </style>
+    </head>
+    <body>
+      <p class="err">&#10007;</p>
+      <h1>Authorization failed for #{service}</h1>
+      <p class="reason">#{safe_reason}</p>
+      <p>Try running <code>codrift integration auth #{service}</code> again.</p>
+    </body>
+    </html>
+    """
+  end
+
+  defp html_escape(str) do
+    str
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&#39;")
+  end
+
+  # ── MCP routes ───────────────────────────────────────────────────────────────
 
   post("/mcp", fn conn ->
     conn

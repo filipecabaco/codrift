@@ -18,6 +18,7 @@ defmodule Codrift.TUIStateTest do
 
   alias Codrift.Config.{Keybindings, Theme}
   alias Codrift.TUI
+  alias Codrift.TUI.Modals
   alias ExRatatui.Event.Key
 
   # A tiny action list used wherever @actions is needed so tests stay self-contained.
@@ -133,7 +134,9 @@ defmodule Codrift.TUIStateTest do
         actions: Map.get(overrides, :actions, @test_actions),
         palette: Map.merge(%{cursor: 0, filter: ""}, palette_mapped),
         theme_picker: Map.get(overrides, :theme_picker, %{cursor: 0, before: nil}),
-        dir_picker: Map.get(overrides, :dir_picker, %{suggestions: [], cursor: 0})
+        dir_picker: Map.get(overrides, :dir_picker, %{suggestions: [], cursor: 0}),
+        source_picker: Map.get(overrides, :source_picker, %{cursor: 0}),
+        service_setup: Map.get(overrides, :service_setup, %{cursor: 0})
       },
       diff:
         Map.merge(
@@ -195,11 +198,12 @@ defmodule Codrift.TUIStateTest do
       assert new_state.modal.type == :none
     end
 
-    test "n opens :new_name modal when sidebar is focused" do
+    test "n opens :source_picker modal when sidebar is focused" do
       state = base_state()
       {:noreply, new_state} = TUI.handle_event(key("n"), state)
 
-      assert new_state.modal.type == :new_name
+      assert new_state.modal.type == :source_picker
+      assert new_state.modal.context == :source_for_new
     end
 
     test "Ctrl+P opens command palette with reset cursor and filter" do
@@ -876,6 +880,143 @@ defmodule Codrift.TUIStateTest do
       {:noreply, new_state} = TUI.handle_info({:apply_resize, 80, 24}, state)
 
       assert new_state.main_scroll == 0
+    end
+  end
+
+  # ── Initiative creation — source picker flow ───────────────────────────────
+
+  describe "initiative creation: n → source picker" do
+    test "n opens :source_picker and :new_name is no longer the first step", _ctx do
+      state = base_state()
+      {:noreply, new_state} = TUI.handle_event(key("n"), state)
+
+      assert new_state.modal.type == :source_picker
+      assert new_state.modal.context == :source_for_new
+    end
+
+    test "Esc cancels :source_picker and sets status to 'Cancelled'", _ctx do
+      state = base_state(%{modal: :source_picker, modal_context: :source_for_new})
+
+      {:noreply, new_state} = TUI.handle_event(key("esc"), state)
+
+      assert new_state.modal.type == :none
+      assert new_state.status == "Cancelled"
+    end
+  end
+
+  describe ":new_name modal (reached from source picker 'new')" do
+    test "Enter with a non-empty name transitions to :new_dir", _ctx do
+      input = ExRatatui.text_input_new()
+      ExRatatui.text_input_set_value(input, "my-project")
+      state = base_state(%{modal: :new_name, modal_context: :creating_blank, modal_input: input})
+
+      {:noreply, new_state} = TUI.handle_event(key("enter"), state)
+
+      assert new_state.modal.type == :new_dir
+      assert new_state.modal.context == {:creating, "my-project"}
+    end
+
+    test "Enter with empty name flashes an error and stays in :new_name", _ctx do
+      input = ExRatatui.text_input_new()
+      ExRatatui.text_input_set_value(input, "  ")
+      state = base_state(%{modal: :new_name, modal_input: input})
+
+      {:noreply, new_state} = TUI.handle_event(key("enter"), state)
+
+      assert new_state.modal.type == :new_name
+      assert String.contains?(new_state.status, "empty")
+    end
+  end
+
+  describe "source picker navigation" do
+    defp source_picker_state(cursor) do
+      base_state(%{modal: :source_picker, modal_context: :source_for_new})
+      |> put_in([Access.key!(:modal), Access.key!(:source_picker)], %{cursor: cursor})
+    end
+
+    test "down arrow increments cursor", _ctx do
+      {:noreply, new_state} = TUI.handle_event(key("down"), source_picker_state(0))
+      assert new_state.modal.source_picker.cursor == 1
+    end
+
+    test "up arrow at 0 does not go negative", _ctx do
+      {:noreply, new_state} = TUI.handle_event(key("up"), source_picker_state(0))
+      assert new_state.modal.source_picker.cursor == 0
+    end
+
+    test "up arrow decrements cursor", _ctx do
+      {:noreply, new_state} = TUI.handle_event(key("up"), source_picker_state(3))
+      assert new_state.modal.source_picker.cursor == 2
+    end
+
+    test "down arrow clamps at the last source entry", _ctx do
+      max = length(Modals.sources()) - 1
+      {:noreply, new_state} = TUI.handle_event(key("down"), source_picker_state(max))
+      assert new_state.modal.source_picker.cursor == max
+    end
+
+    test "Enter on 'new' (cursor 0) transitions to :new_name", _ctx do
+      {:noreply, new_state} = TUI.handle_event(key("enter"), source_picker_state(0))
+
+      assert new_state.modal.type == :new_name
+      assert new_state.modal.context == :creating_blank
+    end
+
+    # When a service is not connected and has an OAuth config, selecting it starts
+    # an auth flow. Without client_id configured the flow errors and flashes a message
+    # — the modal stays as source_picker (no crash, no navigation).
+    test "Enter on an unconnected OAuth service without client_id flashes an error", _ctx do
+      github_cursor =
+        Enum.find_index(Modals.sources(), fn {k, _} -> k == "github" end)
+
+      {:noreply, new_state} = TUI.handle_event(key("enter"), source_picker_state(github_cursor))
+
+      # No client_id configured → start_flow fails → flash_status → stays in source_picker
+      assert new_state.modal.type == :source_picker
+      assert String.contains?(new_state.status, "GITHUB_CLIENT_ID")
+    end
+  end
+
+  describe "integration_item_id modal" do
+    defp item_id_state(item_id \\ "") do
+      input = ExRatatui.text_input_new()
+      ExRatatui.text_input_set_value(input, item_id)
+
+      base_state(%{
+        modal: :integration_item_id,
+        modal_input: input,
+        modal_context: {:importing, "github"}
+      })
+    end
+
+    test "Esc cancels and sets status to 'Cancelled'", _ctx do
+      {:noreply, new_state} = TUI.handle_event(key("esc"), item_id_state())
+
+      assert new_state.modal.type == :none
+      assert new_state.status == "Cancelled"
+    end
+
+    test "Enter with empty item_id flashes an error and stays in modal", _ctx do
+      {:noreply, new_state} = TUI.handle_event(key("enter"), item_id_state(""))
+
+      assert new_state.modal.type == :integration_item_id
+      assert String.contains?(new_state.status, "empty")
+    end
+
+    test "printable characters are forwarded to the text input", _ctx do
+      state = item_id_state()
+      {:noreply, s1} = TUI.handle_event(key("o"), state)
+      {:noreply, s2} = TUI.handle_event(key("w"), s1)
+      {:noreply, _s3} = TUI.handle_event(key("n"), s2)
+      # The modal stays open while typing
+      assert s2.modal.type == :integration_item_id
+    end
+
+    test "backspace is forwarded to the text input without changing modal type", _ctx do
+      state = item_id_state("abc")
+      {:noreply, new_state} = TUI.handle_event(key("backspace"), state)
+
+      assert new_state.modal.type == :integration_item_id
     end
   end
 

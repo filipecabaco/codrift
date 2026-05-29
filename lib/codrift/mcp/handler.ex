@@ -28,11 +28,17 @@ defmodule Codrift.MCP.Handler do
     - `memory_delete` — delete a memory entry by id
     - `memory_recent` — return the most recent memory entries
     - `memory_list` — return all entries of a specific type
+    - `start_oauth_flow` — start OAuth2 browser-based authorization for a service
+    - `get_oauth_status` — which services have active OAuth2 tokens
+    - `list_integration_items` — list issues/tasks from a connected external service
+    - `import_from_integration` — create an initiative from an external item
+    - `sync_initiative_context` — re-fetch and overwrite the integration context file
   """
 
   alias Codrift.Agent.Adapters.Aider
   alias Codrift.Agent.Adapters.Claude
   alias Codrift.Initiative.Store
+  alias Codrift.OAuth.Config, as: OAuthConfig
 
   @server_info %{
     "protocolVersion" => "2024-11-05",
@@ -237,7 +243,97 @@ defmodule Codrift.MCP.Handler do
     end
   end
 
+  defp call_tool("start_oauth_flow", %{"service" => service}) do
+    case Codrift.OAuth.start_flow(service) do
+      {:ok, %{flow: :pkce_browser, auth_url: url}} ->
+        {:ok,
+         %{
+           flow: "pkce_browser",
+           service: service,
+           auth_url: url,
+           message:
+             "Open this URL in a browser to authorize #{service}. " <>
+               "The Codrift server will save the token automatically."
+         }}
+
+      {:ok, %{flow: :guided_token, instructions: instructions}} ->
+        {:ok,
+         %{
+           flow: "guided_token",
+           service: service,
+           instructions: instructions,
+           message:
+             "Show these instructions to the user, ask them to paste the token, " <>
+               "then call save_guided_token once you have it."
+         }}
+
+      {:error, reason} ->
+        {:error, to_string(reason)}
+    end
+  end
+
+  defp call_tool("save_guided_token", %{"service" => service, "token" => token}) do
+    case Codrift.OAuth.save_guided_token(service, token) do
+      :ok -> {:ok, %{connected: true, service: service}}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
+  defp call_tool("get_oauth_status", _args) do
+    all = OAuthConfig.supported_services()
+
+    status =
+      Map.new(all, fn service ->
+        {service,
+         %{
+           connected: Codrift.OAuth.connected?(service),
+           oauth_supported: true
+         }}
+      end)
+
+    {:ok, %{services: status}}
+  end
+
+  defp call_tool("list_integration_items", %{"service" => service} = args) do
+    opts = if filter = args["filter"], do: [filter: filter], else: []
+
+    with {:ok, adapter} <- Codrift.Integration.adapter_for(service),
+         {:ok, items} <- adapter.list_items(opts) do
+      {:ok, Enum.map(items, &integration_item_to_map/1)}
+    end
+  end
+
+  defp call_tool(
+         "import_from_integration",
+         %{"service" => service, "item_id" => item_id} = args
+       ) do
+    opts = if dir = args["dir"], do: [dir: dir], else: []
+
+    case Codrift.Integration.import_item(service, item_id, opts) do
+      {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
+  defp call_tool("sync_initiative_context", %{"initiative_id" => id}) do
+    case Codrift.Integration.sync_initiative(id) do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
   defp call_tool(name, _args), do: {:error, "unknown tool: #{name}"}
+
+  defp integration_item_to_map(%Codrift.Integration.Item{} = item) do
+    %{
+      id: item.id,
+      title: item.title,
+      url: item.url,
+      status: item.status,
+      assignee: item.assignee,
+      labels: item.labels || []
+    }
+  end
 
   defp dir_diffs(dir) do
     case Codrift.Diff.generate(dir) do
@@ -454,6 +550,111 @@ defmodule Codrift.MCP.Handler do
             }
           },
           "required" => ["initiative_id", "chunk_type"]
+        }
+      },
+      %{
+        "name" => "start_oauth_flow",
+        "description" =>
+          "Start an OAuth2 authorization flow for a service. Returns a URL for the user " <>
+            "to open in their browser. The Codrift server handles the callback and stores " <>
+            "the token automatically. Preferred over API key env vars.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "service" => %{
+              "type" => "string",
+              "enum" => OAuthConfig.supported_services(),
+              "description" => "Service to authorize"
+            }
+          },
+          "required" => ["service"]
+        }
+      },
+      %{
+        "name" => "save_guided_token",
+        "description" =>
+          "Saves a manually-obtained integration token for a service that uses guided " <>
+            "token setup (e.g. Notion). Call this after showing the user the instructions " <>
+            "from start_oauth_flow and receiving the token they pasted.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "service" => %{"type" => "string"},
+            "token" => %{"type" => "string", "description" => "The integration token to save"}
+          },
+          "required" => ["service", "token"]
+        }
+      },
+      %{
+        "name" => "get_oauth_status",
+        "description" => "Returns which external services have active OAuth2 tokens stored.",
+        "inputSchema" => %{"type" => "object", "properties" => %{}}
+      },
+      %{
+        "name" => "list_integration_items",
+        "description" =>
+          "List open issues or tasks from a connected external service. " <>
+            "Returns id, title, url, status, assignee, and labels for each item. " <>
+            "Use import_from_integration to turn one into an initiative.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "service" => %{
+              "type" => "string",
+              "enum" => Codrift.Integration.valid_services(),
+              "description" => "Integration service name"
+            },
+            "filter" => %{
+              "type" => "string",
+              "description" =>
+                "Service-specific filter: GitHub/GitLab state (open/closed/all), " <>
+                  "Linear team key, Jira JQL query, Notion database ID, " <>
+                  "GitHub Projects owner/number (e.g. acme/5), Asana project GID"
+            }
+          },
+          "required" => ["service"]
+        }
+      },
+      %{
+        "name" => "import_from_integration",
+        "description" =>
+          "Create a Codrift initiative from a single item in an external service. " <>
+            "Fetches the item, creates an initiative named after it, and writes " <>
+            "integration.md with full context into the initiative folder.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "service" => %{
+              "type" => "string",
+              "enum" => Codrift.Integration.valid_services()
+            },
+            "item_id" => %{
+              "type" => "string",
+              "description" =>
+                "Service-specific item identifier: " <>
+                  "GitHub owner/repo#number, Linear ENG-123 or UUID, " <>
+                  "GitLab project#iid, Jira ENG-42, Notion page ID, " <>
+                  "Shortcut story ID, Asana task GID"
+            },
+            "dir" => %{
+              "type" => "string",
+              "description" => "Optional working directory path to add to the initiative"
+            }
+          },
+          "required" => ["service", "item_id"]
+        }
+      },
+      %{
+        "name" => "sync_initiative_context",
+        "description" =>
+          "Re-fetch the external item and overwrite integration.md for an initiative " <>
+            "that was previously created via import_from_integration.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"}
+          },
+          "required" => ["initiative_id"]
         }
       }
     ]

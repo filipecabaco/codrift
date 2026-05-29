@@ -55,4 +55,31 @@ defmodule Codrift.TUI.ModalsTest do
       assert [] = result
     end
   end
+
+  describe "sources/0" do
+    test "first entry is 'new' (blank initiative)" do
+      assert [{"new", _} | _] = Modals.sources()
+    end
+
+    test "includes all registered integration services" do
+      keys = Modals.sources() |> Enum.map(&elem(&1, 0))
+      assert "github" in keys
+      assert "linear" in keys
+      assert "gitlab" in keys
+      assert "jira" in keys
+      assert "notion" in keys
+      refute "shortcut" in keys
+    end
+
+    test "every entry is a two-element tuple of strings" do
+      for {key, label} <- Modals.sources() do
+        assert is_binary(key)
+        assert is_binary(label)
+      end
+    end
+
+    test "returns a stable list (same order every call)" do
+      assert Modals.sources() == Modals.sources()
+    end
+  end
 end

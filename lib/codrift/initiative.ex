@@ -17,8 +17,9 @@ defmodule Codrift.Initiative do
 
   @status_cycle [:planning, :ongoing, :done, :archived]
 
-  defstruct [:id, :name, :dirs, :created_at, :status]
+  defstruct [:id, :name, :dirs, :created_at, :status, integration: nil]
 
+  @type integration :: %{service: String.t(), item_id: String.t()} | nil
   @type status :: :planning | :ongoing | :done | :archived
 
   @type t :: %__MODULE__{
@@ -26,7 +27,8 @@ defmodule Codrift.Initiative do
           name: String.t(),
           dirs: [String.t()],
           created_at: DateTime.t(),
-          status: status()
+          status: status(),
+          integration: integration()
         }
 
   @doc "Creates a new initiative with a random ID and the current UTC timestamp."
@@ -54,13 +56,21 @@ defmodule Codrift.Initiative do
 
   @doc "Serialises an initiative to a plain map suitable for JSON encoding."
   def to_map(%__MODULE__{} = i) do
-    %{
+    base = %{
       "id" => i.id,
       "name" => i.name,
       "dirs" => i.dirs,
       "created_at" => DateTime.to_iso8601(i.created_at),
       "status" => Atom.to_string(i.status || :ongoing)
     }
+
+    case i.integration do
+      nil ->
+        base
+
+      %{service: s, item_id: id} ->
+        Map.put(base, "integration", %{"service" => s, "item_id" => id})
+    end
   end
 
   @doc """
@@ -73,7 +83,22 @@ defmodule Codrift.Initiative do
     case DateTime.from_iso8601(ts) do
       {:ok, dt, _} ->
         status = data |> Map.get("status", "ongoing") |> String.to_existing_atom()
-        {:ok, %__MODULE__{id: id, name: name, dirs: dirs, created_at: dt, status: status}}
+
+        integration =
+          case data["integration"] do
+            %{"service" => s, "item_id" => iid} -> %{service: s, item_id: iid}
+            _ -> nil
+          end
+
+        {:ok,
+         %__MODULE__{
+           id: id,
+           name: name,
+           dirs: dirs,
+           created_at: dt,
+           status: status,
+           integration: integration
+         }}
 
       error ->
         error

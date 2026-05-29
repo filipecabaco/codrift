@@ -112,13 +112,18 @@ project memory.
 
 ---
 
+### ✅ Done — External integrations
+
+| # | Step | Notes |
+|---|------|-------|
+| 39 | External integrations | `Codrift.Integration` behaviour + `%Item{}` struct; `Codrift.Integration.HTTP` (`:httpc`, no extra deps); 9 adapters: GitHub Issues, GitHub Projects v2, Linear Issues, Linear Projects, GitLab, Jira, Notion, Shortcut, Asana; OAuth2 flow via running web server (`Codrift.OAuth`, `Codrift.OAuth.Config`, `Codrift.OAuth.StateStore`); 5 new MCP tools (`start_oauth_flow`, `get_oauth_status`, `list_integration_items`, `import_from_integration`, `sync_initiative_context`); 3 new web routes (`/oauth/start/:service`, `/oauth/callback/:service`, `/oauth/status`); `Codrift.CLI.Integration` (`codrift integration services/auth/tokens/revoke/list/import/sync`); tokens in `~/.codrift/oauth_tokens.json` (mode 0600), env var fallback; context written to `~/.codrift/initiatives/{id}/integration.md`; metadata in `integration.json` for sync. |
+
 ### ⬜ Upcoming
 
 | # | Step | Notes |
 |---|------|-------|
 | 37 | Git worktrees per initiative | Per-initiative git worktree per dir; isolated branches; TUI shows worktree branch + dirty state. See *Upcoming: Git Worktrees per Initiative*. |
 | 38 | Additional CLI adapters | Codex CLI, Opencode, Cursor Agent, Gemini CLI, Copilot CLI, and others. See *Upcoming: Additional CLI Adapters*. |
-| 39 | External integrations | Import initiatives + context from Linear, GitHub, Jira, Notion, GitLab, Shortcut, Asana. See *Upcoming: External Integrations*. |
 | 40 | Website | Landing page showcasing features, demo, install one-liner. See *Upcoming: Website*. |
 
 ---
@@ -372,6 +377,14 @@ codrift memory delete <id> <rowid>
 codrift memory recent <id> [<limit>]
 codrift memory list   <id> <type>
 codrift memory stats  <id>
+
+codrift integration services
+codrift integration auth   <service>           # OAuth2 browser flow (TUI must be running)
+codrift integration tokens                     # list connected services
+codrift integration revoke <service>           # remove stored token
+codrift integration list   <service> [filter]
+codrift integration import <service> <item_id> [--dir=<path>]
+codrift integration sync   <initiative_id>
 ```
 
 All `memory` commands print JSON to stdout and exit 0 on success, non-zero on
