@@ -134,9 +134,15 @@ defmodule Codrift.Integration.Adapters.Notion do
   end
 
   defp require_token do
-    case System.get_env("NOTION_API_KEY") do
-      nil -> {:error, "NOTION_API_KEY env var is required"}
-      token -> {:ok, token}
+    case Codrift.OAuth.get_token(name()) do
+      {:ok, %{"access_token" => t}} ->
+        {:ok, t}
+
+      _ ->
+        case System.get_env("NOTION_API_KEY") do
+          nil -> {:error, "NOTION_API_KEY env var is required (or run: codrift integration auth notion)"}
+          token -> {:ok, token}
+        end
     end
   end
 

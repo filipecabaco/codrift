@@ -170,11 +170,14 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
     end
   end
 
-  defp auth_headers(token) do
-    [
-      {"authorization", "Bearer #{token}"},
-      {"content-type", "application/json"}
-    ]
+  defp auth_headers(env_token) do
+    token =
+      case Codrift.OAuth.get_token(name()) do
+        {:ok, %{"access_token" => t}} -> t
+        _ -> env_token
+      end
+
+    [{"authorization", "Bearer #{token}"}]
   end
 
   defp format_gql_errors(errors) do

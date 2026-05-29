@@ -116,10 +116,13 @@ defmodule Codrift.Integration.Adapters.GitHub do
       {"x-github-api-version", "2022-11-28"}
     ]
 
-    case System.get_env("GITHUB_TOKEN") do
-      nil -> base
-      token -> [{"authorization", "Bearer #{token}"} | base]
-    end
+    token =
+      case Codrift.OAuth.get_token(name()) do
+        {:ok, %{"access_token" => t}} -> t
+        _ -> System.get_env("GITHUB_TOKEN")
+      end
+
+    if token, do: [{"authorization", "Bearer #{token}"} | base], else: base
   end
 
   defp format_list([]), do: "none"

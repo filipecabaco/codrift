@@ -30,13 +30,54 @@ defmodule Codrift.CLI.Integration do
   alias Codrift.Initiative
   alias Codrift.Initiative.Store
   alias Codrift.Integration
+  alias Codrift.OAuth
 
+  @server_url "http://localhost:7437"
   @initiatives_file "~/.config/codrift/initiatives.json"
 
   @spec run([String.t()]) :: :ok
   def run(["services" | _]) do
-    services = Enum.map(Integration.adapters(), fn mod -> %{name: mod.name()} end)
+    services =
+      Enum.map(Integration.adapters(), fn mod ->
+        %{
+          name: mod.name(),
+          connected: OAuth.connected?(mod.name()),
+          oauth_supported: mod.name() in Codrift.OAuth.Config.supported_services()
+        }
+      end)
+
     print_json(services)
+  end
+
+  def run(["auth", service | _]) do
+    url = "#{@server_url}/oauth/start/#{service}"
+
+    case oauth_request(url) do
+      {:ok, %{"auth_url" => auth_url}} ->
+        IO.puts("Open the following URL in your browser to authorize #{service}:\n")
+        IO.puts("  #{auth_url}\n")
+        IO.puts("The Codrift web server will handle the callback automatically.")
+        IO.puts("Run `codrift integration tokens` to confirm the connection.")
+
+      {:error, :server_unavailable} ->
+        fail(
+          "Codrift web server is not running. Start the TUI first (`codrift tui`) " <>
+            "so the OAuth callback can be received."
+        )
+
+      {:error, reason} ->
+        fail(reason)
+    end
+  end
+
+  def run(["tokens" | _]) do
+    tokens = OAuth.list_tokens()
+    print_json(tokens)
+  end
+
+  def run(["revoke", service | _]) do
+    OAuth.revoke_token(service)
+    print_json(%{revoked: service})
   end
 
   def run(["list", service | rest]) do
@@ -90,13 +131,20 @@ defmodule Codrift.CLI.Integration do
     IO.puts("""
     Usage:
       codrift integration services
+      codrift integration auth   <service>
+      codrift integration tokens
+      codrift integration revoke <service>
       codrift integration list   <service> [filter]
       codrift integration import <service> <item_id> [--dir=<path>]
       codrift integration sync   <initiative_id>
 
     Services: #{services}
 
-    Each service reads credentials from environment variables.
+    OAuth2 (recommended): run `codrift integration auth <service>` while the TUI is
+    running — it will open a browser-based authorization flow and store the token.
+
+    API key fallback: set service-specific env vars (run `codrift integration services`
+    to see which ones are connected).
     """)
   end
 
@@ -157,6 +205,31 @@ defmodule Codrift.CLI.Integration do
   end
 
   defp context_path(id), do: Path.expand("~/.codrift/initiatives/#{id}")
+
+  defp oauth_request(url) do
+    Application.ensure_all_started(:inets)
+    Application.ensure_all_started(:ssl)
+
+    ssl_opts = [
+      verify: :verify_none
+    ]
+
+    case :httpc.request(:get, {String.to_charlist(url), []}, [ssl: ssl_opts, timeout: 3_000], [
+           body_format: :binary
+         ]) do
+      {:ok, {{_, 200, _}, _headers, body}} ->
+        {:ok, JSON.decode!(body)}
+
+      {:ok, {{_, status, _}, _headers, body}} ->
+        {:error, "server returned HTTP #{status}: #{body}"}
+
+      {:error, {:failed_connect, _}} ->
+        {:error, :server_unavailable}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
 
   defp print_json(data), do: IO.puts(JSON.encode!(data))
 

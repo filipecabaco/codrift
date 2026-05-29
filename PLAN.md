@@ -116,7 +116,7 @@ project memory.
 
 | # | Step | Notes |
 |---|------|-------|
-| 39 | External integrations | `Codrift.Integration` behaviour + `%Item{}` struct; `Codrift.Integration.HTTP` (`:httpc`, no extra deps); 9 adapters: GitHub Issues, GitHub Projects v2, Linear Issues, Linear Projects, GitLab, Jira, Notion, Shortcut, Asana; 3 new MCP tools (`list_integration_items`, `import_from_integration`, `sync_initiative_context`); `Codrift.CLI.Integration` (`codrift integration services/list/import/sync`); credentials in env vars; context written to `~/.codrift/initiatives/{id}/integration.md`; metadata in `integration.json` for sync. |
+| 39 | External integrations | `Codrift.Integration` behaviour + `%Item{}` struct; `Codrift.Integration.HTTP` (`:httpc`, no extra deps); 9 adapters: GitHub Issues, GitHub Projects v2, Linear Issues, Linear Projects, GitLab, Jira, Notion, Shortcut, Asana; OAuth2 flow via running web server (`Codrift.OAuth`, `Codrift.OAuth.Config`, `Codrift.OAuth.StateStore`); 5 new MCP tools (`start_oauth_flow`, `get_oauth_status`, `list_integration_items`, `import_from_integration`, `sync_initiative_context`); 3 new web routes (`/oauth/start/:service`, `/oauth/callback/:service`, `/oauth/status`); `Codrift.CLI.Integration` (`codrift integration services/auth/tokens/revoke/list/import/sync`); tokens in `~/.codrift/oauth_tokens.json` (mode 0600), env var fallback; context written to `~/.codrift/initiatives/{id}/integration.md`; metadata in `integration.json` for sync. |
 
 ### ⬜ Upcoming
 
@@ -379,6 +379,9 @@ codrift memory list   <id> <type>
 codrift memory stats  <id>
 
 codrift integration services
+codrift integration auth   <service>           # OAuth2 browser flow (TUI must be running)
+codrift integration tokens                     # list connected services
+codrift integration revoke <service>           # remove stored token
 codrift integration list   <service> [filter]
 codrift integration import <service> <item_id> [--dir=<path>]
 codrift integration sync   <initiative_id>

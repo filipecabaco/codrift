@@ -155,7 +155,12 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
     end
   end
 
-  defp auth_headers(key), do: [{"authorization", key}]
+  defp auth_headers(env_key) do
+    case Codrift.OAuth.get_token(name()) do
+      {:ok, %{"access_token" => t}} -> [{"authorization", "Bearer #{t}"}]
+      _ -> [{"authorization", env_key}]
+    end
+  end
 
   defp format_gql_errors(errors) do
     errors |> Enum.map(& &1["message"]) |> Enum.join("; ")

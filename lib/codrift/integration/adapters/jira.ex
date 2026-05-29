@@ -113,22 +113,37 @@ defmodule Codrift.Integration.Adapters.Jira do
 
   defp credentials do
     host = System.get_env("JIRA_HOST")
-    email = System.get_env("JIRA_EMAIL")
-    token = System.get_env("JIRA_TOKEN")
 
     cond do
-      is_nil(host) -> {:error, "JIRA_HOST env var is required"}
-      is_nil(email) -> {:error, "JIRA_EMAIL env var is required"}
-      is_nil(token) -> {:error, "JIRA_TOKEN env var is required"}
-      true -> {:ok, %{host: host, email: email, token: token}}
+      is_nil(host) ->
+        {:error, "JIRA_HOST env var is required (e.g. mycompany.atlassian.net)"}
+
+      Codrift.OAuth.connected?(name()) ->
+        {:ok, %{host: host, email: nil, token: nil}}
+
+      true ->
+        email = System.get_env("JIRA_EMAIL")
+        token = System.get_env("JIRA_TOKEN")
+
+        cond do
+          is_nil(email) -> {:error, "JIRA_EMAIL env var is required (or run: codrift integration auth jira)"}
+          is_nil(token) -> {:error, "JIRA_TOKEN env var is required (or run: codrift integration auth jira)"}
+          true -> {:ok, %{host: host, email: email, token: token}}
+        end
     end
   end
 
   defp base_url(host), do: "https://#{host}/rest/api/3"
 
   defp auth_headers(%{email: email, token: token}) do
-    encoded = Base.encode64("#{email}:#{token}")
-    [{"authorization", "Basic #{encoded}"}, {"accept", "application/json"}]
+    case Codrift.OAuth.get_token(name()) do
+      {:ok, %{"access_token" => t}} ->
+        [{"authorization", "Bearer #{t}"}, {"accept", "application/json"}]
+
+      _ ->
+        encoded = Base.encode64("#{email}:#{token}")
+        [{"authorization", "Basic #{encoded}"}, {"accept", "application/json"}]
+    end
   end
 
   defp format_list([]), do: "none"

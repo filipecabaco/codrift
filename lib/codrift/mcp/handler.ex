@@ -28,6 +28,8 @@ defmodule Codrift.MCP.Handler do
     - `memory_delete` — delete a memory entry by id
     - `memory_recent` — return the most recent memory entries
     - `memory_list` — return all entries of a specific type
+    - `start_oauth_flow` — start OAuth2 browser-based authorization for a service
+    - `get_oauth_status` — which services have active OAuth2 tokens
     - `list_integration_items` — list issues/tasks from a connected external service
     - `import_from_integration` — create an initiative from an external item
     - `sync_initiative_context` — re-fetch and overwrite the integration context file
@@ -238,6 +240,38 @@ defmodule Codrift.MCP.Handler do
     else
       {:error, "invalid chunk_type '#{type}'. Must be one of: #{Enum.join(valid, ", ")}"}
     end
+  end
+
+  defp call_tool("start_oauth_flow", %{"service" => service}) do
+    case Codrift.OAuth.start_flow(service) do
+      {:ok, %{auth_url: url}} ->
+        {:ok,
+         %{
+           service: service,
+           auth_url: url,
+           message:
+             "Open this URL in a browser to authorize #{service}. " <>
+               "The Codrift server will save the token automatically when you complete the flow."
+         }}
+
+      {:error, reason} ->
+        {:error, to_string(reason)}
+    end
+  end
+
+  defp call_tool("get_oauth_status", _args) do
+    all = Codrift.OAuth.Config.supported_services()
+
+    status =
+      Map.new(all, fn service ->
+        {service,
+         %{
+           connected: Codrift.OAuth.connected?(service),
+           oauth_supported: true
+         }}
+      end)
+
+    {:ok, %{services: status}}
   end
 
   defp call_tool("list_integration_items", %{"service" => service} = args) do
@@ -497,6 +531,30 @@ defmodule Codrift.MCP.Handler do
           },
           "required" => ["initiative_id", "chunk_type"]
         }
+      },
+      %{
+        "name" => "start_oauth_flow",
+        "description" =>
+          "Start an OAuth2 authorization flow for a service. Returns a URL for the user " <>
+            "to open in their browser. The Codrift server handles the callback and stores " <>
+            "the token automatically. Preferred over API key env vars.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "service" => %{
+              "type" => "string",
+              "enum" => Codrift.OAuth.Config.supported_services(),
+              "description" => "Service to authorize"
+            }
+          },
+          "required" => ["service"]
+        }
+      },
+      %{
+        "name" => "get_oauth_status",
+        "description" =>
+          "Returns which external services have active OAuth2 tokens stored.",
+        "inputSchema" => %{"type" => "object", "properties" => %{}}
       },
       %{
         "name" => "list_integration_items",

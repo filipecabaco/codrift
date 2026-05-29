@@ -116,7 +116,12 @@ defmodule Codrift.Integration.Adapters.GitLab do
     "https://#{host}/api/v4"
   end
 
-  defp auth_headers(token), do: [{"private-token", token}]
+  defp auth_headers(env_token) do
+    case Codrift.OAuth.get_token(name()) do
+      {:ok, %{"access_token" => t}} -> [{"authorization", "Bearer #{t}"}]
+      _ -> [{"private-token", env_token}]
+    end
+  end
 
   defp format_list([]), do: "none"
   defp format_list(items), do: Enum.join(items, ", ")
