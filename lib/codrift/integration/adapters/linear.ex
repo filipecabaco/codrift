@@ -70,36 +70,18 @@ defmodule Codrift.Integration.Adapters.Linear do
         err
 
       {:ok, key} ->
-        {query, vars} =
-          if String.match?(item_id, ~r/^[A-Z]+-\d+$/) do
-            q = """
-            query GetByIdentifier($id: String!) {
-              issue(id: $id) {
-                id identifier title description url
-                state { name }
-                assignee { name }
-                labels { nodes { name } }
-              }
-            }
-            """
+        query = """
+        query GetIssue($id: String!) {
+          issue(id: $id) {
+            id identifier title description url
+            state { name }
+            assignee { name }
+            labels { nodes { name } }
+          }
+        }
+        """
 
-            {q, %{id: item_id}}
-          else
-            q = """
-            query GetById($id: String!) {
-              issue(id: $id) {
-                id identifier title description url
-                state { name }
-                assignee { name }
-                labels { nodes { name } }
-              }
-            }
-            """
-
-            {q, %{id: item_id}}
-          end
-
-        case HTTP.graphql(@graphql_url, query, vars, auth_headers(key)) do
+        case HTTP.graphql(@graphql_url, query, %{id: item_id}, auth_headers(key)) do
           {:ok, %{"data" => %{"issue" => issue}}} when not is_nil(issue) ->
             {:ok, to_item(issue)}
 
@@ -164,7 +146,7 @@ defmodule Codrift.Integration.Adapters.Linear do
   end
 
   defp format_gql_errors(errors) do
-    errors |> Enum.map(& &1["message"]) |> Enum.join("; ")
+    Enum.map_join(errors, "; ", & &1["message"])
   end
 
   defp format_list([]), do: "none"

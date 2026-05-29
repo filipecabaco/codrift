@@ -10,15 +10,18 @@ defmodule Codrift.Integration.HTTP do
   `{:error, "HTTP {status}: {body}"}`.
   """
 
-  @ssl_opts [
-    verify: :verify_peer,
-    cacerts: :public_key.cacerts_get(),
-    depth: 4,
-    customize_hostname_check: [
-      match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-    ]
-  ]
   @timeout_ms 15_000
+
+  defp ssl_opts do
+    [
+      verify: :verify_peer,
+      cacerts: :public_key.cacerts_get(),
+      depth: 4,
+      customize_hostname_check: [
+        match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+      ]
+    ]
+  end
 
   @doc "HTTP GET, returns `{:ok, decoded_json}` or `{:error, reason}`."
   @spec get(String.t(), [{String.t(), String.t()}]) :: {:ok, term()} | {:error, term()}
@@ -46,7 +49,7 @@ defmodule Codrift.Integration.HTTP do
 
     char_url = String.to_charlist(url)
     char_headers = Enum.map(headers, fn {k, v} -> {as_charlist(k), as_charlist(v)} end)
-    http_opts = [ssl: @ssl_opts, timeout: @timeout_ms, connect_timeout: @timeout_ms]
+    http_opts = [ssl: ssl_opts(), timeout: @timeout_ms, connect_timeout: @timeout_ms]
     inet_opts = [body_format: :binary]
 
     result =

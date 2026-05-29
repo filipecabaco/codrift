@@ -38,6 +38,7 @@ defmodule Codrift.MCP.Handler do
   alias Codrift.Agent.Adapters.Aider
   alias Codrift.Agent.Adapters.Claude
   alias Codrift.Initiative.Store
+  alias Codrift.OAuth.Config, as: OAuthConfig
 
   @server_info %{
     "protocolVersion" => "2024-11-05",
@@ -244,14 +245,26 @@ defmodule Codrift.MCP.Handler do
 
   defp call_tool("start_oauth_flow", %{"service" => service}) do
     case Codrift.OAuth.start_flow(service) do
-      {:ok, %{auth_url: url}} ->
+      {:ok, %{flow: :pkce_browser, auth_url: url}} ->
         {:ok,
          %{
+           flow: "pkce_browser",
            service: service,
            auth_url: url,
            message:
              "Open this URL in a browser to authorize #{service}. " <>
-               "The Codrift server will save the token automatically when you complete the flow."
+               "The Codrift server will save the token automatically."
+         }}
+
+      {:ok, %{flow: :guided_token, instructions: instructions}} ->
+        {:ok,
+         %{
+           flow: "guided_token",
+           service: service,
+           instructions: instructions,
+           message:
+             "Show these instructions to the user, ask them to paste the token, " <>
+               "then call save_guided_token once you have it."
          }}
 
       {:error, reason} ->
@@ -259,8 +272,15 @@ defmodule Codrift.MCP.Handler do
     end
   end
 
+  defp call_tool("save_guided_token", %{"service" => service, "token" => token}) do
+    case Codrift.OAuth.save_guided_token(service, token) do
+      :ok -> {:ok, %{connected: true, service: service}}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
   defp call_tool("get_oauth_status", _args) do
-    all = Codrift.OAuth.Config.supported_services()
+    all = OAuthConfig.supported_services()
 
     status =
       Map.new(all, fn service ->
@@ -543,7 +563,7 @@ defmodule Codrift.MCP.Handler do
           "properties" => %{
             "service" => %{
               "type" => "string",
-              "enum" => Codrift.OAuth.Config.supported_services(),
+              "enum" => OAuthConfig.supported_services(),
               "description" => "Service to authorize"
             }
           },
@@ -551,9 +571,23 @@ defmodule Codrift.MCP.Handler do
         }
       },
       %{
-        "name" => "get_oauth_status",
+        "name" => "save_guided_token",
         "description" =>
-          "Returns which external services have active OAuth2 tokens stored.",
+          "Saves a manually-obtained integration token for a service that uses guided " <>
+            "token setup (e.g. Notion). Call this after showing the user the instructions " <>
+            "from start_oauth_flow and receiving the token they pasted.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "service" => %{"type" => "string"},
+            "token" => %{"type" => "string", "description" => "The integration token to save"}
+          },
+          "required" => ["service", "token"]
+        }
+      },
+      %{
+        "name" => "get_oauth_status",
+        "description" => "Returns which external services have active OAuth2 tokens stored.",
         "inputSchema" => %{"type" => "object", "properties" => %{}}
       },
       %{

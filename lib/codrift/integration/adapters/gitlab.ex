@@ -82,18 +82,16 @@ defmodule Codrift.Integration.Adapters.GitLab do
   end
 
   defp parse_item_id(item_id, opts) do
-    cond do
-      String.contains?(item_id, "#") ->
-        case String.split(item_id, "#", parts: 2) do
-          [project, iid] -> {:ok, {project, iid}}
-          _ -> {:error, "invalid item_id format: #{item_id}"}
-        end
-
-      true ->
-        case resolve_project(opts) do
-          {:ok, project} -> {:ok, {project, item_id}}
-          {:error, _} = err -> err
-        end
+    if String.contains?(item_id, "#") do
+      case String.split(item_id, "#", parts: 2) do
+        [project, iid] -> {:ok, {project, iid}}
+        _ -> {:error, "invalid item_id format: #{item_id}"}
+      end
+    else
+      case resolve_project(opts) do
+        {:ok, project} -> {:ok, {project, item_id}}
+        {:error, _} = err -> err
+      end
     end
   end
 

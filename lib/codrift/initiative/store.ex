@@ -84,29 +84,37 @@ defmodule Codrift.Initiative.Store do
     GenServer.call(server, {:set_status, id, status})
   end
 
+  @doc "Links an initiative to an external integration item and sets the initial status."
+  def link_integration(id, service, item_id, server \\ __MODULE__) do
+    GenServer.call(server, {:link_integration, id, service, item_id})
+  end
+
+  @default_context_base "~/.codrift/initiatives"
+
   @impl true
   def init(opts) do
     path = Path.expand(Keyword.get(opts, :path, @default_path))
+    ctx_base = Path.expand(Keyword.get(opts, :context_dir_base, @default_context_base))
     initiatives = load(path)
     # Ensure context dirs, CLAUDE.md symlinks, and git repos exist for all
     # previously-created initiatives (backfills anything created before these
     # features were added, and recreates dirs that were accidentally deleted).
     Enum.each(initiatives, fn {_id, initiative} ->
-      ctx = context_path(initiative.id)
+      ctx = ctx_path(ctx_base, initiative.id)
       File.mkdir_p!(ctx)
       ensure_git_repo(ctx)
       ensure_claude_md_symlink(ctx)
     end)
 
-    clean_orphaned_context_dirs(initiatives)
+    clean_orphaned_context_dirs(initiatives, ctx_base)
 
-    {:ok, %{initiatives: initiatives, path: path}}
+    {:ok, %{initiatives: initiatives, path: path, context_dir_base: ctx_base}}
   end
 
   @impl true
   def handle_call({:create, name, dirs}, _from, state) do
     initiative = Initiative.new(name, dirs)
-    ctx = context_path(initiative.id)
+    ctx = ctx_path(state.context_dir_base, initiative.id)
     File.mkdir_p!(ctx)
     ensure_git_repo(ctx)
     write_initiative_md(ctx, initiative)
@@ -133,7 +141,7 @@ defmodule Codrift.Initiative.Store do
   def handle_call({:add_dir, id, dir}, _from, state) do
     case update_initiative(state, id, fn i -> %{i | dirs: Enum.uniq([dir | i.dirs])} end) do
       {:reply, {:ok, initiative}, new_state} ->
-        update_initiative_md_dirs(initiative)
+        update_initiative_md_dirs(initiative, state.context_dir_base)
         {:reply, {:ok, initiative}, new_state}
 
       error_reply ->
@@ -144,7 +152,7 @@ defmodule Codrift.Initiative.Store do
   def handle_call({:remove_dir, id, dir}, _from, state) do
     case update_initiative(state, id, fn i -> %{i | dirs: List.delete(i.dirs, dir)} end) do
       {:reply, {:ok, initiative}, new_state} ->
-        update_initiative_md_dirs(initiative)
+        update_initiative_md_dirs(initiative, state.context_dir_base)
         {:reply, {:ok, initiative}, new_state}
 
       error_reply ->
@@ -160,13 +168,19 @@ defmodule Codrift.Initiative.Store do
       {_, initiatives} ->
         new_state = %{state | initiatives: initiatives}
         persist(new_state)
-        safe_rm_context_dir!(context_path(id))
+        safe_rm_context_dir!(ctx_path(state.context_dir_base, id), state.context_dir_base)
         {:reply, :ok, new_state}
     end
   end
 
   def handle_call({:set_status, id, status}, _from, state) do
     update_initiative(state, id, fn i -> %{i | status: status} end)
+  end
+
+  def handle_call({:link_integration, id, service, item_id}, _from, state) do
+    update_initiative(state, id, fn i ->
+      %{i | integration: %{service: service, item_id: item_id}}
+    end)
   end
 
   defp put_initiative(state, initiative) do
@@ -194,9 +208,7 @@ defmodule Codrift.Initiative.Store do
   # Runs once at startup so stale directories from deleted initiatives are
   # automatically pruned. Uses `safe_rm_context_dir!/1` so it can only touch
   # direct children of `~/.codrift/initiatives/`.
-  defp clean_orphaned_context_dirs(initiatives) do
-    base = Path.expand("~/.codrift/initiatives")
-
+  defp clean_orphaned_context_dirs(initiatives, base) do
     case File.ls(base) do
       {:ok, entries} ->
         known_ids = MapSet.new(Map.keys(initiatives))
@@ -209,7 +221,7 @@ defmodule Codrift.Initiative.Store do
         |> Enum.each(fn name ->
           full = Path.join(base, name)
           Logger.info("Codrift.Initiative.Store: removing orphaned context dir #{full}")
-          safe_rm_context_dir!(full)
+          safe_rm_context_dir!(full, base)
         end)
 
       {:error, _} ->
@@ -217,14 +229,15 @@ defmodule Codrift.Initiative.Store do
     end
   end
 
+  defp ctx_path(base, id), do: Path.join(base, id)
+
   defp ensure_git_repo(path) do
     unless File.dir?(Path.join(path, ".git")) do
       System.cmd("git", ["init"], cd: path, stderr_to_stdout: true)
     end
   end
 
-  defp safe_rm_context_dir!(path) do
-    base = Path.expand("~/.codrift/initiatives")
+  defp safe_rm_context_dir!(path, base) do
     expanded = Path.expand(path)
 
     # Must be exactly one level below the base (no traversal, no deleting base itself)
@@ -281,8 +294,8 @@ defmodule Codrift.Initiative.Store do
 
   # Updates only the <!-- codrift:dirs:start/end --> block in an existing file,
   # preserving all user-editable content (Goal, Context, Notes, etc.).
-  defp update_initiative_md_dirs(initiative) do
-    md = Path.join(context_path(initiative.id), "initiative.md")
+  defp update_initiative_md_dirs(initiative, base \\ Path.expand("~/.codrift/initiatives")) do
+    md = Path.join(ctx_path(base, initiative.id), "initiative.md")
 
     case File.read(md) do
       {:ok, content} ->

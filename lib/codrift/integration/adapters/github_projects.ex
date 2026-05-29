@@ -25,17 +25,40 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
   def list_items(opts \\ []) do
     token = System.get_env("GITHUB_TOKEN")
 
-    unless token do
-      {:error, "GITHUB_TOKEN env var is required for GitHub Projects"}
-    else
+    if token do
       filter = opts[:filter] || ""
       {owner, project_number} = parse_project_filter(filter, opts)
+      headers = auth_headers(token)
 
-      query = """
+      user_query = """
       query ListProjectItems($owner: String!, $number: Int!, $first: Int) {
         user(login: $owner) {
           projectV2(number: $number) {
-            title
+            items(first: $first) {
+              nodes {
+                id
+                content {
+                  ... on Issue {
+                    number title body url state
+                    assignees(first: 3) { nodes { login } }
+                    labels(first: 10)  { nodes { name } }
+                  }
+                  ... on PullRequest {
+                    number title body url state
+                    assignees(first: 3) { nodes { login } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      """
+
+      org_query = """
+      query ListOrgProjectItems($owner: String!, $number: Int!, $first: Int) {
+        organization(login: $owner) {
+          projectV2(number: $number) {
             items(first: $first) {
               nodes {
                 id
@@ -58,34 +81,23 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
       """
 
       vars = %{owner: owner, number: project_number, first: 50}
-      headers = auth_headers(token)
 
-      case HTTP.graphql(@graphql_url, query, vars, headers) do
-        {:ok, %{"data" => data}} ->
-          nodes =
-            get_in(data, ["user", "projectV2", "items", "nodes"]) ||
-              get_in(data, ["organization", "projectV2", "items", "nodes"]) ||
-              []
+      with {:ok, data} <- run_project_query(user_query, org_query, vars, headers) do
+        nodes =
+          data |> Enum.map(& &1["content"]) |> Enum.reject(&is_nil/1) |> Enum.map(&to_item/1)
 
-          items = nodes |> Enum.map(& &1["content"]) |> Enum.reject(&is_nil/1) |> Enum.map(&to_item/1)
-          {:ok, items}
-
-        {:ok, %{"errors" => errors}} ->
-          {:error, format_gql_errors(errors)}
-
-        {:error, reason} ->
-          {:error, reason}
+        {:ok, nodes}
       end
+    else
+      {:error, "GITHUB_TOKEN env var is required for GitHub Projects"}
     end
   end
 
   @impl true
-  def get_item(item_id, opts \\ []) do
+  def get_item(item_id, _opts \\ []) do
     token = System.get_env("GITHUB_TOKEN")
 
-    unless token do
-      {:error, "GITHUB_TOKEN env var is required for GitHub Projects"}
-    else
+    if token do
       query = """
       query GetProjectItem($id: ID!) {
         node(id: $id) {
@@ -120,6 +132,8 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
         {:error, reason} ->
           {:error, reason}
       end
+    else
+      {:error, "GITHUB_TOKEN env var is required for GitHub Projects"}
     end
   end
 
@@ -149,10 +163,11 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
       url: content["url"] || "",
       labels: Enum.map(get_in(content, ["labels", "nodes"]) || [], & &1["name"]),
       status: content["state"],
-      assignee: case get_in(content, ["assignees", "nodes"]) do
-                  [first | _] -> first["login"]
-                  _ -> nil
-                end,
+      assignee:
+        case get_in(content, ["assignees", "nodes"]) do
+          [first | _] -> first["login"]
+          _ -> nil
+        end,
       linked_prs: []
     }
   end
@@ -170,18 +185,51 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
     end
   end
 
+  defp run_project_query(user_query, org_query, vars, headers) do
+    case HTTP.graphql(@graphql_url, user_query, vars, headers) do
+      {:ok, %{"data" => data}} ->
+        user_nodes = get_in(data, ["user", "projectV2", "items", "nodes"])
+        if user_nodes, do: {:ok, user_nodes}, else: run_org_query(org_query, vars, headers)
+
+      {:ok, %{"errors" => errors}} ->
+        {:error, format_gql_errors(errors)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp run_org_query(org_query, vars, headers) do
+    case HTTP.graphql(@graphql_url, org_query, vars, headers) do
+      {:ok, %{"data" => org_data}} ->
+        {:ok, get_in(org_data, ["organization", "projectV2", "items", "nodes"]) || []}
+
+      {:ok, %{"errors" => errors}} ->
+        {:error, format_gql_errors(errors)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp auth_headers(env_token) do
     token =
       case Codrift.OAuth.get_token(name()) do
-        {:ok, %{"access_token" => t}} -> t
-        _ -> env_token
+        {:ok, %{"access_token" => t}} ->
+          t
+
+        _ ->
+          case Codrift.OAuth.get_token("github") do
+            {:ok, %{"access_token" => t}} -> t
+            _ -> env_token
+          end
       end
 
     [{"authorization", "Bearer #{token}"}]
   end
 
   defp format_gql_errors(errors) do
-    errors |> Enum.map(& &1["message"]) |> Enum.join("; ")
+    Enum.map_join(errors, "; ", & &1["message"])
   end
 
   defp format_list([]), do: "none"

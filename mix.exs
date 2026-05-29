@@ -64,6 +64,7 @@ defmodule Codrift.MixProject do
       {:ex_ratatui, path: "vendor/ex_ratatui", override: true},
       {:erlexec, "~> 2.0"},
       {:exqlite, "~> 0.23"},
+      {:quantum, "~> 3.0"},
       # Code quality
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},

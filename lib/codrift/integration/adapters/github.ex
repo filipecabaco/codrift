@@ -33,7 +33,8 @@ defmodule Codrift.Integration.Adapters.GitHub do
 
         case HTTP.get(url, auth_headers()) do
           {:ok, issues} when is_list(issues) ->
-            {:ok, issues |> Enum.reject(&Map.has_key?(&1, "pull_request")) |> Enum.map(&to_item/1)}
+            {:ok,
+             issues |> Enum.reject(&Map.has_key?(&1, "pull_request")) |> Enum.map(&to_item/1)}
 
           {:ok, _} ->
             {:error, "unexpected response from GitHub Issues API"}
@@ -88,18 +89,16 @@ defmodule Codrift.Integration.Adapters.GitHub do
   end
 
   defp parse_item_id(item_id, opts) do
-    cond do
-      String.contains?(item_id, "#") ->
-        case String.split(item_id, "#", parts: 2) do
-          [repo, number] -> {:ok, {repo, number}}
-          _ -> {:error, "invalid item_id format: #{item_id}"}
-        end
-
-      true ->
-        case resolve_repo(opts) do
-          {:ok, repo} -> {:ok, {repo, item_id}}
-          {:error, _} = err -> err
-        end
+    if String.contains?(item_id, "#") do
+      case String.split(item_id, "#", parts: 2) do
+        [repo, number] -> {:ok, {repo, number}}
+        _ -> {:error, "invalid item_id format: #{item_id}"}
+      end
+    else
+      case resolve_repo(opts) do
+        {:ok, repo} -> {:ok, {repo, item_id}}
+        {:error, _} = err -> err
+      end
     end
   end
 

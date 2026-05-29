@@ -28,26 +28,24 @@ defmodule Codrift.Integration.Adapters.Notion do
 
   @impl true
   def list_items(opts \\ []) do
+    db_id = opts[:filter] || System.get_env("NOTION_DATABASE_ID")
+
     with {:ok, token} <- require_token() do
-      db_id = opts[:filter] || System.get_env("NOTION_DATABASE_ID")
+      fetch_database_items(db_id, token)
+    end
+  end
 
-      unless db_id do
-        {:error, "NOTION_DATABASE_ID env var or :filter option (database ID) is required"}
-      else
-        url = "#{@base}/databases/#{db_id}/query"
-        body = %{page_size: 50}
+  defp fetch_database_items(nil, _token),
+    do: {:error, "NOTION_DATABASE_ID env var or :filter option (database ID) is required"}
 
-        case HTTP.post(url, body, auth_headers(token)) do
-          {:ok, %{"results" => pages}} ->
-            {:ok, Enum.map(pages, &to_item/1)}
+  defp fetch_database_items(db_id, token) do
+    url = "#{@base}/databases/#{db_id}/query"
+    body = %{page_size: 50}
 
-          {:ok, _} ->
-            {:error, "unexpected response from Notion database API"}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-      end
+    case HTTP.post(url, body, auth_headers(token)) do
+      {:ok, %{"results" => pages}} -> {:ok, Enum.map(pages, &to_item/1)}
+      {:ok, _} -> {:error, "unexpected response from Notion database API"}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -140,8 +138,12 @@ defmodule Codrift.Integration.Adapters.Notion do
 
       _ ->
         case System.get_env("NOTION_API_KEY") do
-          nil -> {:error, "NOTION_API_KEY env var is required (or run: codrift integration auth notion)"}
-          token -> {:ok, token}
+          nil ->
+            {:error,
+             "NOTION_API_KEY env var is required (or run: codrift integration auth notion)"}
+
+          token ->
+            {:ok, token}
         end
     end
   end

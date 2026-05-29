@@ -77,6 +77,7 @@ defmodule Codrift.TUI do
   alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative, Paths}
   alias Codrift.Config.{Keybindings, Theme}
   alias Codrift.Initiative.Store
+  alias Codrift.OAuth.Config, as: OAuthConfig
 
   alias Codrift.TUI.{
     AgentState,
@@ -334,6 +335,15 @@ defmodule Codrift.TUI do
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :new_name}} = state),
     do: {:noreply, confirm_name(state)}
 
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :source_picker}} = state),
+    do: {:noreply, confirm_source(state)}
+
+  def handle_event(
+        %Key{code: "enter", kind: "press"},
+        %{modal: %{type: :integration_item_id}} = state
+      ),
+      do: {:noreply, confirm_integration_item_id(state)}
+
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :new_dir}} = state),
     do: {:noreply, confirm_dir(state)}
 
@@ -348,6 +358,53 @@ defmodule Codrift.TUI do
 
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :theme_picker}} = state),
     do: {:noreply, apply_theme_picker(state)}
+
+  def handle_event(
+        %Key{code: "enter", kind: "press"},
+        %{modal: %{type: :service_auth_url}} = state
+      ),
+      do: {:noreply, check_auth_and_proceed(state)}
+
+  def handle_event(
+        %Key{code: "enter", kind: "press"},
+        %{modal: %{type: :service_guided_token}} = state
+      ),
+      do: {:noreply, confirm_service_guided_token(state)}
+
+  def handle_event(
+        %Key{code: "enter", kind: "press"},
+        %{modal: %{type: :service_setup}} = state
+      ) do
+    services = Modals.setup_services()
+    service = Enum.at(services, state.modal.service_setup.cursor)
+    {:noreply, start_service_auth(state, service, :standalone)}
+  end
+
+  def handle_event(%Key{code: "r", kind: "press"}, %{modal: %{type: :service_setup}} = state) do
+    services = Modals.setup_services()
+    service = Enum.at(services, state.modal.service_setup.cursor)
+
+    if Codrift.OAuth.connected?(service) do
+      Codrift.OAuth.revoke_token(service)
+      {:noreply, flash_status(state, "Revoked #{service} token")}
+    else
+      {:noreply, flash_status(state, "#{service} is not connected")}
+    end
+  end
+
+  def handle_event(%Key{code: "up", kind: "press"}, %{modal: %{type: :service_setup}} = state) do
+    cursor = max(state.modal.service_setup.cursor - 1, 0)
+    {:noreply, %{state | modal: %{state.modal | service_setup: %{cursor: cursor}}}}
+  end
+
+  def handle_event(
+        %Key{code: "down", kind: "press"},
+        %{modal: %{type: :service_setup}} = state
+      ) do
+    max_idx = length(Modals.setup_services()) - 1
+    cursor = min(state.modal.service_setup.cursor + 1, max_idx)
+    {:noreply, %{state | modal: %{state.modal | service_setup: %{cursor: cursor}}}}
+  end
 
   def handle_event(%Key{code: "up", kind: "press"}, %{modal: %{type: :new_dir}} = state),
     do: {:noreply, DirPicker.move_cursor(state, -1)}
@@ -369,6 +426,17 @@ defmodule Codrift.TUI do
     max_idx = max(length(Modals.filter_actions(state.modal.actions, palette.filter)) - 1, 0)
     new_palette = %{palette | cursor: min(palette.cursor + 1, max_idx)}
     {:noreply, %{state | modal: %{state.modal | palette: new_palette}}}
+  end
+
+  def handle_event(%Key{code: "up", kind: "press"}, %{modal: %{type: :source_picker}} = state) do
+    cursor = max(state.modal.source_picker.cursor - 1, 0)
+    {:noreply, %{state | modal: %{state.modal | source_picker: %{cursor: cursor}}}}
+  end
+
+  def handle_event(%Key{code: "down", kind: "press"}, %{modal: %{type: :source_picker}} = state) do
+    max_idx = length(Modals.sources()) - 1
+    cursor = min(state.modal.source_picker.cursor + 1, max_idx)
+    {:noreply, %{state | modal: %{state.modal | source_picker: %{cursor: cursor}}}}
   end
 
   def handle_event(%Key{code: "up", kind: "press"}, %{modal: %{type: :theme_picker}} = state) do
@@ -397,14 +465,27 @@ defmodule Codrift.TUI do
   end
 
   def handle_event(%Key{code: code, kind: "press"}, %{modal: %{type: modal}} = state)
-      when modal in [:new_name, :new_dir, :palette, :new_context_file] and byte_size(code) == 1 do
+      when modal in [
+             :new_name,
+             :new_dir,
+             :palette,
+             :new_context_file,
+             :integration_item_id,
+             :service_guided_token
+           ] and byte_size(code) == 1 do
     ExRatatui.text_input_handle_key(state.modal.input, code)
     {:noreply, sync_modal(state, modal)}
   end
 
   def handle_event(%Key{code: code, kind: "press"}, %{modal: %{type: modal}} = state)
-      when modal in [:new_name, :new_dir, :palette, :new_context_file] and
-             code in ["backspace", "delete", "left", "right", "home", "end"] do
+      when modal in [
+             :new_name,
+             :new_dir,
+             :palette,
+             :new_context_file,
+             :integration_item_id,
+             :service_guided_token
+           ] and code in ["backspace", "delete", "left", "right", "home", "end"] do
     ExRatatui.text_input_handle_key(state.modal.input, code)
     {:noreply, sync_modal(state, modal)}
   end
@@ -736,14 +817,7 @@ defmodule Codrift.TUI do
     do: {:noreply, cycle_initiative_status(state, :prev)}
 
   defp dispatch_sidebar_action(:new_initiative, state) do
-    ExRatatui.text_input_set_value(state.modal.input, "")
-
-    {:noreply,
-     %{
-       state
-       | modal: %{state.modal | type: :new_name},
-         status: "New initiative — Enter: next  Esc: cancel"
-     }}
+    {:noreply, open_source_picker(state)}
   end
 
   defp dispatch_sidebar_action(:toggle_sidebar, state),
@@ -950,6 +1024,47 @@ defmodule Codrift.TUI do
     {:noreply, new_state}
   end
 
+  def handle_info({:device_auth_complete, service, return_to}, state) do
+    base =
+      if state.modal.type == :service_device_flow,
+        do: %{state | modal: %{state.modal | type: :none}},
+        else: state
+
+    new_state =
+      case return_to do
+        :source_picker ->
+          flash_status(
+            reload_sidebar(base),
+            "#{service} connected — select it in the source picker to import"
+          )
+
+        :standalone ->
+          flash_status(
+            %{
+              base
+              | modal: %{
+                  base.modal
+                  | type: :service_setup,
+                    context: :standalone,
+                    service_setup: %{cursor: 0}
+                }
+            },
+            "#{service} connected"
+          )
+      end
+
+    {:noreply, new_state}
+  end
+
+  def handle_info({:device_auth_failed, service, reason, _return_to}, state) do
+    base =
+      if state.modal.type == :service_device_flow,
+        do: %{state | modal: %{state.modal | type: :none}},
+        else: state
+
+    {:noreply, flash_status(base, "#{service} auth failed: #{reason}")}
+  end
+
   def handle_info(:reset_status, state) do
     {:noreply,
      %{
@@ -1013,6 +1128,20 @@ defmodule Codrift.TUI do
     end
   end
 
+  defp open_source_picker(state) do
+    %{
+      state
+      | modal: %{
+          state.modal
+          | type: :source_picker,
+            context: :source_for_new,
+            source_picker: %{cursor: 0}
+        },
+        status: "↑/↓: choose source  Enter: confirm  Esc: cancel"
+    }
+  end
+
+  # :new_name is only reached from source_picker "new" — always goes straight to :new_dir
   defp confirm_name(state) do
     name = String.trim(ExRatatui.text_input_get_value(state.modal.input))
 
@@ -1031,6 +1160,255 @@ defmodule Codrift.TUI do
           },
           status: "↑/↓: navigate  Tab: complete  Enter: create  Esc: cancel"
       }
+    end
+  end
+
+  defp confirm_source(state) do
+    cursor = state.modal.source_picker.cursor
+    {service, _label} = Enum.at(Modals.sources(), cursor)
+
+    case service do
+      "new" ->
+        ExRatatui.text_input_set_value(state.modal.input, "")
+        %{state | modal: %{state.modal | type: :new_name, context: :creating_blank}}
+
+      service ->
+        if service_ready?(service) do
+          ExRatatui.text_input_set_value(state.modal.input, "")
+
+          %{
+            state
+            | modal: %{
+                state.modal
+                | type: :integration_item_id,
+                  context: {:importing, service}
+              },
+              status: "Enter item ID for #{service}  Enter: import  Esc: cancel"
+          }
+        else
+          start_service_auth(state, service, :source_picker)
+        end
+    end
+  end
+
+  # Returns true when the service has a stored token or uses only env-var auth (no OAuth config)
+  defp service_ready?(service) do
+    Codrift.OAuth.connected?(service) or
+      match?({:error, _}, OAuthConfig.get(service))
+  end
+
+  # Starts the appropriate auth flow for a service, carrying `return_to` so
+  # the completed auth lands the user back in the right place.
+  defp start_service_auth(state, service, return_to) do
+    tag = context_tag(return_to)
+
+    case Codrift.OAuth.start_flow(service) do
+      {:ok, %{flow: :pkce_browser, auth_url: url}} ->
+        %{
+          state
+          | modal: %{
+              state.modal
+              | type: :service_auth_url,
+                context: {tag, service, url}
+            },
+            status: "Open the URL in your browser, then press Enter to continue"
+        }
+
+      {:ok,
+       %{
+         flow: :device_flow,
+         user_code: user_code,
+         verification_uri: verification_uri,
+         device_code: device_code,
+         expires_in: expires_in,
+         interval: interval
+       }} ->
+        expires_at = System.os_time(:second) + expires_in
+
+        Codrift.OAuth.poll_device_auth(
+          self(),
+          service,
+          device_code,
+          expires_at,
+          interval,
+          return_to
+        )
+
+        %{
+          state
+          | modal: %{
+              state.modal
+              | type: :service_device_flow,
+                context: {tag, service, user_code, verification_uri}
+            },
+            status: "Visit #{verification_uri} and enter #{user_code}"
+        }
+
+      {:ok, %{flow: :guided_token, instructions: instructions}} ->
+        ExRatatui.text_input_set_value(state.modal.input, "")
+
+        %{
+          state
+          | modal: %{
+              state.modal
+              | type: :service_guided_token,
+                context: {tag, service, instructions}
+            },
+            status: "Paste your #{service} token and press Enter"
+        }
+
+      {:error, reason} ->
+        flash_status(state, "Cannot start auth for #{service}: #{reason}")
+    end
+  end
+
+  defp context_tag(:source_picker), do: :connecting_for_import
+  defp context_tag(:standalone), do: :connecting_standalone
+
+  # Called when the user pressed Enter on :service_auth_url — check if connected yet.
+  defp check_auth_and_proceed(state) do
+    case state.modal.context do
+      {:connecting_for_import, service, _url} ->
+        if Codrift.OAuth.connected?(service) do
+          ExRatatui.text_input_set_value(state.modal.input, "")
+
+          flash_status(
+            %{
+              state
+              | modal: %{
+                  state.modal
+                  | type: :integration_item_id,
+                    context: {:importing, service}
+                }
+            },
+            "Connected to #{service} — enter the item ID"
+          )
+        else
+          flash_status(
+            state,
+            "Still waiting for authorization — complete it in the browser first"
+          )
+        end
+
+      {:connecting_standalone, service, _url} ->
+        if Codrift.OAuth.connected?(service) do
+          flash_status(
+            %{
+              state
+              | modal: %{
+                  state.modal
+                  | type: :service_setup,
+                    context: :standalone,
+                    service_setup: %{cursor: 0}
+                }
+            },
+            "#{service} connected"
+          )
+        else
+          flash_status(
+            state,
+            "Still waiting for authorization — complete it in the browser first"
+          )
+        end
+    end
+  end
+
+  defp confirm_service_guided_token(state) do
+    token = String.trim(ExRatatui.text_input_get_value(state.modal.input))
+
+    if token == "" do
+      flash_status(state, "Token cannot be empty")
+    else
+      {tag, service, _instructions} = state.modal.context
+
+      case Codrift.OAuth.save_guided_token(service, token) do
+        :ok ->
+          ExRatatui.text_input_set_value(state.modal.input, "")
+          navigate_after_token_save(state, tag, service)
+
+        {:error, reason} ->
+          flash_status(state, "Invalid token: #{reason}")
+      end
+    end
+  end
+
+  defp navigate_after_token_save(state, :connecting_for_import, service) do
+    flash_status(
+      %{
+        state
+        | modal: %{state.modal | type: :integration_item_id, context: {:importing, service}}
+      },
+      "Connected to #{service} — enter the item ID"
+    )
+  end
+
+  defp navigate_after_token_save(state, :connecting_standalone, service) do
+    flash_status(
+      %{
+        state
+        | modal: %{
+            state.modal
+            | type: :service_setup,
+              context: :standalone,
+              service_setup: %{cursor: 0}
+          }
+      },
+      "#{service} connected"
+    )
+  end
+
+  defp confirm_integration_item_id(state) do
+    item_id = String.trim(ExRatatui.text_input_get_value(state.modal.input))
+    {:importing, service} = state.modal.context
+
+    if item_id == "" do
+      flash_status(state, "Item ID cannot be empty")
+    else
+      state = flash_status(state, "Importing #{service}/#{item_id}…")
+
+      case import_integration_item(service, item_id) do
+        {:ok, initiative} ->
+          ExRatatui.text_input_set_value(state.modal.input, "")
+          state |> reload_sidebar() |> after_import(initiative)
+
+        {:error, reason} ->
+          flash_status(state, "Import failed: #{inspect(reason)}")
+      end
+    end
+  end
+
+  defp after_import(state, initiative) do
+    flash_status(
+      %{
+        state
+        | modal: %{
+            state.modal
+            | type: :new_dir,
+              context: {:add_dir, initiative.id},
+              dir_picker: %{suggestions: DirPicker.suggestions(""), cursor: 0}
+          },
+          selection: %{state.selection | initiative_id: initiative.id}
+      },
+      "Imported '#{initiative.name}' — add a directory or Esc to skip"
+    )
+  end
+
+  defp import_integration_item(service, item_id) do
+    with {:ok, adapter} <- Codrift.Integration.adapter_for(service),
+         {:ok, item} <- adapter.get_item(item_id, []),
+         {:ok, initiative} <- Store.create(item.title, []) do
+      status = Codrift.Integration.map_item_status(item.status)
+      Store.set_status(initiative.id, status)
+      Store.link_integration(initiative.id, service, item_id)
+
+      Codrift.Integration.write_integration_files(
+        initiative.id,
+        service,
+        item_id,
+        adapter.to_initiative_context(item)
+      )
+
+      {:ok, %{initiative | status: status, integration: %{service: service, item_id: item_id}}}
     end
   end
 
@@ -1309,8 +1687,19 @@ defmodule Codrift.TUI do
     }
 
   defp do_palette_action(:new_initiative, state) do
-    ExRatatui.text_input_set_value(state.modal.input, "")
-    %{state | modal: %{state.modal | type: :new_name}}
+    open_source_picker(%{state | modal: %{state.modal | type: :none}})
+  end
+
+  defp do_palette_action(:integrations, state) do
+    %{
+      state
+      | modal: %{
+          state.modal
+          | type: :service_setup,
+            context: :standalone,
+            service_setup: %{cursor: 0}
+        }
+    }
   end
 
   defp do_palette_action(:add_dir, state),
@@ -1553,59 +1942,17 @@ defmodule Codrift.TUI do
           AgentProcess.subscribe(pid)
           status = AgentProcess.status(pid)
           {w, h} = state.pane_size
-
           existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
 
-          # Claude Code (Ink): only replay from the last \e[2J / \ec anchor.
-          # IL/DL operations (insert/delete line) need the correct scroll-region
-          # context; replaying from before DECSTBM is set up corrupts row-shift
-          # arithmetic. A clear is always followed by a full repaint, so nothing
-          # is lost by truncating.
-          #
-          # Terminal/shell agents: replay all buffered output. Shells (zsh, bash)
-          # never send \e[2J to draw their prompt, so chunks_from_last_clear would
-          # return [] and the pane would be blank until the next keypress.
+          # Claude Code (Ink): only replay from last \e[2J anchor — IL/DL need scroll-region context.
+          # Terminal/shell: replay all output — shells never send \e[2J to draw their prompt.
           replay =
-            if status.adapter == Claude,
-              do: chunks_from_last_clear(existing),
-              else: existing
+            if status.adapter == Claude, do: chunks_from_last_clear(existing), else: existing
 
-          # Claude Code (Ink renderer): use two-step resize (w-1 → w) to force a
-          # full \e[2J repaint even when dimensions would otherwise be unchanged.
-          # A second nudge at 600 ms only fires when there is no existing output —
-          # it's for slow-starting agents that haven't painted yet.
-          # Cancel any stale pending timers from a previous subscription before
-          # scheduling new ones.
-          # Terminal/shell agents: a single resize to the correct size is enough.
-          # The two-step and the \r nudge cause the shell to print extra prompts.
-          new_refs =
-            if status.adapter == Claude do
-              if state.refs.nudge, do: Process.cancel_timer(state.refs.nudge)
-              if state.refs.restore, do: Process.cancel_timer(state.refs.restore)
-
-              AgentProcess.resize(pid, max(w - 1, 1), h)
-              restore_ref = Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
-
-              nudge_ref =
-                if Enum.empty?(replay),
-                  do: Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
-
-              %{state.refs | nudge: nudge_ref, restore: restore_ref}
-            else
-              AgentProcess.resize(pid, w, h)
-              state.refs
-            end
+          new_refs = setup_agent_refs(state, pid, agent_id, replay, status.adapter, {w, h})
 
           screen =
             Enum.reduce(replay, VT100.new(w, h), fn chunk, s -> VT100.process(s, chunk) end)
-
-          # For Terminal agents, shells like zsh with starship emit \n before
-          # each prompt (add_newline = true). Replaying from scratch leaves row 0
-          # blank. Scroll past any leading blank rows so the prompt sits at the top.
-          initial_scroll =
-            if status.adapter == Claude,
-              do: 0,
-              else: VT100.first_content_row(screen)
 
           short = String.slice(agent_id, 0, 8)
 
@@ -1619,7 +1966,7 @@ defmodule Codrift.TUI do
                   outputs: Map.put(state.agents.outputs, agent_id, existing),
                   screens: Map.put(state.agents.screens, agent_id, screen)
               },
-              main_scroll: initial_scroll,
+              main_scroll: agent_initial_scroll(status.adapter, screen),
               status: "Subscribed to #{short} — Tab to focus, then type"
           }
         catch
@@ -1631,6 +1978,31 @@ defmodule Codrift.TUI do
         flash_status(state, "Agent #{agent_id} not found")
     end
   end
+
+  # Claude Code (Ink renderer): two-step resize forces a full \e[2J repaint.
+  # A nudge fires at 600 ms only when there's no existing output (slow-starting agents).
+  # Cancel stale timers from any previous subscription first.
+  # Terminal/shell agents: a single resize suffices — two-step causes extra shell prompts.
+  defp setup_agent_refs(state, pid, agent_id, replay, Claude, {w, h}) do
+    if state.refs.nudge, do: Process.cancel_timer(state.refs.nudge)
+    if state.refs.restore, do: Process.cancel_timer(state.refs.restore)
+    AgentProcess.resize(pid, max(w - 1, 1), h)
+    restore_ref = Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
+
+    nudge_ref =
+      if Enum.empty?(replay), do: Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
+
+    %{state.refs | nudge: nudge_ref, restore: restore_ref}
+  end
+
+  defp setup_agent_refs(state, pid, _agent_id, _replay, _adapter, {w, h}) do
+    AgentProcess.resize(pid, w, h)
+    state.refs
+  end
+
+  # For Terminal agents, zsh/starship emit \n before each prompt, leaving row 0 blank on replay.
+  defp agent_initial_scroll(Claude, _screen), do: 0
+  defp agent_initial_scroll(_adapter, screen), do: VT100.first_content_row(screen)
 
   defp start_agent_at_cursor(state, adapter) do
     case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
@@ -2057,35 +2429,30 @@ defmodule Codrift.TUI do
   end
 
   defp render_agent_hint(status, focused, paste_mode, block) do
-    hint =
-      cond do
-        status == :stopped ->
-          "Agent stopped. Press s to restart."
-
-        status == :starting ->
-          "Starting… waiting for the agent prompt to appear."
-
-        paste_mode and focused ->
-          "PASTE MODE — Enter inserts newline · Ctrl+V to exit · Enter to send after"
-
-        status == :awaiting_input and focused ->
-          "Agent ready. Type your message. Ctrl+V for paste mode, Enter to send."
-
-        status == :awaiting_input ->
-          "Agent ready. Tab to focus, then type your message."
-
-        status == :running ->
-          "Agent is working…"
-
-        focused ->
-          "Shift+Tab to sidebar · Ctrl+V paste mode · Enter to send"
-
-        true ->
-          "Navigate here then Tab to focus. Type to interact."
-      end
-
-    %Paragraph{text: hint, block: block, wrap: true}
+    %Paragraph{text: agent_hint(status, focused, paste_mode), block: block, wrap: true}
   end
+
+  defp agent_hint(:stopped, _focused, _paste_mode), do: "Agent stopped. Press s to restart."
+
+  defp agent_hint(:starting, _focused, _paste_mode),
+    do: "Starting… waiting for the agent prompt to appear."
+
+  defp agent_hint(_status, true, true),
+    do: "PASTE MODE — Enter inserts newline · Ctrl+V to exit · Enter to send after"
+
+  defp agent_hint(:awaiting_input, true, _paste_mode),
+    do: "Agent ready. Type your message. Ctrl+V for paste mode, Enter to send."
+
+  defp agent_hint(:awaiting_input, _focused, _paste_mode),
+    do: "Agent ready. Tab to focus, then type your message."
+
+  defp agent_hint(:running, _focused, _paste_mode), do: "Agent is working…"
+
+  defp agent_hint(_status, true, _paste_mode),
+    do: "Shift+Tab to sidebar · Ctrl+V paste mode · Enter to send"
+
+  defp agent_hint(_status, _focused, _paste_mode),
+    do: "Navigate here then Tab to focus. Type to interact."
 
   defp render_agent_output(state, screen, focused, block) do
     prompt_suffix =
@@ -2673,6 +3040,7 @@ defmodule Codrift.TUI do
         hint: Keybindings.format(kb.edit_context)
       },
       # Other
+      %{id: :integrations, label: "Integrations (connect services)", hint: ""},
       %{id: :refresh, label: "Refresh", hint: Keybindings.format(kb.refresh)},
       %{id: :theme_picker, label: "Choose Theme", hint: ""}
     ]

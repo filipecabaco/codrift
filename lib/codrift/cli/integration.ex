@@ -7,72 +7,57 @@ defmodule Codrift.CLI.Integration do
 
   All output is JSON to stdout; errors go to stderr with a non-zero exit.
 
-  ## Usage
+  ## Auth flows
 
-      codrift integration services
-      codrift integration list   <service> [filter]
-      codrift integration import <service> <item_id> [--dir=<path>]
-      codrift integration sync   <initiative_id>
-
-  ## Services
-
-      github           GitHub Issues (GITHUB_TOKEN, GITHUB_REPO)
-      github_projects  GitHub Projects v2 (GITHUB_TOKEN)
-      linear           Linear Issues (LINEAR_API_KEY)
-      linear_projects  Linear Projects (LINEAR_API_KEY)
-      gitlab           GitLab Issues (GITLAB_TOKEN, GITLAB_PROJECT)
-      jira             Jira Cloud Issues (JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN)
-      notion           Notion Pages/Databases (NOTION_API_KEY)
-      shortcut         Shortcut Stories (SHORTCUT_TOKEN)
-      asana            Asana Tasks (ASANA_ACCESS_TOKEN)
+  - PKCE (github, linear, gitlab, jira): delegates to the running web server
+    at localhost:7437, which holds the StateStore. The TUI must be running.
+  - Guided token (notion): fully local — prompts the user to paste a token
+    created in Notion's web UI. No server needed.
+  - API key env var: fallback for CI or headless environments.
   """
 
   alias Codrift.Initiative
   alias Codrift.Initiative.Store
   alias Codrift.Integration
   alias Codrift.OAuth
+  alias Codrift.OAuth.Config, as: OAuthConfig
 
   @server_url "http://localhost:7437"
   @initiatives_file "~/.config/codrift/initiatives.json"
 
   @spec run([String.t()]) :: :ok
+
   def run(["services" | _]) do
     services =
       Enum.map(Integration.adapters(), fn mod ->
+        name = mod.name()
+
         %{
-          name: mod.name(),
-          connected: OAuth.connected?(mod.name()),
-          oauth_supported: mod.name() in Codrift.OAuth.Config.supported_services()
+          name: name,
+          connected: OAuth.connected?(name),
+          auth: service_auth_type(name)
         }
       end)
 
     print_json(services)
   end
 
+  # Auth — dispatch on flow type
   def run(["auth", service | _]) do
-    url = "#{@server_url}/oauth/start/#{service}"
+    case OAuthConfig.get(service) do
+      {:ok, %{flow: :pkce_browser}} ->
+        pkce_auth_via_server(service)
 
-    case oauth_request(url) do
-      {:ok, %{"auth_url" => auth_url}} ->
-        IO.puts("Open the following URL in your browser to authorize #{service}:\n")
-        IO.puts("  #{auth_url}\n")
-        IO.puts("The Codrift web server will handle the callback automatically.")
-        IO.puts("Run `codrift integration tokens` to confirm the connection.")
+      {:ok, %{flow: :guided_token, instructions: instructions}} ->
+        guided_token_prompt(service, instructions)
 
-      {:error, :server_unavailable} ->
-        fail(
-          "Codrift web server is not running. Start the TUI first (`codrift tui`) " <>
-            "so the OAuth callback can be received."
-        )
-
-      {:error, reason} ->
-        fail(reason)
+      {:error, _} ->
+        fail("Unknown service or no auth configured for: #{service}")
     end
   end
 
   def run(["tokens" | _]) do
-    tokens = OAuth.list_tokens()
-    print_json(tokens)
+    print_json(OAuth.list_tokens())
   end
 
   def run(["revoke", service | _]) do
@@ -81,7 +66,7 @@ defmodule Codrift.CLI.Integration do
   end
 
   def run(["list", service | rest]) do
-    filter = Enum.find(rest, fn arg -> !String.starts_with?(arg, "--") end)
+    filter = Enum.find(rest, &(!String.starts_with?(&1, "--")))
     opts = if filter, do: [filter: filter], else: []
 
     with {:ok, adapter} <- Integration.adapter_for(service),
@@ -102,17 +87,25 @@ defmodule Codrift.CLI.Integration do
       File.mkdir_p!(ctx)
       Store.write_initiative_md_for_cli(ctx, initiative)
       persist(initiative)
-      write_meta!(initiative.id, service, item_id)
-      write_context!(initiative.id, adapter.to_initiative_context(item))
 
-      if dir = opts[:dir] do
-        expanded = Path.expand(dir)
-        updated = %{initiative | dirs: [expanded]}
-        persist(updated)
-        print_json(Initiative.to_map(updated))
-      else
-        print_json(Initiative.to_map(initiative))
-      end
+      :ok =
+        Integration.write_integration_files(
+          initiative.id,
+          service,
+          item_id,
+          adapter.to_initiative_context(item)
+        )
+
+      final =
+        if dir = opts[:dir] do
+          updated = %{initiative | dirs: [Path.expand(dir)]}
+          persist(updated)
+          updated
+        else
+          initiative
+        end
+
+      print_json(Initiative.to_map(final))
     else
       {:error, reason} -> fail(reason)
     end
@@ -126,8 +119,6 @@ defmodule Codrift.CLI.Integration do
   end
 
   def run(_) do
-    services = Integration.valid_services() |> Enum.join(", ")
-
     IO.puts("""
     Usage:
       codrift integration services
@@ -138,17 +129,66 @@ defmodule Codrift.CLI.Integration do
       codrift integration import <service> <item_id> [--dir=<path>]
       codrift integration sync   <initiative_id>
 
-    Services: #{services}
+    Services: #{Integration.valid_services() |> Enum.join(", ")}
 
-    OAuth2 (recommended): run `codrift integration auth <service>` while the TUI is
-    running — it will open a browser-based authorization flow and store the token.
-
-    API key fallback: set service-specific env vars (run `codrift integration services`
-    to see which ones are connected).
+    Auth flows:
+      PKCE browser  (github, github_projects, linear, linear_projects, gitlab, jira)
+                    — requires the TUI to be running (`codrift tui`)
+      Guided token  (notion) — no server needed, just follow the prompts
+      API key only  (shortcut) — set SHORTCUT_TOKEN env var
     """)
   end
 
-  # ── Helpers ──────────────────────────────────────────────────────────────────
+  # ── Auth helpers ──────────────────────────────────────────────────────────────
+
+  # PKCE auth delegates to the running server: the PKCE StateStore
+  # lives in the server process, not in this eval process.
+  defp pkce_auth_via_server(service) do
+    case server_get("#{@server_url}/oauth/start/#{service}") do
+      {:ok, %{"auth_url" => auth_url}} ->
+        IO.puts("\nOpen this URL in your browser to authorize #{service}:\n")
+        IO.puts("  #{auth_url}\n")
+        IO.puts("The Codrift web server will capture the callback and store the token.")
+        IO.puts("Run `codrift integration tokens` to confirm.\n")
+
+      {:error, :server_unavailable} ->
+        fail(
+          "The Codrift TUI must be running to authorize #{service}.\n" <>
+            "Start it with `codrift tui`, then run this command again in a second terminal."
+        )
+
+      {:error, reason} ->
+        fail(reason)
+    end
+  end
+
+  # Guided token: fully local, no server needed.
+  defp guided_token_prompt(service, instructions) do
+    IO.puts("\n#{String.trim(instructions)}\n")
+    token = IO.gets("Token: ") |> String.trim()
+
+    if token == "" do
+      fail("No token entered.")
+    end
+
+    case OAuth.save_guided_token(service, token) do
+      :ok ->
+        IO.puts("\nConnected to #{service}. Run `codrift integration list #{service}` to test.\n")
+
+      {:error, reason} ->
+        fail(reason)
+    end
+  end
+
+  # ── Helpers ───────────────────────────────────────────────────────────────────
+
+  defp service_auth_type(name) do
+    case OAuthConfig.get(name) do
+      {:ok, %{flow: :pkce_browser}} -> "pkce_browser"
+      {:ok, %{flow: :guided_token}} -> "guided_token"
+      _ -> "api_key_only"
+    end
+  end
 
   defp item_to_map(%Integration.Item{} = item) do
     %{
@@ -171,11 +211,9 @@ defmodule Codrift.CLI.Integration do
     end)
   end
 
-  # Directly writes to initiatives.json without going through the GenServer.
   defp persist(initiative) do
     path = Path.expand(@initiatives_file)
-    existing = load_raw()
-    data = Map.put(existing, initiative.id, Initiative.to_map(initiative))
+    data = Map.put(load_raw(), initiative.id, Initiative.to_map(initiative))
     path |> Path.dirname() |> File.mkdir_p!()
     File.write!(path, JSON.encode!(%{"initiatives" => data}))
   end
@@ -192,42 +230,21 @@ defmodule Codrift.CLI.Integration do
     end
   end
 
-  defp write_meta!(initiative_id, service, item_id) do
-    path = Integration.meta_path(initiative_id)
-    path |> Path.dirname() |> File.mkdir_p!()
-    File.write!(path, JSON.encode!(%{service: service, item_id: item_id}))
-  end
-
-  defp write_context!(initiative_id, content) do
-    path = Integration.context_path(initiative_id)
-    path |> Path.dirname() |> File.mkdir_p!()
-    File.write!(path, content)
-  end
-
   defp context_path(id), do: Path.expand("~/.codrift/initiatives/#{id}")
 
-  defp oauth_request(url) do
+  defp server_get(url) do
     Application.ensure_all_started(:inets)
-    Application.ensure_all_started(:ssl)
 
-    ssl_opts = [
-      verify: :verify_none
-    ]
-
-    case :httpc.request(:get, {String.to_charlist(url), []}, [ssl: ssl_opts, timeout: 3_000], [
-           body_format: :binary
-         ]) do
-      {:ok, {{_, 200, _}, _headers, body}} ->
-        {:ok, JSON.decode!(body)}
-
-      {:ok, {{_, status, _}, _headers, body}} ->
-        {:error, "server returned HTTP #{status}: #{body}"}
-
-      {:error, {:failed_connect, _}} ->
-        {:error, :server_unavailable}
-
-      {:error, reason} ->
-        {:error, inspect(reason)}
+    case :httpc.request(
+           :get,
+           {String.to_charlist(url), []},
+           [{:timeout, 3_000}],
+           [{:body_format, :binary}]
+         ) do
+      {:ok, {{_, 200, _}, _, body}} -> {:ok, JSON.decode!(body)}
+      {:ok, {{_, status, _}, _, body}} -> {:error, "HTTP #{status}: #{body}"}
+      {:error, {:failed_connect, _}} -> {:error, :server_unavailable}
+      {:error, reason} -> {:error, inspect(reason)}
     end
   end
 

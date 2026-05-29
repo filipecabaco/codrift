@@ -1,7 +1,7 @@
 defmodule Codrift.Integration do
   @moduledoc """
   External integration layer for seeding Codrift initiatives from project
-  management services (GitHub, Linear, GitLab, Jira, Notion, Shortcut, Asana).
+  management services (GitHub, Linear, GitLab, Jira, Notion, Shortcut).
 
   ## Design principles
 
@@ -29,7 +29,17 @@ defmodule Codrift.Integration do
     @moduledoc "A single item pulled from an external project management service."
 
     @enforce_keys [:id, :title, :url]
-    defstruct [:id, :title, :description, :url, :labels, :status, :assignee, :linked_prs]
+    defstruct [
+      :id,
+      :title,
+      :description,
+      :url,
+      :labels,
+      :status,
+      :assignee,
+      :linked_prs,
+      metadata: %{}
+    ]
 
     @type t :: %__MODULE__{
             id: String.t(),
@@ -39,7 +49,8 @@ defmodule Codrift.Integration do
             labels: [String.t()],
             status: String.t() | nil,
             assignee: String.t() | nil,
-            linked_prs: [String.t()]
+            linked_prs: [String.t()],
+            metadata: map()
           }
   end
 
@@ -55,10 +66,10 @@ defmodule Codrift.Integration do
     Codrift.Integration.Adapters.LinearProjects,
     Codrift.Integration.Adapters.GitLab,
     Codrift.Integration.Adapters.Jira,
-    Codrift.Integration.Adapters.Notion,
-    Codrift.Integration.Adapters.Shortcut,
-    Codrift.Integration.Adapters.Asana
+    Codrift.Integration.Adapters.Notion
   ]
+
+  alias Codrift.Initiative.Store
 
   @doc "Returns all registered integration adapter modules."
   @spec adapters() :: [module()]
@@ -99,15 +110,20 @@ defmodule Codrift.Integration do
   def import_item(service, item_id, opts \\ []) do
     with {:ok, adapter} <- adapter_for(service),
          {:ok, item} <- adapter.get_item(item_id, opts),
-         {:ok, initiative} <- Codrift.Initiative.Store.create(item.title, []),
+         {:ok, initiative} <- Store.create(item.title, []),
          :ok <- write_meta(initiative.id, service, item_id),
-         :ok <- write_context(initiative.id, adapter.to_initiative_context(item)) do
-      case Keyword.get(opts, :dir) do
-        nil -> :ok
-        dir -> Codrift.Initiative.Store.add_dir(initiative.id, Path.expand(dir))
-      end
-
+         :ok <- write_context(initiative.id, adapter.to_initiative_context(item)),
+         :ok <- maybe_add_dir(initiative.id, opts) do
       {:ok, initiative}
+    end
+  end
+
+  @doc "Writes integration.json and integration.md for a pre-existing initiative (file I/O only, no GenServer)."
+  @spec write_integration_files(String.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, term()}
+  def write_integration_files(initiative_id, service, item_id, context) do
+    with :ok <- write_meta(initiative_id, service, item_id) do
+      write_context(initiative_id, context)
     end
   end
 
@@ -128,6 +144,22 @@ defmodule Codrift.Integration do
     end
   end
 
+  @doc """
+  Maps a service-specific status string to a Codrift initiative status atom.
+
+  Covers the most common status names across GitHub, Linear, GitLab, Jira,
+  Notion, Shortcut, and GitHub Projects. Unknown values default to `:ongoing`.
+  """
+  @spec map_item_status(String.t() | nil) :: Codrift.Initiative.status()
+  def map_item_status(status) do
+    cond do
+      status in ~w[done closed completed resolved merged fixed] -> :done
+      status in ~w[cancelled canceled archived wontfix won't_fix dismissed] -> :archived
+      status in ~w[planning backlog todo unstarted triage icebox] -> :planning
+      true -> :ongoing
+    end
+  end
+
   @doc "Returns the path to the integration metadata JSON file for an initiative."
   @spec meta_path(String.t()) :: String.t()
   def meta_path(initiative_id),
@@ -139,6 +171,15 @@ defmodule Codrift.Integration do
     do: Path.expand("~/.codrift/initiatives/#{initiative_id}/integration.md")
 
   # ── Private helpers ──────────────────────────────────────────────────────────
+
+  defp maybe_add_dir(_id, []), do: :ok
+
+  defp maybe_add_dir(id, opts) do
+    case Keyword.get(opts, :dir) do
+      nil -> :ok
+      dir -> Store.add_dir(id, Path.expand(dir))
+    end
+  end
 
   defp write_meta(initiative_id, service, item_id) do
     path = meta_path(initiative_id)

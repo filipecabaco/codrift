@@ -1,156 +1,194 @@
 defmodule Codrift.OAuth.Config do
   @moduledoc """
-  OAuth2 configuration for each supported external service.
+  OAuth2 / auth configuration for each supported external service.
 
-  Each entry defines the authorization URL, token exchange URL, required scopes,
-  and which environment variables hold the client credentials the user registered
-  in their OAuth app settings.
+  ## Flow types
 
-  ## Registering an OAuth app
+  - `:pkce_browser` — RFC 7636 PKCE + localhost redirect. No client secret
+    needed or stored. `client_id` only (safe to ship in the binary).
+    Services: linear, linear_projects, gitlab, jira.
 
-  Each service requires you to register an application and set the redirect URI to:
+  - `:device_flow` — GitHub Device Flow (RFC 8628). No redirect URI, no secret.
+    User visits github.com/login/device and enters a short code.
+    Services: github, github_projects.
 
-      http://localhost:7437/oauth/callback/<service>
+  - `:guided_token` — No OAuth. The service issues a token through its web UI
+    and the user pastes it. Services: notion.
 
-  Environment variables needed per service:
+  ## Registering apps
 
-  | Service  | Client ID env        | Client Secret env        |
-  |----------|---------------------|--------------------------|
-  | github   | GITHUB_CLIENT_ID    | GITHUB_CLIENT_SECRET     |
-  | linear   | LINEAR_CLIENT_ID    | LINEAR_CLIENT_SECRET     |
-  | gitlab   | GITLAB_CLIENT_ID    | GITLAB_CLIENT_SECRET     |
-  | notion   | NOTION_CLIENT_ID    | NOTION_CLIENT_SECRET     |
-  | jira     | JIRA_CLIENT_ID      | JIRA_CLIENT_SECRET       |
-  | asana    | ASANA_CLIENT_ID     | ASANA_CLIENT_SECRET      |
+  PKCE services — redirect URI: `http://localhost:7437/oauth/callback/<service>`
+  Device Flow  — no redirect URI needed; register a GitHub OAuth App.
+
+  `client_id` resolution order:
+    1. `{SERVICE}_CLIENT_ID` env var
+    2. Codrift's hardcoded client ID (set once registered apps exist)
   """
 
   @port 7437
 
   @services %{
     "github" => %{
-      auth_url: "https://github.com/login/oauth/authorize",
+      flow: :device_flow,
+      device_code_url: "https://github.com/login/device/code",
       token_url: "https://github.com/login/oauth/access_token",
       client_id_env: "GITHUB_CLIENT_ID",
-      client_secret_env: "GITHUB_CLIENT_SECRET",
-      scopes: "repo read:org project",
-      token_format: :form
+      client_id: nil,
+      scopes: "repo read:org project"
     },
     "github_projects" => %{
-      auth_url: "https://github.com/login/oauth/authorize",
+      flow: :device_flow,
+      device_code_url: "https://github.com/login/device/code",
       token_url: "https://github.com/login/oauth/access_token",
       client_id_env: "GITHUB_CLIENT_ID",
-      client_secret_env: "GITHUB_CLIENT_SECRET",
-      scopes: "repo read:org project",
-      token_format: :form
+      client_id: nil,
+      scopes: "repo read:org project"
     },
     "linear" => %{
+      flow: :pkce_browser,
       auth_url: "https://linear.app/oauth/authorize",
       token_url: "https://api.linear.app/oauth/token",
       client_id_env: "LINEAR_CLIENT_ID",
-      client_secret_env: "LINEAR_CLIENT_SECRET",
+      client_id: nil,
       scopes: "read",
       token_format: :json
     },
     "linear_projects" => %{
+      flow: :pkce_browser,
       auth_url: "https://linear.app/oauth/authorize",
       token_url: "https://api.linear.app/oauth/token",
       client_id_env: "LINEAR_CLIENT_ID",
-      client_secret_env: "LINEAR_CLIENT_SECRET",
+      client_id: nil,
       scopes: "read",
       token_format: :json
     },
     "gitlab" => %{
+      flow: :pkce_browser,
       auth_url: "https://gitlab.com/oauth/authorize",
       token_url: "https://gitlab.com/oauth/token",
       client_id_env: "GITLAB_CLIENT_ID",
-      client_secret_env: "GITLAB_CLIENT_SECRET",
+      client_id: nil,
       scopes: "read_api read_user",
       token_format: :json
     },
-    "notion" => %{
-      auth_url: "https://api.notion.com/v1/oauth/authorize",
-      token_url: "https://api.notion.com/v1/oauth/token",
-      client_id_env: "NOTION_CLIENT_ID",
-      client_secret_env: "NOTION_CLIENT_SECRET",
-      scopes: nil,
-      token_format: :notion
-    },
     "jira" => %{
+      flow: :pkce_browser,
       auth_url: "https://auth.atlassian.com/authorize",
       token_url: "https://auth.atlassian.com/oauth/token",
       client_id_env: "JIRA_CLIENT_ID",
-      client_secret_env: "JIRA_CLIENT_SECRET",
+      client_id: nil,
       scopes: "read:jira-work read:jira-user offline_access",
       token_format: :json
     },
-    "asana" => %{
-      auth_url: "https://app.asana.com/-/oauth_authorize",
-      token_url: "https://app.asana.com/-/oauth_token",
-      client_id_env: "ASANA_CLIENT_ID",
-      client_secret_env: "ASANA_CLIENT_SECRET",
-      scopes: "default",
-      token_format: :json
+    "notion" => %{
+      flow: :guided_token,
+      setup_url: "https://www.notion.so/profile/integrations",
+      token_prefixes: ["secret_", "ntn_"],
+      instructions: """
+      Notion uses Internal Integrations — no OAuth app required.
+
+        1. Open https://www.notion.so/profile/integrations in your browser
+        2. Click "New integration", give it a name (e.g. Codrift), select your workspace
+        3. Copy the "Internal Integration Secret" shown on the integration page
+        4. In each Notion database you want Codrift to access:
+             open the database → ... menu → Connections → add your integration
+
+      Paste your Internal Integration Secret below (starts with "secret_" or "ntn_").
+      """
     }
   }
 
-  @doc "Returns the config map for a named service, or `{:error, reason}`."
+  @doc "Returns the config map for a named service."
   @spec get(String.t()) :: {:ok, map()} | {:error, String.t()}
   def get(service) do
     case Map.fetch(@services, service) do
       {:ok, config} -> {:ok, config}
-      :error -> {:error, "OAuth2 not supported for service: #{service}"}
+      :error -> {:error, "no OAuth/auth config for service: #{service}"}
     end
   end
 
-  @doc "Returns the list of services that support OAuth2."
-  @spec supported_services() :: [String.t()]
-  def supported_services, do: Map.keys(@services)
+  @doc "Returns all services with browser-based PKCE OAuth support."
+  @spec pkce_services() :: [String.t()]
+  def pkce_services do
+    @services
+    |> Enum.filter(fn {_, c} -> c.flow == :pkce_browser end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
+  end
 
-  @doc "Builds the redirect URI for a service."
+  @doc "Returns all services using GitHub Device Flow."
+  @spec device_flow_services() :: [String.t()]
+  def device_flow_services do
+    @services
+    |> Enum.filter(fn {_, c} -> c.flow == :device_flow end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
+  end
+
+  @doc "Returns all services that support any form of auth flow (PKCE or guided)."
+  @spec supported_services() :: [String.t()]
+  def supported_services, do: @services |> Map.keys() |> Enum.sort()
+
+  @doc "Returns the redirect URI for a PKCE service."
   @spec redirect_uri(String.t()) :: String.t()
   def redirect_uri(service), do: "http://localhost:#{@port}/oauth/callback/#{service}"
 
   @doc """
-  Builds the full authorization URL for a service.
+  Builds the PKCE authorization URL for a service.
 
-  Returns `{:error, reason}` when the client ID env var is not set.
+  Requires `flow: :pkce_browser`. Returns `{:error, reason}` when the service
+  uses a different flow or the client ID cannot be resolved.
   """
-  @spec auth_url(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def auth_url(service, state) do
-    with {:ok, config} <- get(service) do
-      client_id = System.get_env(config.client_id_env)
+  @spec auth_url(String.t(), String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def auth_url(service, state, code_challenge) do
+    with {:ok, %{flow: :pkce_browser} = config} <- get(service),
+         {:ok, client_id} <- resolve_client_id(config, service) do
+      params =
+        %{
+          client_id: client_id,
+          redirect_uri: redirect_uri(service),
+          response_type: "code",
+          state: state,
+          code_challenge: code_challenge,
+          code_challenge_method: "S256"
+        }
+        |> maybe_add_scopes(config)
+        |> maybe_add_extras(service)
+        |> URI.encode_query()
 
-      unless client_id do
-        {:error, "#{config.client_id_env} env var is required to use OAuth for #{service}"}
-      else
-        params =
-          %{
-            client_id: client_id,
-            redirect_uri: redirect_uri(service),
-            response_type: "code",
-            state: state
-          }
-          |> maybe_add_scopes(config)
-          |> maybe_add_audience(service)
-          |> URI.encode_query()
+      {:ok, "#{config.auth_url}?#{params}"}
+    else
+      {:ok, %{flow: :guided_token}} ->
+        {:error, "#{service} uses guided token setup, not browser OAuth"}
 
-        {:ok, "#{config.auth_url}?#{params}"}
-      end
+      {:error, _} = err ->
+        err
     end
   end
 
-  defp maybe_add_scopes(params, %{scopes: nil}), do: params
+  @doc "Resolves the client ID for a service (env var overrides hardcoded default)."
+  @spec resolve_client_id(map(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def resolve_client_id(config, service) do
+    case System.get_env(config.client_id_env) || config.client_id do
+      nil ->
+        {:error,
+         "#{config.client_id_env} env var is required to use OAuth for #{service}. " <>
+           "Register an OAuth app at the service's developer portal and set the redirect URI to: " <>
+           redirect_uri(service)}
+
+      id ->
+        {:ok, id}
+    end
+  end
+
+  # ── Private ──────────────────────────────────────────────────────────────────
+
   defp maybe_add_scopes(params, %{scopes: s}), do: Map.put(params, :scope, s)
 
-  # Jira requires audience=api.atlassian.com and prompt=consent
-  defp maybe_add_audience(params, "jira") do
+  # Jira requires audience=api.atlassian.com + prompt=consent
+  defp maybe_add_extras(params, "jira") do
     Map.merge(params, %{audience: "api.atlassian.com", prompt: "consent"})
   end
 
-  # Notion requires owner=user
-  defp maybe_add_audience(params, "notion") do
-    Map.put(params, :owner, "user")
-  end
-
-  defp maybe_add_audience(params, _), do: params
+  defp maybe_add_extras(params, _), do: params
 end

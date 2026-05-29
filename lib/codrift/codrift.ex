@@ -19,6 +19,7 @@ defmodule Codrift do
   alias Codrift.Initiative.Store
   alias Codrift.MCP.Handler
   alias Codrift.OAuth
+  alias Codrift.OAuth.Config, as: OAuthConfig
 
   @impl true
   def start(_type, _args) do
@@ -29,6 +30,7 @@ defmodule Codrift do
       Codrift.AgentSupervisor,
       {Task.Supervisor, name: Codrift.TaskSupervisor},
       Codrift.OAuth.StateStore,
+      Codrift.Scheduler,
       {Bandit,
        [plug: __MODULE__, startup_log: false] ++
          Application.get_env(:codrift, :bandit_opts, [])}
@@ -107,12 +109,21 @@ defmodule Codrift do
     service = conn.params["service"]
 
     case OAuth.start_flow(service) do
-      {:ok, %{auth_url: url}} ->
+      {:ok, %{flow: :pkce_browser, auth_url: url}} ->
         %{
+          "flow" => "pkce_browser",
           "service" => service,
           "auth_url" => url,
-          "redirect_uri" => Codrift.OAuth.Config.redirect_uri(service),
+          "redirect_uri" => OAuthConfig.redirect_uri(service),
           "message" => "Open auth_url in your browser to authorize #{service}"
+        }
+
+      {:ok, %{flow: :guided_token, instructions: instructions}} ->
+        %{
+          "flow" => "guided_token",
+          "service" => service,
+          "instructions" => instructions,
+          "message" => "Follow the instructions to create an integration token"
         }
 
       {:error, reason} ->
@@ -129,6 +140,7 @@ defmodule Codrift do
     cond do
       error ->
         description = conn.params["error_description"] || error
+
         conn
         |> Plug.Conn.put_resp_content_type("text/html")
         |> Plug.Conn.send_resp(400, oauth_error_html(service, description))
@@ -154,7 +166,7 @@ defmodule Codrift do
   end)
 
   get("/oauth/status", fn _conn ->
-    all_services = Codrift.OAuth.Config.supported_services()
+    all_services = OAuthConfig.supported_services()
 
     status =
       Map.new(all_services, fn service ->
@@ -190,6 +202,8 @@ defmodule Codrift do
   end
 
   defp oauth_error_html(service, reason) do
+    safe_reason = html_escape(reason)
+
     """
     <!DOCTYPE html>
     <html lang="en">
@@ -207,11 +221,20 @@ defmodule Codrift do
     <body>
       <p class="err">&#10007;</p>
       <h1>Authorization failed for #{service}</h1>
-      <p class="reason">#{reason}</p>
+      <p class="reason">#{safe_reason}</p>
       <p>Try running <code>codrift integration auth #{service}</code> again.</p>
     </body>
     </html>
     """
+  end
+
+  defp html_escape(str) do
+    str
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&#39;")
   end
 
   # ── MCP routes ───────────────────────────────────────────────────────────────

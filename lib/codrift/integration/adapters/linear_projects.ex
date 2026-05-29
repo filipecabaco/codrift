@@ -113,7 +113,7 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
 
     **Source:** Linear Project — #{item.url}
     **Status:** #{item.status || "unknown"}
-    **Progress:** #{item.assignee || "0%"}
+    **Progress:** #{get_in(item.metadata, [:progress]) || "0%"}
 
     ## Description
 
@@ -129,7 +129,10 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
 
   defp project_to_item(project) do
     teams = Enum.map(get_in(project, ["teams", "nodes"]) || [], & &1["key"])
-    issues = Enum.map(get_in(project, ["issues", "nodes"]) || [], &"#{&1["identifier"]} #{&1["title"]}")
+
+    issues =
+      Enum.map(get_in(project, ["issues", "nodes"]) || [], &"#{&1["identifier"]} #{&1["title"]}")
+
     progress = format_progress(project["progress"])
 
     %Item{
@@ -139,8 +142,9 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
       url: project["url"] || "",
       labels: teams,
       status: project["state"],
-      assignee: progress,
-      linked_prs: issues
+      assignee: nil,
+      linked_prs: issues,
+      metadata: %{progress: progress}
     }
   end
 
@@ -163,6 +167,6 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
   end
 
   defp format_gql_errors(errors) do
-    errors |> Enum.map(& &1["message"]) |> Enum.join("; ")
+    Enum.map_join(errors, "; ", & &1["message"])
   end
 end
