@@ -64,7 +64,7 @@ defmodule Codrift.MixProject do
       {:req, "~> 0.5"},
       {:ex_ratatui,
        github: "filipecabaco/ex_ratatui",
-       ref: "a99c498142a7dee3256cd16b75d15b1e6f7e50b8",
+       ref: "3784823fff0356c560c6d75c78b600cc64c1bf9e",
        override: true},
       {:erlexec, "~> 2.0"},
       {:exqlite, "~> 0.23"},
