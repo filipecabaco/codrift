@@ -76,8 +76,9 @@ defmodule Codrift.TUI do
   alias Codrift.Agent.Adapters.{Aider, Claude, Terminal}
   alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative, Paths}
   alias Codrift.Config.{Keybindings, Theme}
-  alias Codrift.Initiative.Store
+  alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.OAuth.Config, as: OAuthConfig
+  alias Codrift.Worktree
 
   alias Codrift.TUI.{
     AgentState,
@@ -119,6 +120,7 @@ defmodule Codrift.TUI do
   @impl true
   def mount(_opts) do
     Process.send_after(self(), :autostart_sessions, 300)
+    Codrift.Updater.check_async(self())
     initiatives = Store.list()
     agents = Enum.map(AgentSupervisor.list_agents(), &AgentProcess.status/1)
 
@@ -414,6 +416,14 @@ defmodule Codrift.TUI do
 
   def handle_event(%Key{code: "tab", kind: "press"}, %{modal: %{type: :new_dir}} = state),
     do: {:noreply, DirPicker.complete(state)}
+
+  def handle_event(
+        %Key{code: "w", kind: "press"},
+        %{modal: %{type: :new_dir, worktree_git: true}} = state
+      ) do
+    {:noreply,
+     %{state | modal: %{state.modal | worktree_enabled: not state.modal.worktree_enabled}}}
+  end
 
   def handle_event(%Key{code: "up", kind: "press"}, %{modal: %{type: :palette}} = state) do
     palette = state.modal.palette
@@ -749,6 +759,9 @@ defmodule Codrift.TUI do
   defp dispatch_char(_action, code, true, state),
     do: {:noreply, %{state | input_buffer: state.input_buffer <> code}}
 
+  defp dispatch_char(nil, "W", false, state),
+    do: {:noreply, toggle_dir_worktree_at_cursor(state)}
+
   defp dispatch_char(action, _code, false, state),
     do: dispatch_sidebar_action(action, state)
 
@@ -909,6 +922,7 @@ defmodule Codrift.TUI do
 
   def handle_info({:agent_stopped, agent_id, 0}, state) do
     short = String.slice(agent_id, 0, 8)
+    Codrift.SessionStore.delete_by_agent(agent_id)
 
     new_state = %{
       state
@@ -920,6 +934,7 @@ defmodule Codrift.TUI do
 
   def handle_info({:agent_stopped, agent_id, code}, state) do
     short = String.slice(agent_id, 0, 8)
+    Codrift.SessionStore.delete_by_agent(agent_id)
 
     new_state = %{
       state
@@ -1107,6 +1122,10 @@ defmodule Codrift.TUI do
       end)
 
     {:noreply, new_state}
+  end
+
+  def handle_info({:update_available, latest}, state) do
+    {:noreply, flash_status(state, "codrift #{latest} available — run `codrift update`", 8000)}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -1444,14 +1463,18 @@ defmodule Codrift.TUI do
   defp confirm_dir(%{modal: %{context: {:add_dir, initiative_id}}} = state) do
     dir = typed_dir(state)
 
+    worktree_enabled = state.modal.worktree_git and state.modal.worktree_enabled
+
     with true <- File.dir?(dir),
-         {:ok, _} <- Store.add_dir(initiative_id, dir) do
+         {:ok, _} <- Store.add_dir(initiative_id, dir, worktree_enabled: worktree_enabled) do
+      suffix = if worktree_enabled, do: " (worktree)", else: ""
+
       state
       |> reload_sidebar()
       |> then(fn s ->
         flash_status(
           %{s | modal: %{s.modal | type: :none, context: nil}},
-          "Added: #{Paths.compact(dir)}"
+          "Added: #{Paths.compact(dir)}#{suffix}"
         )
       end)
     else
@@ -1476,7 +1499,7 @@ defmodule Codrift.TUI do
     initiative_id =
       case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
         {:initiative, id, _, _, _, _} -> id
-        {:dir, id, _, _} -> id
+        {:dir, id, _, _, _} -> id
         {:context_dir, id, _, _} -> id
         {:context_file, id, _, _} -> id
         _ -> state.selection.initiative_id
@@ -1485,6 +1508,12 @@ defmodule Codrift.TUI do
     if is_nil(initiative_id) do
       flash_status(state, "Navigate to an initiative or directory first")
     else
+      worktree_default =
+        case Store.get(initiative_id) do
+          {:ok, initiative} -> initiative.worktree_default
+          _ -> false
+        end
+
       ExRatatui.text_input_set_value(state.modal.input, "")
 
       %{
@@ -1493,7 +1522,9 @@ defmodule Codrift.TUI do
             state.modal
             | type: :new_dir,
               context: {:add_dir, initiative_id},
-              dir_picker: %{suggestions: DirPicker.suggestions(""), cursor: 0}
+              dir_picker: %{suggestions: DirPicker.suggestions(""), cursor: 0},
+              worktree_git: false,
+              worktree_enabled: worktree_default
           },
           status: "↑/↓: navigate  Tab: complete  Enter: add  Esc: cancel"
       }
@@ -1508,7 +1539,7 @@ defmodule Codrift.TUI do
           | modal: %{state.modal | type: :confirm_delete, context: {:delete_initiative, id, name}}
         }
 
-      {:dir, initiative_id, dir, _} ->
+      {:dir, initiative_id, dir, _, _} ->
         %{
           state
           | modal: %{
@@ -1619,6 +1650,7 @@ defmodule Codrift.TUI do
     case AgentSupervisor.find_agent(agent_id) do
       {:ok, pid} ->
         AgentSupervisor.stop_agent(pid)
+        Codrift.SessionStore.delete_by_agent(agent_id)
         cleared = if state.selection.agent_id == agent_id, do: nil, else: state.selection.agent_id
 
         state
@@ -1750,6 +1782,12 @@ defmodule Codrift.TUI do
     }
   end
 
+  defp do_palette_action(:toggle_dir_worktree, state),
+    do: toggle_dir_worktree_at_cursor(%{state | modal: %{state.modal | type: :none}})
+
+  defp do_palette_action(:toggle_worktree_default, state),
+    do: toggle_worktree_default(%{state | modal: %{state.modal | type: :none}})
+
   defp do_palette_action(:refresh, state),
     do: refresh_current(%{state | modal: %{state.modal | type: :none}})
 
@@ -1758,9 +1796,26 @@ defmodule Codrift.TUI do
     %{state | modal: %{state.modal | palette: %{filter: filter, cursor: 0}}}
   end
 
-  defp sync_modal(state, :new_dir), do: DirPicker.sync(state)
+  defp sync_modal(state, :new_dir), do: state |> DirPicker.sync() |> refresh_worktree_git()
 
   defp sync_modal(state, _), do: state
+
+  defp refresh_worktree_git(state) do
+    typed =
+      state.modal.input |> ExRatatui.text_input_get_value() |> String.trim() |> Path.expand()
+
+    is_git = File.dir?(typed) and Worktree.git_repo?(typed)
+    was_git = state.modal.worktree_git
+
+    new_enabled =
+      cond do
+        is_git and not was_git -> true
+        not is_git -> false
+        true -> state.modal.worktree_enabled
+      end
+
+    %{state | modal: %{state.modal | worktree_git: is_git, worktree_enabled: new_enabled}}
+  end
 
   defp navigate(state, delta) do
     if Focus.focused?(state.focus, :sidebar) do
@@ -1789,7 +1844,7 @@ defmodule Codrift.TUI do
       {:initiative, id, _, _, _, _} ->
         fetch_initiative_context(state, id)
 
-      {:dir, initiative_id, dir, _} ->
+      {:dir, initiative_id, dir, _, _} ->
         fetch_dir_context(state, initiative_id, dir)
 
       {:context_dir, initiative_id, path, _} ->
@@ -1813,12 +1868,16 @@ defmodule Codrift.TUI do
         by_dir = Enum.group_by(agents, & &1.dir)
 
         dir_infos =
-          Enum.map(initiative.dirs, fn dir ->
+          Enum.map(initiative.dirs, fn entry ->
+            effective = DirEntry.effective_path(entry)
+
             %{
-              path: dir,
-              branch: git_output(dir, ["branch", "--show-current"]),
-              last_commit: git_output(dir, ["log", "-1", "--format=%h %s"]),
-              agent_count: length(Map.get(by_dir, dir, []))
+              path: entry.path,
+              branch: git_output(effective, ["branch", "--show-current"]),
+              last_commit: git_output(effective, ["log", "-1", "--format=%h %s"]),
+              agent_count: length(Map.get(by_dir, effective, [])),
+              worktree_enabled: entry.worktree_enabled,
+              worktree_path: entry.worktree_path
             }
           end)
 
@@ -1842,7 +1901,8 @@ defmodule Codrift.TUI do
           context_dir: context_dir,
           context_files: context_files,
           dirs: dir_infos,
-          md_sections: md_sections
+          md_sections: md_sections,
+          worktree_default: initiative.worktree_default
         }
 
         %{
@@ -1858,8 +1918,15 @@ defmodule Codrift.TUI do
 
   defp list_context_files(path) do
     case File.ls(path) do
-      {:ok, files} -> files |> Enum.reject(&String.starts_with?(&1, ".")) |> Enum.sort()
-      {:error, _} -> []
+      {:ok, files} ->
+        files
+        |> Enum.reject(fn f ->
+          String.starts_with?(f, ".") or File.dir?(Path.join(path, f))
+        end)
+        |> Enum.sort()
+
+      {:error, _} ->
+        []
     end
   end
 
@@ -1896,17 +1963,31 @@ defmodule Codrift.TUI do
   end
 
   defp fetch_dir_context(state, initiative_id, dir) do
-    branch = git_output(dir, ["branch", "--show-current"])
-    remote = git_output(dir, ["remote", "get-url", "origin"])
-    commits_raw = git_output(dir, ["log", "--oneline", "-5"])
+    entry =
+      case Store.get(initiative_id) do
+        {:ok, initiative} -> Enum.find(initiative.dirs, &(&1.path == dir))
+        _ -> nil
+      end
+
+    effective = if entry, do: DirEntry.effective_path(entry), else: dir
+
+    branch = git_output(effective, ["branch", "--show-current"])
+    remote = git_output(effective, ["remote", "get-url", "origin"])
+    commits_raw = git_output(effective, ["log", "--oneline", "-5"])
     commits = String.split(commits_raw, "\n", trim: true)
+
+    source_branch =
+      if entry && entry.worktree_path,
+        do: git_output(dir, ["branch", "--show-current"])
 
     cursor_info = %{
       type: :dir,
       path: dir,
       branch: branch,
       remote: remote,
-      commits: commits
+      commits: commits,
+      worktree_path: entry && entry.worktree_path,
+      source_branch: source_branch
     }
 
     %{
@@ -2009,8 +2090,8 @@ defmodule Codrift.TUI do
       {:initiative, id, _, _, _, _} ->
         do_start_agent(state, id, Store.context_path(id), adapter)
 
-      {:dir, initiative_id, dir, _} ->
-        do_start_agent(state, initiative_id, dir, adapter)
+      {:dir, initiative_id, source_path, _, _} ->
+        do_start_agent(state, initiative_id, resolve_dir(initiative_id, source_path), adapter)
 
       {:context_dir, initiative_id, path, _} ->
         do_start_agent(state, initiative_id, path, adapter)
@@ -2020,6 +2101,17 @@ defmodule Codrift.TUI do
 
       _ ->
         flash_status(state, "Navigate to an initiative or directory to start an agent")
+    end
+  end
+
+  defp resolve_dir(initiative_id, source_path) do
+    case Store.get(initiative_id) do
+      {:ok, initiative} ->
+        entry = Enum.find(initiative.dirs, &(&1.path == source_path))
+        if entry, do: DirEntry.effective_path(entry), else: source_path
+
+      _ ->
+        source_path
     end
   end
 
@@ -2040,6 +2132,57 @@ defmodule Codrift.TUI do
     end)
 
     %{state | status: "Starting agent in #{Paths.compact(dir)}..."}
+  end
+
+  defp toggle_dir_worktree_at_cursor(state) do
+    case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
+      {:dir, initiative_id, source_path, _, _} ->
+        case Store.toggle_dir_worktree(initiative_id, source_path) do
+          {:ok, _} ->
+            state
+            |> reload_sidebar()
+            |> refresh_current()
+            |> flash_status("Worktree toggled for #{Paths.compact(source_path)}")
+
+          {:error, reason} ->
+            flash_status(state, "Worktree toggle failed: #{inspect(reason)}")
+        end
+
+      _ ->
+        flash_status(state, "Navigate to a directory entry to toggle its worktree")
+    end
+  end
+
+  defp toggle_worktree_default(state) do
+    case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
+      {type, initiative_id, _, _, _, _} when type in [:initiative] ->
+        do_toggle_worktree_default(state, initiative_id)
+
+      {type, initiative_id, _, _} when type in [:dir, :context_dir] ->
+        do_toggle_worktree_default(state, initiative_id)
+
+      _ ->
+        flash_status(state, "Navigate to an initiative or directory first")
+    end
+  end
+
+  defp do_toggle_worktree_default(state, initiative_id) do
+    case Store.get(initiative_id) do
+      {:ok, initiative} ->
+        new_default = not initiative.worktree_default
+
+        case Store.set_worktree_default(initiative_id, new_default) do
+          {:ok, _} ->
+            label = if new_default, do: "ON", else: "OFF"
+            flash_status(state, "Worktree default #{label} for this initiative")
+
+          {:error, reason} ->
+            flash_status(state, "Failed: #{inspect(reason)}")
+        end
+
+      _ ->
+        state
+    end
   end
 
   defp cycle_initiative_status(state, direction) do
@@ -2152,7 +2295,11 @@ defmodule Codrift.TUI do
   defp refresh_diff(state) do
     case Store.get(state.selection.initiative_id) do
       {:ok, initiative} ->
-        dir_diffs = Enum.map(initiative.dirs, fn dir -> {dir, diff_for_dir(dir)} end)
+        dir_diffs =
+          Enum.map(initiative.dirs, fn entry ->
+            {entry.path, diff_for_dir(DirEntry.effective_path(entry))}
+          end)
+
         total_files = Enum.sum(Enum.map(dir_diffs, fn {_, fs} -> length(fs) end))
         diff_sidebar = Sidebar.build_diff_entries(dir_diffs)
 
@@ -2235,7 +2382,7 @@ defmodule Codrift.TUI do
   defp render_main(%{active_tab: :context} = state) do
     case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
       {:initiative, _, name, _, _, _} -> render_initiative_pane(state, name)
-      {:dir, _, dir, _} -> render_dir_pane(state, dir)
+      {:dir, _, dir, _, _} -> render_dir_pane(state, dir)
       {:context_dir, _, path, _} -> render_context_dir_pane(state, path)
       {:context_file, _, _, _} -> render_context_file_pane(state)
       {:agent, id, adapter, status} -> render_agent_pane(state, id, adapter, status)
@@ -2251,9 +2398,10 @@ defmodule Codrift.TUI do
         context_dir: ctx_dir,
         context_files: files,
         dirs: dirs,
-        md_sections: md_sections
+        md_sections: md_sections,
+        worktree_default: wt_default
       } ->
-        content = build_initiative_md_content(md_sections, dirs, files, ctx_dir)
+        content = build_initiative_md_content(md_sections, dirs, files, ctx_dir, wt_default)
 
         %CodeBlock{
           content: content,
@@ -2277,7 +2425,7 @@ defmodule Codrift.TUI do
         dirs: dirs
       } ->
         # fallback when md_sections not yet populated
-        content = build_initiative_md_content([], dirs, files, ctx_dir)
+        content = build_initiative_md_content([], dirs, files, ctx_dir, false)
 
         %CodeBlock{
           content: content,
@@ -2389,10 +2537,20 @@ defmodule Codrift.TUI do
   defp render_dir_pane(state, dir) do
     text =
       case state.cursor_info do
-        %{type: :dir, branch: branch, remote: remote, commits: commits} ->
-          remote_line = if remote == "(not a git repo)", do: "", else: "Remote:  #{remote}\n"
+        %{type: :dir, branch: branch, remote: remote, commits: commits} = info ->
+          remote_line = if remote == "(not a git repo)", do: "", else: "Remote:   #{remote}\n"
           commits_text = Enum.map_join(commits, "\n", fn c -> "  #{c}" end)
-          "Branch:  #{branch}\n#{remote_line}\nRecent commits:\n#{commits_text}"
+
+          worktree_section =
+            case info do
+              %{worktree_path: wt, source_branch: src} when is_binary(wt) ->
+                "Worktree: #{Paths.compact(wt)}\nSrc branch: #{src || "?"}  (#{Paths.compact(dir)})\n"
+
+              _ ->
+                "Worktree: none  (W to enable)\n"
+            end
+
+          "Path:     #{Paths.compact(dir)}\nBranch:   #{branch}\n#{worktree_section}#{remote_line}\nRecent commits:\n#{commits_text}"
 
         _ ->
           "Loading…"
@@ -2401,7 +2559,7 @@ defmodule Codrift.TUI do
     %Paragraph{
       text: text,
       block: %Block{
-        title: " ▸ #{Paths.compact(dir)} ",
+        title: " ▸ #{Path.basename(dir)} ",
         borders: [:all],
         border_type: :rounded,
         border_style: Styles.pane_border(state.focus, :main, state.theme)
@@ -2938,16 +3096,18 @@ defmodule Codrift.TUI do
   end
 
   # Builds the full markdown content shown in the initiative summary pane.
-  defp build_initiative_md_content(md_sections, dirs, files, ctx_dir) do
+  defp build_initiative_md_content(md_sections, dirs, files, ctx_dir, worktree_default) do
     user_sections =
       Enum.map_join(md_sections, "\n\n", fn {title, body} -> "## #{title}\n\n#{body}" end)
 
+    wt_tag = if worktree_default, do: "on", else: "off"
+
     dirs_section =
       if dirs == [] do
-        "## Directories\n\n_(no directories added yet — press `a` to add one)_"
+        "## Directories\n\n_(no directories added yet — press `a` to add one)_\n\nWorktree default: `#{wt_tag}` _(Ctrl+P → Toggle Worktree Default)_"
       else
         dir_lines = Enum.map_join(dirs, "\n\n", &format_dir_info_md/1)
-        "## Directories\n\n#{dir_lines}"
+        "## Directories  _(worktree default: #{wt_tag})_\n\n#{dir_lines}"
       end
 
     files_section =
@@ -2963,10 +3123,22 @@ defmodule Codrift.TUI do
     |> Enum.join("\n\n")
   end
 
-  defp format_dir_info_md(%{path: path, branch: branch, last_commit: commit, agent_count: count}) do
+  defp format_dir_info_md(%{
+         path: path,
+         branch: branch,
+         last_commit: commit,
+         agent_count: count,
+         worktree_enabled: worktree_enabled,
+         worktree_path: worktree_path
+       }) do
     agents_label = if count == 0, do: "none", else: "#{count} running"
 
-    "**#{Paths.compact(path)}**  \nbranch: `#{branch}` · commit: `#{commit}` · agents: #{agents_label}"
+    worktree_label =
+      if worktree_enabled and is_binary(worktree_path),
+        do: "worktree: `#{Paths.compact(worktree_path)}`",
+        else: "worktree: off  _(W to enable)_"
+
+    "**#{Paths.compact(path)}**  \nbranch: `#{branch}` · #{worktree_label} · commit: `#{commit}` · agents: #{agents_label}"
   end
 
   # ── Config helpers ────────────────────────────────────────────────────────────
@@ -3019,6 +3191,8 @@ defmodule Codrift.TUI do
         label: "Cycle Initiative Status",
         hint: "#{Keybindings.format(kb.status_prev)}/#{Keybindings.format(kb.status_next)}"
       },
+      %{id: :toggle_worktree_default, label: "Toggle Worktree Default (initiative)", hint: ""},
+      %{id: :toggle_dir_worktree, label: "Toggle Worktree for Directory", hint: "W"},
       %{id: :delete_current, label: "Delete / Stop Current", hint: Keybindings.format(kb.delete)},
       # Agents
       %{id: :start_claude, label: "Start Claude Agent", hint: Keybindings.format(kb.start_agent)},

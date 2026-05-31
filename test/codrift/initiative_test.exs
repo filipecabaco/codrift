@@ -62,5 +62,25 @@ defmodule Codrift.InitiativeTest do
     test "from_map returns error for a malformed map" do
       assert {:error, {:invalid_initiative_map, _}} = Initiative.from_map(%{"id" => "only-id"})
     end
+
+    test "worktree_default roundtrips" do
+      original = %{Initiative.new("wt-project") | worktree_default: true}
+      map = Initiative.to_map(original)
+
+      assert map["worktree_default"] == true
+      assert {:ok, %Initiative{worktree_default: true}} = Initiative.from_map(map)
+    end
+
+    test "from_map defaults worktree_default to false for legacy data" do
+      map = %{
+        "id" => "abc123",
+        "name" => "legacy",
+        "dirs" => [],
+        "created_at" => "2024-01-01T00:00:00Z",
+        "status" => "ongoing"
+      }
+
+      assert {:ok, %Initiative{worktree_default: false}} = Initiative.from_map(map)
+    end
   end
 end

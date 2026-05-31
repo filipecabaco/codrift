@@ -17,7 +17,9 @@ defmodule Codrift.Initiative do
 
   @status_cycle [:planning, :ongoing, :done, :archived]
 
-  defstruct [:id, :name, :dirs, :created_at, :status, integration: nil]
+  alias Codrift.Initiative.DirEntry
+
+  defstruct [:id, :name, :dirs, :created_at, :status, integration: nil, worktree_default: false]
 
   @type integration :: %{service: String.t(), item_id: String.t()} | nil
   @type status :: :planning | :ongoing | :done | :archived
@@ -25,10 +27,11 @@ defmodule Codrift.Initiative do
   @type t :: %__MODULE__{
           id: String.t(),
           name: String.t(),
-          dirs: [String.t()],
+          dirs: [DirEntry.t()],
           created_at: DateTime.t(),
           status: status(),
-          integration: integration()
+          integration: integration(),
+          worktree_default: boolean()
         }
 
   @doc "Creates a new initiative with a random ID and the current UTC timestamp."
@@ -36,7 +39,7 @@ defmodule Codrift.Initiative do
     %__MODULE__{
       id: Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
       name: name,
-      dirs: dirs,
+      dirs: Enum.map(dirs, &DirEntry.from_value/1),
       created_at: DateTime.utc_now(),
       status: :ongoing
     }
@@ -59,9 +62,10 @@ defmodule Codrift.Initiative do
     base = %{
       "id" => i.id,
       "name" => i.name,
-      "dirs" => i.dirs,
+      "dirs" => Enum.map(i.dirs, &DirEntry.to_map/1),
       "created_at" => DateTime.to_iso8601(i.created_at),
-      "status" => Atom.to_string(i.status || :ongoing)
+      "status" => Atom.to_string(i.status || :ongoing),
+      "worktree_default" => i.worktree_default || false
     }
 
     case i.integration do
@@ -94,10 +98,11 @@ defmodule Codrift.Initiative do
          %__MODULE__{
            id: id,
            name: name,
-           dirs: dirs,
+           dirs: Enum.map(dirs, &DirEntry.from_value/1),
            created_at: dt,
            status: status,
-           integration: integration
+           integration: integration,
+           worktree_default: Map.get(data, "worktree_default", false)
          }}
 
       error ->

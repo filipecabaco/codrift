@@ -5,6 +5,7 @@ defmodule Codrift.TUI.SidebarTest do
   alias Codrift.Agent.Adapters.Claude
   alias Codrift.Diff.FileDiff
   alias Codrift.Initiative
+  alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.TUI.Sidebar
 
   # ---------------------------------------------------------------------------
@@ -51,6 +52,17 @@ defmodule Codrift.TUI.SidebarTest do
     )
   end
 
+  defp init_git_repo(path) do
+    System.cmd("git", ["init"], cd: path, stderr_to_stdout: true)
+    System.cmd("git", ["config", "user.email", "test@test.com"], cd: path, stderr_to_stdout: true)
+    System.cmd("git", ["config", "user.name", "Test"], cd: path, stderr_to_stdout: true)
+
+    System.cmd("git", ["commit", "--allow-empty", "-m", "initial"],
+      cd: path,
+      stderr_to_stdout: true
+    )
+  end
+
   # ---------------------------------------------------------------------------
   # build_entries/2
   # ---------------------------------------------------------------------------
@@ -71,7 +83,9 @@ defmodule Codrift.TUI.SidebarTest do
     end
 
     test "initiative with dirs includes dir entries after the context_dir" do
-      init = initiative(id: "abc", dirs: ["/repo/a", "/repo/b"])
+      init =
+        initiative(id: "abc", dirs: [DirEntry.new("/repo/a"), DirEntry.new("/repo/b")])
+
       entries = Sidebar.build_entries([init], [])
 
       assert [{:initiative, "abc", _, 2, 0, _} | rest] = entries
@@ -82,7 +96,7 @@ defmodule Codrift.TUI.SidebarTest do
     end
 
     test "agent nested under its directory entry when the dir matches an initiative dir" do
-      init = initiative(id: "abc", dirs: ["/repo"])
+      init = initiative(id: "abc", dirs: [DirEntry.new("/repo")])
       ag = agent(initiative_id: "abc", dir: "/repo")
       entries = Sidebar.build_entries([init], [ag])
 
@@ -108,7 +122,7 @@ defmodule Codrift.TUI.SidebarTest do
     end
 
     test "agent count on the initiative header reflects the number of running agents" do
-      init = initiative(id: "abc", dirs: ["/repo"])
+      init = initiative(id: "abc", dirs: [DirEntry.new("/repo")])
 
       agents = [
         agent(id: "a1", initiative_id: "abc", dir: "/repo"),
@@ -121,8 +135,8 @@ defmodule Codrift.TUI.SidebarTest do
     end
 
     test "agents from different initiatives do not bleed across headers" do
-      init_a = initiative(id: "a", name: "Alpha", dirs: ["/repo"])
-      init_b = initiative(id: "b", name: "Beta", dirs: ["/other"])
+      init_a = initiative(id: "a", name: "Alpha", dirs: [DirEntry.new("/repo")])
+      init_b = initiative(id: "b", name: "Beta", dirs: [DirEntry.new("/other")])
 
       agents = [
         agent(id: "ag1", initiative_id: "a", dir: "/repo"),
@@ -163,6 +177,68 @@ defmodule Codrift.TUI.SidebarTest do
       init = initiative(id: "abc", dirs: [])
       [{:initiative, _, _, dir_count, _, _} | _] = Sidebar.build_entries([init], [])
       assert dir_count == 0
+    end
+
+    test "dir entry without worktree has nil wt_status" do
+      init = initiative(id: "abc", dirs: [DirEntry.new("/repo")])
+      entries = Sidebar.build_entries([init], [])
+      [{:dir, "abc", "/repo", wt_status, _count}] = for e = {:dir, _, _, _, _} <- entries, do: e
+      assert is_nil(wt_status)
+    end
+
+    @tag :tmp_dir
+    test "dir entry with active worktree has non-nil wt_status", %{tmp_dir: tmp_dir} do
+      repo = Path.join(tmp_dir, "repo")
+      File.mkdir_p!(repo)
+      init_git_repo(repo)
+
+      ctx = Path.join(tmp_dir, "ctx")
+      File.mkdir_p!(ctx)
+      {:ok, wt_path} = Codrift.Worktree.ensure(ctx, "wt-sidebar", repo)
+
+      entry = DirEntry.new(repo, worktree_enabled: true, worktree_path: wt_path)
+      init = initiative(id: "abc", dirs: [entry])
+      entries = Sidebar.build_entries([init], [])
+
+      [{:dir, "abc", ^repo, wt_status, _count}] = for e = {:dir, _, _, _, _} <- entries, do: e
+      assert %{branch: branch, dirty?: false} = wt_status
+      assert is_binary(branch)
+    end
+
+    test "subdirectories in context folder are excluded from context file entries" do
+      id = "test-sidebar-subdir-#{System.unique_integer([:positive])}"
+      ctx = Store.context_path(id)
+      File.mkdir_p!(ctx)
+      on_exit(fn -> File.rm_rf!(ctx) end)
+
+      File.write!(Path.join(ctx, "notes.md"), "some notes")
+      File.mkdir_p!(Path.join(ctx, "worktrees"))
+      File.mkdir_p!(Path.join(ctx, "subdir"))
+
+      init = initiative(id: id, dirs: [])
+      entries = Sidebar.build_entries([init], [])
+
+      context_files = for {:context_file, _, _, name} <- entries, do: name
+      assert "notes.md" in context_files
+      refute "worktrees" in context_files
+      refute "subdir" in context_files
+    end
+
+    test "dotfiles in context folder are excluded from context file entries" do
+      id = "test-sidebar-dotfiles-#{System.unique_integer([:positive])}"
+      ctx = Store.context_path(id)
+      File.mkdir_p!(ctx)
+      on_exit(fn -> File.rm_rf!(ctx) end)
+
+      File.write!(Path.join(ctx, "visible.md"), "content")
+      File.write!(Path.join(ctx, ".hidden"), "hidden")
+
+      init = initiative(id: id, dirs: [])
+      entries = Sidebar.build_entries([init], [])
+
+      context_files = for {:context_file, _, _, name} <- entries, do: name
+      assert "visible.md" in context_files
+      refute ".hidden" in context_files
     end
   end
 

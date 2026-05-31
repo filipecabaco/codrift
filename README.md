@@ -1,170 +1,194 @@
 # Codrift
 
-> An AI coding companion for the terminal — drive multiple AI agents across
-> your projects from a single keyboard-driven interface.
+> Drive multiple AI coding agents across your projects from a single keyboard-driven terminal interface.
 
-Codrift is an Elixir application that groups local directories into named
-**initiatives** and runs AI coding agents (Claude Code, Aider, …) against
-them. It exposes a live diff view, a streaming agent output feed, and an MCP
-server so other tools can query and control it.
+Codrift groups local directories into named **initiatives** and runs AI coding agents (Claude Code, Aider, shell) against them — each in its own PTY, with full terminal emulation, live diff viewing, shared memory, and an MCP server so agents can coordinate with each other.
 
-## Status
+---
 
-Early development. The supervision tree, agent management, diff engine, web
-server, and MCP server are working. The TUI render layer is not built yet —
-see [PLAN.md](PLAN.md) for the full roadmap.
+## Features
 
-## What it does today
+| | |
+|--|--|
+| **Full TUI** | Sidebar + agent panes, keyboard-driven, mouse support, no browser needed |
+| **Multiple agents per dir** | Claude Code, Aider, Terminal — all running simultaneously |
+| **Git worktrees** | Each dir gets an isolated branch; agents never touch your main checkout |
+| **Live diff view** | Coloured split/unified diff per initiative, updated as agents work |
+| **Shared memory** | FTS5 knowledge base per initiative — agents search it before starting, write to it when done |
+| **MCP server** | Claude Code and other tools connect to Codrift and call its tools directly |
+| **External integrations** | Pull context from GitHub Issues, Linear, Jira, Notion, and more |
+| **Session persistence** | Claude sessions survive TUI restarts — agents resume where they left off |
+| **Context folders** | Each initiative has `~/.codrift/initiatives/{id}/` picked up automatically by `--add-dir` |
 
-| Capability | How |
-|---|---|
-| Run AI agents against any directory | `AgentSupervisor` → `AgentProcess` → Port → CLI |
-| Group directories into initiatives | `Initiative.Store` → JSON persistence |
-| Parse and serve git diffs | `Codrift.Diff` → `git diff` → structured output |
-| Stream agent output live | SSE at `/events/initiative/:id` |
-| Expose all state over MCP | `POST /mcp` + `GET /mcp/sse` |
-| Browser diff viewer | `http://localhost:7437/diff.html` |
+---
 
 ## Quick start
 
 ```bash
-# Install deps
+# Install (macOS / Linux)
+curl -fsSL https://codrift.sh/install.sh | sh
+
+# Or run from source
 mix deps.get
-
-# Start (with IEx for a live REPL)
-iex -S mix
-
-# Or just run the server
-mix francis.server
+mix codrift.tui
 ```
 
-The web server starts on **port 7437**.
-
-### Register the MCP server with Claude Code
+### Register the MCP server
 
 ```bash
 mix codrift.mcp.install
+# or: codrift mcp install
 ```
 
-This runs `claude mcp add codrift --transport sse http://localhost:7437/mcp/sse`
-(or prints the command if the Claude CLI is not in your PATH).
+This runs `claude mcp add codrift --transport sse http://localhost:7437/mcp/sse`.
 
-### Try it from IEx
+---
 
-```elixir
-# Create an initiative
-{:ok, init} = Codrift.Initiative.Store.create("my-project", ["/path/to/repo"])
+## TUI overview
 
-# Start a Claude Code agent
-{:ok, pid} = Codrift.AgentSupervisor.start_agent(
-  init.id,
-  "/path/to/repo",
-  Codrift.Agent.Adapters.Claude
-)
-
-# Subscribe to live output
-Codrift.AgentProcess.subscribe(pid)
-
-# Send a prompt
-Codrift.AgentProcess.send_input(pid, "explain this codebase")
-
-# Read buffered output
-Codrift.AgentProcess.recent_output(pid, 20)
+```
+┌──────────────────────────────────────────────────────────┐
+│ ● Context  ○ 2: Diff                                     │
+├─────────────────┬────────────────────────────────────────┤
+│ Initiatives     │                                        │
+│  ● my-project   │  Initiative / dir / agent output       │
+│   ◈ context     │  (updates as cursor moves)             │
+│   ▸ ~/repo   ─── ──────────────────────────────────────  │
+│     ◦ claude    │                                        │
+│     ◦ terminal  │                                        │
+├─────────────────┴────────────────────────────────────────┤
+│ j/k:navigate  s:start  a:add-dir  d:delete  Ctrl+P:palette│
+└──────────────────────────────────────────────────────────┘
 ```
 
-### Browse the diff view
+### Key bindings (defaults)
 
-Open `http://localhost:7437/diff.html`, enter your initiative ID, and click
-**Load diff**. Hit **Watch live** to stream agent output as it arrives.
+| Key | Action |
+|-----|--------|
+| `j` / `k` / `↑` / `↓` | Navigate sidebar / scroll pane |
+| `n` | New initiative |
+| `a` | Add directory to initiative |
+| `s` | Start Claude agent |
+| `d` | Delete / stop (context-sensitive) |
+| `W` | Toggle git worktree for current dir |
+| `[` / `]` | Cycle initiative status |
+| `1` / `2` | Context view / Diff view |
+| `v` | Toggle unified ↔ split diff |
+| `Ctrl+P` | Command palette |
+| `Ctrl+B` | Toggle sidebar |
+| `Ctrl+Q` | Quit |
+
+All keys are configurable via `~/.codrift/keybindings.json`.
+
+---
+
+## Git worktrees
+
+When adding a directory that has git, Codrift offers to create a worktree:
+
+```
+[x] Use git worktree  (w to toggle)
+```
+
+Agents run in the worktree — a full checkout on a dedicated `codrift/{id}/{slug}` branch — so your main working tree is never disturbed. Press `W` on any dir entry to enable/disable later. See [docs/worktrees.md](docs/worktrees.md).
+
+---
+
+## Shared memory
+
+Each initiative has a searchable knowledge base. Agents write decisions, summaries, and snippets to it; new agents search it before starting work.
+
+```bash
+codrift memory search <initiative_id> "authentication"
+codrift memory add    <initiative_id> decision "use JWT not sessions"
+codrift memory recent <initiative_id>
+```
+
+MCP tools (`memory_search`, `memory_add`, `memory_delete`, …) are available to any connected agent. See [docs/memory.md](docs/memory.md).
+
+---
+
+## MCP tools
+
+When the TUI is running, any MCP client on `http://localhost:7437/mcp/sse` can call:
+
+| Category | Tools |
+|----------|-------|
+| Initiatives | `list_initiatives`, `create_initiative`, `add_dir`, `delete_initiative` |
+| Agents | `list_agents`, `start_agent`, `send_to_agent`, `get_agent_output`, `get_diff` |
+| Memory | `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list` |
+| Integrations | `list_integration_items`, `import_from_integration`, `sync_initiative_context` |
+
+---
+
+## External integrations
+
+Pull issue context directly into an initiative from:
+
+GitHub Issues · GitHub Projects · Linear Issues · Linear Projects · GitLab · Jira · Notion · Shortcut · Asana
+
+```bash
+codrift integration auth github       # OAuth2 browser flow
+codrift integration list github       # list open issues
+codrift integration import github 42  # seed an initiative from issue #42
+```
+
+See [docs/integrations.md](docs/integrations.md).
+
+---
+
+## CLI reference
+
+```
+codrift tui
+codrift mcp install
+
+codrift initiative list
+codrift initiative create <name>
+codrift initiative add-dir <id> <path>
+codrift initiative delete  <id>
+
+codrift memory search <id> <query>
+codrift memory add    <id> <type> <content>
+codrift memory recent <id>
+codrift memory stats  <id>
+
+codrift integration services
+codrift integration auth   <service>
+codrift integration list   <service>
+codrift integration import <service> <item_id>
+```
+
+---
 
 ## Architecture
 
 ```
 Codrift.Supervisor (:one_for_one)
-  ├── Registry (Codrift.AgentRegistry)   — agent ID → PID lookup
-  ├── Codrift.Initiative.Store           — CRUD + JSON persistence
-  ├── Codrift.AgentSupervisor            — one AgentProcess per running agent
-  └── Codrift (Francis / Bandit)         — HTTP + SSE on port 7437
+  ├── Registry (Codrift.AgentRegistry)
+  ├── Codrift.Initiative.Store     — GenServer, JSON persistence
+  ├── Codrift.SessionStore         — GenServer, SQLite session UUIDs
+  ├── Codrift.AgentSupervisor      — DynamicSupervisor, one AgentProcess per agent
+  │   └── Codrift.AgentProcess     — GenServer + erlexec PTY → Claude / Aider / shell
+  ├── Codrift.TaskSupervisor       — async agent start tasks
+  └── Codrift (Francis / Bandit)   — HTTP + SSE on port 7437
 ```
 
-**Key modules:**
+See [docs/architecture.md](docs/architecture.md) and [docs/modules.md](docs/modules.md).
 
-| Module | Role |
-|---|---|
-| `Codrift.Initiative` | Struct + serialisation for a named workspace |
-| `Codrift.Initiative.Store` | GenServer: in-memory CRUD, JSON file persistence |
-| `Codrift.AgentProcess` | GenServer: Port → external CLI, output buffer, subscriptions |
-| `Codrift.AgentSupervisor` | DynamicSupervisor: spawn / stop / list agents |
-| `Codrift.Agent` | Behaviour: `cmd/0`, `args/1`, `env/1`, `parse_status/1` |
-| `Codrift.Diff` | Pure: `git diff` → `%FileDiff{}` structs |
-| `Codrift.MCP.Handler` | Pure: JSON-RPC 2.0 dispatch over HTTP+SSE |
-
-## HTTP API
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/` | Health check |
-| `GET` | `/api/initiatives` | List all initiatives |
-| `GET` | `/api/diff/:id` | Current git diff for an initiative |
-| `GET` | `/api/agent/:id` | Agent status |
-| `SSE` | `/events/initiative/:id` | Live agent output stream |
-| `POST` | `/mcp` | MCP JSON-RPC request |
-| `SSE` | `/mcp/sse` | MCP server-initiated events |
-
-## MCP tools
-
-| Tool | Description |
-|---|---|
-| `list_initiatives` | All initiatives |
-| `get_diff` | Git diff for an initiative |
-| `list_agents` | Running agents |
-| `start_agent` | Spawn an agent in a directory |
-| `send_to_agent` | Send input to a running agent |
-| `get_agent_output` | Recent stdout from an agent |
-
-## Agent adapters
-
-Codrift ships with adapters for **Claude Code** (`claude`) and **Aider**
-(`aider`). Add your own by implementing `Codrift.Agent`:
-
-```elixir
-defmodule MyApp.Agent.Adapters.MyCLI do
-  @behaviour Codrift.Agent
-
-  @impl true
-  def cmd, do: System.find_executable("mycli") || raise "mycli not found"
-
-  @impl true
-  def args(_dir), do: ["--flag"]
-
-  @impl true
-  def env(_dir), do: []
-
-  @impl true
-  def parse_status("prompt> " <> _), do: :awaiting_input
-  def parse_status(_), do: nil
-end
-```
+---
 
 ## Development
 
 ```bash
-mix deps.get       # fetch dependencies
-mix test           # run tests (60 tests)
-mix credo --all    # lint (must be clean)
-mix sobelow        # security audit
-mix deps.audit     # dependency CVE check
+mix deps.get
+unbuffer mix test        # 291 tests
+mix credo --strict
 ```
 
-## Roadmap
+**Stack:** Elixir · [Francis](https://github.com/nicholasgasior/francis) · [ex_ratatui](https://github.com/filipecabaco/ex_ratatui) (forked) · SQLite (Exqlite) · erlexec
 
-See [PLAN.md](PLAN.md) for the full build order. Next milestones:
-
-- **Terminal pane** — PTY-backed shell sessions inside the TUI
-- **SQLite memory** — `sqlite-vec` for semantic search over project context
-- **TUI render layer** — blocked on TUI library choice
-- **Command palette** — Raycast-style fuzzy action search
-- **VS Code keybindings** — configurable keymap layer
+---
 
 ## License
 

@@ -16,7 +16,7 @@ defmodule Codrift do
 
   use Francis
 
-  alias Codrift.Initiative.Store
+  alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.MCP.Handler
   alias Codrift.OAuth
   alias Codrift.OAuth.Config, as: OAuthConfig
@@ -51,10 +51,12 @@ defmodule Codrift do
     case Store.get(initiative_id) do
       {:ok, initiative} ->
         diffs =
-          Enum.flat_map(initiative.dirs, fn dir ->
-            case Codrift.Diff.generate(dir) do
+          Enum.flat_map(initiative.dirs, fn entry ->
+            effective = DirEntry.effective_path(entry)
+
+            case Codrift.Diff.generate(effective) do
               {:ok, files} ->
-                Enum.map(files, fn f -> Map.put(Codrift.Diff.to_map(f), "dir", dir) end)
+                Enum.map(files, fn f -> Map.put(Codrift.Diff.to_map(f), "dir", entry.path) end)
 
               {:error, _} ->
                 []

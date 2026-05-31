@@ -233,17 +233,10 @@ defmodule Codrift.CLI.Integration do
   defp context_path(id), do: Path.expand("~/.codrift/initiatives/#{id}")
 
   defp server_get(url) do
-    Application.ensure_all_started(:inets)
-
-    case :httpc.request(
-           :get,
-           {String.to_charlist(url), []},
-           [{:timeout, 3_000}],
-           [{:body_format, :binary}]
-         ) do
-      {:ok, {{_, 200, _}, _, body}} -> {:ok, JSON.decode!(body)}
-      {:ok, {{_, status, _}, _, body}} -> {:error, "HTTP #{status}: #{body}"}
-      {:error, {:failed_connect, _}} -> {:error, :server_unavailable}
+    case Req.get(url, receive_timeout: 3_000) do
+      {:ok, %{status: 200, body: body}} -> {:ok, body}
+      {:ok, %{status: status, body: body}} -> {:error, "HTTP #{status}: #{inspect(body)}"}
+      {:error, %{reason: :econnrefused}} -> {:error, :server_unavailable}
       {:error, reason} -> {:error, inspect(reason)}
     end
   end

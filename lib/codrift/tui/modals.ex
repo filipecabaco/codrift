@@ -74,7 +74,10 @@ defmodule Codrift.TUI.Modals do
 
   defp new_dir(state, frame) do
     suggestions = state.modal.dir_picker.suggestions
-    total_height = if suggestions == [], do: 7, else: min(4 + length(suggestions) + 1, 18)
+    worktree_git = state.modal.worktree_git
+    extra = if worktree_git, do: 2, else: 0
+    base_h = if suggestions == [], do: 7, else: min(4 + length(suggestions) + 1, 18)
+    total_height = base_h + extra
     rect = Layout.center_rect(frame, 65, total_height)
     inner = Layout.inset(rect, 1)
 
@@ -92,20 +95,42 @@ defmodule Codrift.TUI.Modals do
        %{inner | height: 1}}
     ]
 
+    worktree_widgets =
+      if worktree_git do
+        enabled = state.modal.worktree_enabled
+        toggle = if enabled, do: "[x]", else: "[ ]"
+        style = if enabled, do: %Style{fg: :green}, else: %Style{fg: :dark_gray}
+
+        [
+          {%Paragraph{text: "#{toggle} Use git worktree  (w to toggle)", style: style},
+           %{inner | y: inner.y + 2, height: 1}}
+        ]
+      else
+        []
+      end
+
     if suggestions == [] do
-      base ++ [{hint("Enter: confirm  Esc: cancel"), %{inner | y: inner.y + 3, height: 1}}]
+      hint_y = inner.y + 3 + extra
+
+      base ++
+        worktree_widgets ++
+        [{hint("Enter: confirm  Esc: cancel"), %{inner | y: hint_y, height: 1}}]
     else
       items =
         Enum.map(suggestions, fn path -> "#{Path.basename(path)}  #{Path.dirname(path)}/" end)
 
+      sug_y = inner.y + 2 + extra
+      sug_height = inner.height - 2 - extra
+
       base ++
+        worktree_widgets ++
         [
           {%WidgetList{
              items: items,
              selected: state.modal.dir_picker.cursor,
              highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
              highlight_symbol: "▶ "
-           }, %{inner | y: inner.y + 2, height: inner.height - 2}}
+           }, %{inner | y: sug_y, height: sug_height}}
         ]
     end
   end

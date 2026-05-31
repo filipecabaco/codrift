@@ -21,6 +21,7 @@ defmodule Codrift.CLI.Main do
   alias Codrift.CLI.Memory
   alias Codrift.CLI.Session
   alias Codrift.CLI.TUI
+  alias Codrift.CLI.Update
 
   @spec main([String.t()]) :: :ok
   def main(args), do: run(args)
@@ -32,6 +33,7 @@ defmodule Codrift.CLI.Main do
   def run(["memory" | rest]), do: Memory.run(rest)
   def run(["tui" | rest]), do: TUI.run(rest)
   def run(["mcp" | rest]), do: MCP.run(rest)
+  def run(["update" | rest]), do: Update.run(rest)
 
   def run(_) do
     IO.puts("""
@@ -42,6 +44,7 @@ defmodule Codrift.CLI.Main do
       codrift memory      <subcommand>
       codrift tui
       codrift mcp         <subcommand>
+      codrift update
 
     Run `codrift <command>` with no arguments for per-command help.
     """)

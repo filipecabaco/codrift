@@ -37,7 +37,7 @@ defmodule Codrift.MCP.Handler do
 
   alias Codrift.Agent.Adapters.Aider
   alias Codrift.Agent.Adapters.Claude
-  alias Codrift.Initiative.Store
+  alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.OAuth.Config, as: OAuthConfig
 
   @server_info %{
@@ -97,8 +97,12 @@ defmodule Codrift.MCP.Handler do
 
   defp call_tool("get_diff", %{"initiative_id" => initiative_id}) do
     case Store.get(initiative_id) do
-      {:ok, initiative} -> {:ok, Enum.flat_map(initiative.dirs, &dir_diffs/1)}
-      {:error, :not_found} -> {:error, "initiative not found: #{initiative_id}"}
+      {:ok, initiative} ->
+        {:ok,
+         Enum.flat_map(initiative.dirs, fn entry -> dir_diffs(DirEntry.effective_path(entry)) end)}
+
+      {:error, :not_found} ->
+        {:error, "initiative not found: #{initiative_id}"}
     end
   end
 

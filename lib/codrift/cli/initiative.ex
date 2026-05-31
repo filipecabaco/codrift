@@ -18,8 +18,9 @@ defmodule Codrift.CLI.Initiative do
       codrift initiative delete  <id>
   """
 
-  alias Codrift.Initiative
-  alias Codrift.Initiative.Store
+  alias Codrift.{ClaudePermissions, Initiative}
+  alias Codrift.Initiative.{DirEntry, Store}
+  alias Codrift.Worktree
 
   @default_path "~/.config/codrift/initiatives.json"
 
@@ -59,7 +60,15 @@ defmodule Codrift.CLI.Initiative do
 
   def run(["add-dir", id, dir | _]) do
     expanded = Path.expand(dir)
-    update_initiative(id, fn i -> %{i | dirs: Enum.uniq([expanded | i.dirs])} end)
+
+    update_initiative(id, fn i ->
+      if Enum.any?(i.dirs, &(&1.path == expanded)) do
+        i
+      else
+        ClaudePermissions.add(expanded, "Read")
+        %{i | dirs: [DirEntry.new(expanded) | i.dirs]}
+      end
+    end)
   end
 
   def run(["status", id, status_str | _]) do
@@ -88,6 +97,113 @@ defmodule Codrift.CLI.Initiative do
     end
   end
 
+  def run(["worktree-enable", id, dir | _]) do
+    expanded = Path.expand(dir)
+    ctx = context_path(id)
+
+    update_initiative(id, fn i ->
+      case Enum.find(i.dirs, &(&1.path == expanded)) do
+        nil ->
+          fail("directory not in initiative: #{expanded}")
+
+        %DirEntry{worktree_path: wt} when is_binary(wt) ->
+          fail("worktree already enabled for #{expanded} at #{wt}")
+
+        entry ->
+          case Worktree.ensure(ctx, id, expanded) do
+            {:ok, wt_path} ->
+              updated_entry = %{entry | worktree_enabled: true, worktree_path: wt_path}
+
+              dirs =
+                Enum.map(i.dirs, fn e -> if e.path == expanded, do: updated_entry, else: e end)
+
+              %{i | dirs: dirs}
+
+            {:error, reason} ->
+              fail("worktree creation failed: #{reason}")
+          end
+      end
+    end)
+  end
+
+  def run(["worktree-disable", id, dir | _]) do
+    expanded = Path.expand(dir)
+
+    update_initiative(id, fn i ->
+      case Enum.find(i.dirs, &(&1.path == expanded)) do
+        nil ->
+          fail("directory not in initiative: #{expanded}")
+
+        %DirEntry{worktree_path: nil} ->
+          fail("no worktree is enabled for #{expanded}")
+
+        entry ->
+          Worktree.remove(expanded, entry.worktree_path)
+          cleared = %{entry | worktree_enabled: false, worktree_path: nil}
+          dirs = Enum.map(i.dirs, fn e -> if e.path == expanded, do: cleared, else: e end)
+          %{i | dirs: dirs}
+      end
+    end)
+  end
+
+  def run(["allow-read", id | _]) do
+    case find_by_id(id) do
+      nil ->
+        fail("initiative not found: #{id}")
+
+      initiative ->
+        results =
+          Enum.map(initiative.dirs, fn entry ->
+            effective = DirEntry.effective_path(entry)
+            allow = ClaudePermissions.add(effective, "Read")
+            %{dir: entry.path, effective: effective, read_allowed: allow}
+          end)
+
+        print_json(%{initiative_id: id, dirs: results})
+    end
+  end
+
+  def run(["revoke-read", id | _]) do
+    case find_by_id(id) do
+      nil ->
+        fail("initiative not found: #{id}")
+
+      initiative ->
+        results =
+          Enum.map(initiative.dirs, fn entry ->
+            effective = DirEntry.effective_path(entry)
+            allow = ClaudePermissions.remove(effective, "Read")
+            %{dir: entry.path, effective: effective, read_allowed: allow}
+          end)
+
+        print_json(%{initiative_id: id, dirs: results})
+    end
+  end
+
+  def run(["worktree-status", id | _]) do
+    case find_by_id(id) do
+      nil ->
+        fail("initiative not found: #{id}")
+
+      initiative ->
+        statuses =
+          Enum.map(initiative.dirs, fn entry ->
+            wt_info =
+              if entry.worktree_enabled and is_binary(entry.worktree_path) and
+                   File.dir?(entry.worktree_path) do
+                st = Worktree.status(entry.worktree_path)
+                %{enabled: true, path: entry.worktree_path, branch: st.branch, dirty: st.dirty?}
+              else
+                %{enabled: false, path: nil, branch: nil, dirty: false}
+              end
+
+            %{dir: entry.path, worktree: wt_info}
+          end)
+
+        print_json(%{initiative_id: id, dirs: statuses})
+    end
+  end
+
   def run(_) do
     IO.puts("""
     Usage:
@@ -97,6 +213,11 @@ defmodule Codrift.CLI.Initiative do
       codrift initiative add-dir <id> <path>
       codrift initiative status  <id> planning|ongoing|done|archived
       codrift initiative delete  <id>
+      codrift initiative allow-read   <id>    # write Read to .claude/settings.json in all dirs
+      codrift initiative revoke-read  <id>    # remove Read from .claude/settings.json in all dirs
+      codrift initiative worktree-enable  <id> <dir>
+      codrift initiative worktree-disable <id> <dir>
+      codrift initiative worktree-status  <id>
     """)
   end
 

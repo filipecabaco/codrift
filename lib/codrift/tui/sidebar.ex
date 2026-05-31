@@ -8,8 +8,11 @@ defmodule Codrift.TUI.Sidebar do
         {:context_dir, initiative_id, path, agent_count}
           {:context_file, initiative_id, full_path, filename}
           {:agent, id, adapter, status}
-        {:dir, initiative_id, path, agent_count}
+        {:dir, initiative_id, path, wt_status | nil, agent_count}
           {:agent, id, adapter, status}
+
+  `wt_status` is `%{branch: String.t(), dirty?: boolean()}` when a worktree is
+  active for that dir, or `nil` when no worktree is configured.
 
   ## Diff mode entry hierarchy
 
@@ -18,8 +21,8 @@ defmodule Codrift.TUI.Sidebar do
           {:diff_file, dir, path, adds, dels}
   """
 
-  alias Codrift.Initiative.Store
-  alias Codrift.Paths
+  alias Codrift.Initiative.{DirEntry, Store}
+  alias Codrift.{Paths, Worktree}
   alias Codrift.TUI.Styles
 
   alias ExRatatui.Style
@@ -35,6 +38,7 @@ defmodule Codrift.TUI.Sidebar do
           | {:context_file, initiative_id :: String.t(), full_path :: String.t(),
              filename :: String.t()}
           | {:dir, initiative_id :: String.t(), path :: String.t(),
+             wt_status :: %{branch: String.t(), dirty?: boolean()} | nil,
              agent_count :: non_neg_integer()}
           | {:agent, id :: String.t(), adapter :: module(), status :: atom()}
           | {:diff_all, total_adds :: non_neg_integer(), total_dels :: non_neg_integer()}
@@ -72,7 +76,10 @@ defmodule Codrift.TUI.Sidebar do
       case File.ls(path) do
         {:ok, fs} ->
           fs
-          |> Enum.reject(&(String.starts_with?(&1, ".") or &1 == "CLAUDE.md"))
+          |> Enum.reject(fn f ->
+            String.starts_with?(f, ".") or f == "CLAUDE.md" or
+              File.dir?(Path.join(path, f))
+          end)
           |> Enum.sort()
 
         {:error, _} ->
@@ -85,9 +92,17 @@ defmodule Codrift.TUI.Sidebar do
     [header | file_rows ++ agent_rows]
   end
 
-  defp dir_entries(initiative_id, dir, by_dir) do
-    dir_agents = Map.get(by_dir, dir, [])
-    header = {:dir, initiative_id, dir, length(dir_agents)}
+  defp dir_entries(initiative_id, %DirEntry{} = entry, by_dir) do
+    effective = DirEntry.effective_path(entry)
+    dir_agents = Map.get(by_dir, effective, [])
+
+    wt_status =
+      if entry.worktree_enabled and is_binary(entry.worktree_path) and
+           File.dir?(entry.worktree_path) do
+        Worktree.status(entry.worktree_path)
+      end
+
+    header = {:dir, initiative_id, entry.path, wt_status, length(dir_agents)}
     rows = Enum.map(dir_agents, fn a -> {:agent, a.id, a.adapter, a.status} end)
     [header | rows]
   end
@@ -206,23 +221,26 @@ defmodule Codrift.TUI.Sidebar do
     }
   end
 
-  defp item({:dir, _initiative_id, path, 0}) do
-    %Line{
-      spans: [
+  defp item({:dir, _initiative_id, path, wt_status, 0}) do
+    spans =
+      [
         %Span{content: "  ▸ ", style: %Style{fg: :dark_gray}},
-        %Span{content: Paths.compact(path), style: %Style{fg: :dark_gray}}
-      ]
-    }
+        %Span{content: Path.basename(path), style: %Style{fg: :dark_gray}}
+      ] ++ wt_spans(wt_status)
+
+    %Line{spans: spans}
   end
 
-  defp item({:dir, _initiative_id, path, count}) do
-    %Line{
-      spans: [
+  defp item({:dir, _initiative_id, path, wt_status, count}) do
+    spans =
+      [
         %Span{content: "  ▸ ", style: %Style{fg: :cyan}},
-        %Span{content: Paths.compact(path), style: %Style{fg: :white}},
-        %Span{content: " [#{count}]", style: %Style{fg: :dark_gray}}
-      ]
-    }
+        %Span{content: Path.basename(path), style: %Style{fg: :white}}
+      ] ++
+        wt_spans(wt_status) ++
+        [%Span{content: " [#{count}]", style: %Style{fg: :dark_gray}}]
+
+    %Line{spans: spans}
   end
 
   defp item({:agent, _id, adapter, status}) do
@@ -281,6 +299,10 @@ defmodule Codrift.TUI.Sidebar do
       ]
     }
   end
+
+  defp wt_spans(nil), do: []
+  defp wt_spans(%{dirty?: true}), do: [%Span{content: " [wt*]", style: %Style{fg: :yellow}}]
+  defp wt_spans(%{dirty?: false}), do: [%Span{content: " [wt]", style: %Style{fg: :dark_gray}}]
 
   defp status_display(:planning), do: {"◷", :blue}
   defp status_display(:ongoing), do: {"●", :green}

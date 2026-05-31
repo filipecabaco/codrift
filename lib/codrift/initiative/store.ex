@@ -20,7 +20,9 @@ defmodule Codrift.Initiative.Store do
 
   require Logger
 
-  alias Codrift.Initiative
+  alias Codrift.{ClaudePermissions, Initiative}
+  alias Codrift.Initiative.DirEntry
+  alias Codrift.Worktree
 
   @default_path "~/.config/codrift/initiatives.json"
 
@@ -64,10 +66,22 @@ defmodule Codrift.Initiative.Store do
     GenServer.call(server, :list)
   end
 
-  @doc "Adds a directory to an initiative (idempotent — duplicate dirs are ignored)."
-  def add_dir(id, dir, server \\ __MODULE__) do
-    GenServer.call(server, {:add_dir, id, dir})
-  end
+  @doc """
+  Adds a directory to an initiative (idempotent — duplicate paths are ignored).
+
+  Pass `worktree_enabled: true` in `opts` to create a git worktree for the
+  directory. If the dir is not a git repo the option is silently ignored.
+  Accepts an optional `server` pid/name as the last positional argument.
+  """
+  def add_dir(id, dir, opts \\ [])
+
+  def add_dir(id, dir, opts) when is_list(opts),
+    do: GenServer.call(__MODULE__, {:add_dir, id, dir, opts})
+
+  def add_dir(id, dir, server), do: GenServer.call(server, {:add_dir, id, dir, []})
+
+  @doc "Same as `add_dir/3` but allows passing opts and a server in one call."
+  def add_dir(id, dir, opts, server), do: GenServer.call(server, {:add_dir, id, dir, opts})
 
   @doc "Removes a directory from an initiative. No-op if the dir is not present."
   def remove_dir(id, dir, server \\ __MODULE__) do
@@ -87,6 +101,21 @@ defmodule Codrift.Initiative.Store do
   @doc "Links an initiative to an external integration item and sets the initial status."
   def link_integration(id, service, item_id, server \\ __MODULE__) do
     GenServer.call(server, {:link_integration, id, service, item_id})
+  end
+
+  @doc "Sets the initiative-level default for whether new dirs should use git worktrees."
+  def set_worktree_default(id, default, server \\ __MODULE__) do
+    GenServer.call(server, {:set_worktree_default, id, default})
+  end
+
+  @doc """
+  Toggles git worktree on or off for an existing directory.
+
+  Enabling creates the worktree. Disabling removes it and clears the path.
+  Returns `{:error, :not_found}` when the initiative or dir is absent.
+  """
+  def toggle_dir_worktree(id, dir, server \\ __MODULE__) do
+    GenServer.call(server, {:toggle_dir_worktree, id, dir})
   end
 
   @default_context_base "~/.codrift/initiatives"
@@ -138,10 +167,26 @@ defmodule Codrift.Initiative.Store do
     {:reply, sorted, state}
   end
 
-  def handle_call({:add_dir, id, dir}, _from, state) do
-    case update_initiative(state, id, fn i -> %{i | dirs: Enum.uniq([dir | i.dirs])} end) do
+  def handle_call({:add_dir, id, dir, opts}, _from, state) do
+    worktree_enabled = Keyword.get(opts, :worktree_enabled, false)
+    ctx = ctx_path(state.context_dir_base, id)
+
+    case update_initiative(state, id, fn i ->
+           if Enum.any?(i.dirs, &(&1.path == dir)) do
+             i
+           else
+             entry = build_dir_entry(ctx, id, dir, worktree_enabled)
+             %{i | dirs: [entry | i.dirs]}
+           end
+         end) do
       {:reply, {:ok, initiative}, new_state} ->
         update_initiative_md_dirs(initiative, state.context_dir_base)
+
+        case Enum.find(initiative.dirs, &(&1.path == dir)) do
+          nil -> :ok
+          entry -> ClaudePermissions.add(DirEntry.effective_path(entry), "Read")
+        end
+
         {:reply, {:ok, initiative}, new_state}
 
       error_reply ->
@@ -150,13 +195,17 @@ defmodule Codrift.Initiative.Store do
   end
 
   def handle_call({:remove_dir, id, dir}, _from, state) do
-    case update_initiative(state, id, fn i -> %{i | dirs: List.delete(i.dirs, dir)} end) do
-      {:reply, {:ok, initiative}, new_state} ->
-        update_initiative_md_dirs(initiative, state.context_dir_base)
-        {:reply, {:ok, initiative}, new_state}
+    case Map.fetch(state.initiatives, id) do
+      {:ok, initiative} ->
+        {to_remove, remaining} = Enum.split_with(initiative.dirs, &(&1.path == dir))
+        Enum.each(to_remove, &cleanup_worktree/1)
+        updated = %{initiative | dirs: remaining}
+        new_state = put_initiative(state, updated)
+        update_initiative_md_dirs(updated, state.context_dir_base)
+        {:reply, {:ok, updated}, new_state}
 
-      error_reply ->
-        error_reply
+      :error ->
+        {:reply, {:error, :not_found}, state}
     end
   end
 
@@ -165,9 +214,10 @@ defmodule Codrift.Initiative.Store do
       {nil, _} ->
         {:reply, {:error, :not_found}, state}
 
-      {_, initiatives} ->
+      {initiative, initiatives} ->
         new_state = %{state | initiatives: initiatives}
         persist(new_state)
+        Enum.each(initiative.dirs, &cleanup_worktree/1)
         safe_rm_context_dir!(ctx_path(state.context_dir_base, id), state.context_dir_base)
         {:reply, :ok, new_state}
     end
@@ -181,6 +231,54 @@ defmodule Codrift.Initiative.Store do
     update_initiative(state, id, fn i ->
       %{i | integration: %{service: service, item_id: item_id}}
     end)
+  end
+
+  def handle_call({:set_worktree_default, id, default}, _from, state) do
+    update_initiative(state, id, fn i -> %{i | worktree_default: default} end)
+  end
+
+  def handle_call({:toggle_dir_worktree, id, dir}, _from, state) do
+    case Map.fetch(state.initiatives, id) do
+      {:ok, initiative} ->
+        case Enum.find(initiative.dirs, &(&1.path == dir)) do
+          nil ->
+            {:reply, {:error, :not_found}, state}
+
+          %DirEntry{worktree_path: nil} = entry ->
+            ctx = ctx_path(state.context_dir_base, id)
+
+            updated_entry =
+              case Worktree.ensure(ctx, id, dir) do
+                {:ok, wt_path} ->
+                  ClaudePermissions.add(wt_path, "Read")
+                  %{entry | worktree_enabled: true, worktree_path: wt_path}
+
+                {:error, reason} ->
+                  Logger.warning("Codrift.Worktree: enable failed for #{dir}: #{inspect(reason)}")
+                  entry
+              end
+
+            dirs =
+              Enum.map(initiative.dirs, fn e -> if e.path == dir, do: updated_entry, else: e end)
+
+            updated = %{initiative | dirs: dirs}
+            new_state = put_initiative(state, updated)
+            update_initiative_md_dirs(updated, state.context_dir_base)
+            {:reply, {:ok, updated}, new_state}
+
+          %DirEntry{} = entry ->
+            cleanup_worktree(entry)
+            cleared = %{entry | worktree_enabled: false, worktree_path: nil}
+            dirs = Enum.map(initiative.dirs, fn e -> if e.path == dir, do: cleared, else: e end)
+            updated = %{initiative | dirs: dirs}
+            new_state = put_initiative(state, updated)
+            update_initiative_md_dirs(updated, state.context_dir_base)
+            {:reply, {:ok, updated}, new_state}
+        end
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
   end
 
   defp put_initiative(state, initiative) do
@@ -371,16 +469,31 @@ defmodule Codrift.Initiative.Store do
     """
   end
 
+  defp build_dir_entry(ctx, initiative_id, dir, true) do
+    case Worktree.ensure(ctx, initiative_id, dir) do
+      {:ok, wt_path} ->
+        DirEntry.new(dir, worktree_enabled: true, worktree_path: wt_path)
+
+      {:error, reason} ->
+        Logger.warning(
+          "Codrift.Worktree: failed to create worktree for #{dir}: #{inspect(reason)}"
+        )
+
+        DirEntry.new(dir)
+    end
+  end
+
+  defp build_dir_entry(_ctx, _initiative_id, dir, false), do: DirEntry.new(dir)
+
+  defp cleanup_worktree(%DirEntry{worktree_path: nil}), do: :ok
+  defp cleanup_worktree(%DirEntry{path: src, worktree_path: wt}), do: Worktree.remove(src, wt)
+
+  defp dirs_block([]) do
+    "<!-- codrift:dirs:start -->\n## Directories\n\n(no project directories configured yet — use 'a' in the TUI to add one)\n<!-- codrift:dirs:end -->"
+  end
+
   defp dirs_block(dirs) do
-    body =
-      case dirs do
-        [] ->
-          "(no project directories configured yet — use 'a' in the TUI to add one)"
-
-        dirs ->
-          Enum.map_join(dirs, "\n", fn dir -> "- #{Codrift.Paths.compact(dir)}" end)
-      end
-
+    body = Enum.map_join(dirs, "\n", fn entry -> "- #{Codrift.Paths.compact(entry.path)}" end)
     "<!-- codrift:dirs:start -->\n## Directories\n\n#{body}\n<!-- codrift:dirs:end -->"
   end
 

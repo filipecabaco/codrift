@@ -48,6 +48,10 @@ jobs:
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: mix deps.get --only prod
 
+      - name: Install libonig (aarch64-linux only)
+        if: matrix.target == 'aarch64-linux-gnu'
+        run: sudo apt-get install -y libonig-dev
+
       - name: Build release
         run: mix release
 
@@ -55,7 +59,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          mv _build/prod/rel/codrift/codrift-*.tar.gz \
+          mv _build/prod/codrift-*.tar.gz \
              "codrift-${VERSION}-${{ matrix.target }}.tar.gz"
 
       - name: Upload to GitHub Release

@@ -2,17 +2,40 @@
 
 ## Codrift.Initiative
 
-Struct: `%{id, name, dirs, created_at, status}`
+Struct: `%{id, name, dirs, created_at, status, integration, worktree_default}`
+`dirs` is `[%DirEntry{}]` — see `Codrift.Initiative.DirEntry`.
 Status: `:planning | :ongoing | :done | :archived`
 API: `new/2`, `to_map/1`, `from_map/1`, `next_status/1`, `prev_status/1`
+
+## Codrift.Initiative.DirEntry
+
+Struct representing one project directory within an initiative.
+Fields: `path` (source path), `worktree_enabled`, `worktree_path`.
+`effective_path/1` returns `worktree_path` when set, otherwise `path`.
+`from_value/1` accepts legacy plain strings for transparent migration.
+See [worktrees](worktrees.md).
 
 ## Codrift.Initiative.Store
 
 GenServer. Persists to `~/.config/codrift/initiatives.json`.
-Accepts `:path` and `:name` opts for test isolation.
+Accepts `:path`, `:name`, `:context_dir_base` opts for test isolation.
 Context folders live at `~/.codrift/initiatives/{id}/`; CLAUDE.md symlink is created automatically and backfilled for existing initiatives on startup.
 
-API: `create/2`, `get/1`, `list/0`, `add_dir/2`, `remove_dir/2`, `delete/1`, `set_status/2`, `context_path/1`
+API: `create/2`, `get/1`, `list/0`, `add_dir/2,3,4`, `remove_dir/2`, `delete/1`, `set_status/2`, `set_worktree_default/3`, `toggle_dir_worktree/3`, `context_path/1`
+
+## Codrift.Worktree
+
+Pure module. Git worktree lifecycle management.
+See [worktrees](worktrees.md).
+
+API: `git_repo?/1`, `ensure/3`, `remove/2`, `status/1`, `worktree_path/2`, `branch_name/2`
+
+## Codrift.Memory
+
+Pure module. Per-initiative FTS5 full-text search over agent knowledge.
+See [memory](memory.md).
+
+API: `search/2`, `add/4`, `delete/2`, `recent/2`, `list/2`, `stats/1`, `valid_types/0`
 
 ## Codrift.SessionStore
 
@@ -122,9 +145,52 @@ Pure module. Loads `~/.codrift/theme.json` at TUI start; resolves to a theme str
 
 Named themes: `default`, `dracula`, `nord`, `solarized`, `tokyo_night`. Unknown theme names and missing files fall back to `default`.
 
+## Codrift.Integration (behaviour)
+
+Behaviour for external service adapters.
+Callbacks: `name/0`, `list_items/1`, `get_item/2`, `to_initiative_context/1`
+`%Item{}` fields: `id`, `title`, `description`, `url`, `labels`, `status`, `assignee`, `linked_prs`
+
+Adapters: `GitHub`, `GitHubProjects`, `Linear`, `LinearProjects`, `GitLab`, `Jira`, `Notion`, `Shortcut`, `Asana`
+
+## Codrift.Integration.HTTP
+
+Pure module. Thin `:httpc` wrapper — GET/POST with JSON decode, Bearer auth, no extra deps.
+API: `get/2`, `post/3`
+
+## Codrift.Integration.Sync
+
+Pure module. Re-fetches an item from the linked integration and rewrites `integration.md` in the initiative's context folder.
+API: `sync/1`
+
+## Codrift.OAuth
+
+Pure module. Manages OAuth2 token acquisition and storage for external integrations.
+
+Three flow types:
+- **PKCE browser** (Linear, GitLab, Jira) — RFC 7636; `start_flow/1` returns an `auth_url`; `handle_callback/3` exchanges code + verifier and saves token
+- **Device flow** (GitHub) — RFC 8628; `start_flow/1` returns `user_code` + `verification_uri`; `poll_device_auth/5` polls in a supervised Task until token arrives
+- **Guided token** (Notion, Shortcut, Asana) — no OAuth; TUI shows a URL + token input field
+
+Tokens stored at `~/.codrift/oauth_tokens.json` (mode 0600).
+API: `start_flow/1`, `handle_callback/3`, `poll_device_auth/5`, `save_token/2`, `get_token/1`, `revoke/1`
+
+## Codrift.OAuth.Config
+
+Pure module. Declares OAuth parameters (flow type, scopes, endpoints, env var names) per service.
+API: `for_service/1`, `services/0`, `client_id/1`, `token_from_env/1`
+
+## Codrift.OAuth.StateStore
+
+GenServer. Holds in-memory PKCE state (verifier + metadata) while a browser flow is in progress.
+Entries expire after 10 minutes. API: `put/2`, `pop/1`
+
 ## Codrift.MCP.Handler
 
 Pure module. JSON-RPC 2.0 over HTTP+SSE transport.
 Install: `mix codrift.mcp.install`
 
-Tools: `list_initiatives`, `get_diff`, `list_agents`, `start_agent`, `send_to_agent`, `get_agent_output`, `create_initiative`, `add_dir`, `delete_initiative`
+Initiative tools: `list_initiatives`, `get_diff`, `create_initiative`, `add_dir`, `delete_initiative`
+Agent tools: `list_agents`, `start_agent`, `send_to_agent`, `get_agent_output`
+Memory tools: `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list`
+Integration tools: `start_oauth_flow`, `get_oauth_status`, `list_integration_items`, `import_from_integration`, `sync_initiative_context`
