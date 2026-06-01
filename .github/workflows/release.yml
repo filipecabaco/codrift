@@ -18,12 +18,8 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             runner: macos-14
-          - target: x86_64-apple-darwin
-            runner: macos-13
           - target: x86_64-linux-gnu
             runner: ubuntu-latest
-          - target: aarch64-linux-gnu
-            runner: ubuntu-24.04-arm
 
     env:
       MIX_ENV: prod
@@ -48,13 +44,9 @@ jobs:
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: mix deps.get --only prod
 
-      - name: Install libonig (aarch64-linux only)
-        if: matrix.target == 'aarch64-linux-gnu'
-        run: sudo apt-get install -y libonig-dev
-
       - name: Build release
         env:
-          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.target == 'aarch64-linux-gnu' && 'thin' || 'true' }}
+          CARGO_PROFILE_RELEASE_LTO: true
         run: mix release
 
       - name: Rename tarball with platform suffix
