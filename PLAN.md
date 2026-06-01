@@ -135,6 +135,8 @@ access. SQLite for session persistence; SQLite FTS5 for per-initiative memory.
 |---|------|-------|
 | 38 | Additional CLI adapters | Codex CLI, Opencode, Cursor Agent, Gemini CLI, Copilot CLI, Amp, Goose, Aider (complete). See *Upcoming: Additional CLI Adapters* below. |
 | 40 | Website | Landing page: hero + install one-liner, feature bullets, asciinema demo, GitHub link. Domain: `codrift.sh`. |
+| 43 | Tree view (mode 3) | **Next up.** Third mode (`3` key, `Ctrl+P` palette) showing a file-tree of all dirs in the active initiative. Keyboard-driven: navigate with `j`/`k`, expand/collapse dirs with `Enter`/`Space`, open file in `$EDITOR` with `e`, create file/dir with `n`, delete with `d` (confirmation prompt). Mode bar becomes `1: Context │ 2: Diff │ 3: Tree`. Like diff view, tree view always reflects the currently focused initiative — switching sidebar focus updates the tree root. |
+| 44 | Replace in-TUI editor with `$EDITOR` (vim) | Drop the custom textarea editor (step 19). `e` key suspends the TUI, opens the context file in `$EDITOR` (defaults to `vim`), then resumes the TUI on exit. Users get their own editor config, plugins, and keybindings for free — no custom editor to maintain. |
 
 ---
 
