@@ -120,12 +120,20 @@ defmodule Codrift.TUI do
       status_timer: nil,
       nudge: nil,
       restore: nil,
-      output_render: nil
+      output_render: nil,
+      scroll_render: nil
     }
   ]
 
+  # Enable X10 + SGR extended mouse reporting so the terminal sends scroll wheel
+  # events as proper mouse events rather than converting them to \e[A/\e[B arrow
+  # sequences. ExRatatui's NIF does not emit EnableMouseCapture itself.
+  @mouse_enable "\e[?1000h\e[?1006h"
+  @mouse_disable "\e[?1000l\e[?1006l"
+
   @impl true
   def mount(_opts) do
+    IO.write(@mouse_enable)
     Process.send_after(self(), :autostart_sessions, 300)
     Codrift.Updater.check_async(self())
     initiatives = Store.list()
@@ -181,7 +189,9 @@ defmodule Codrift.TUI do
         sidebar_tick: Process.send_after(self(), :sidebar_tick, 2000),
         status_timer: nil,
         nudge: nil,
-        restore: nil
+        restore: nil,
+        output_render: nil,
+        scroll_render: nil
       }
     }
 
@@ -275,12 +285,13 @@ defmodule Codrift.TUI do
   # ── Mouse events ─────────────────────────────────────────────────────────────
 
   # Scroll in whichever pane the cursor is over.
+  # Debounced: batch rapid mouse-wheel events and render at most once per 16 ms.
   def handle_event(%Mouse{kind: "scroll_up"} = ev, %{modal: %{type: :none}} = state) do
-    {:noreply, mouse_scroll(state, ev, -3)}
+    debounce_scroll(mouse_scroll(state, ev, -3))
   end
 
   def handle_event(%Mouse{kind: "scroll_down"} = ev, %{modal: %{type: :none}} = state) do
-    {:noreply, mouse_scroll(state, ev, 3)}
+    debounce_scroll(mouse_scroll(state, ev, 3))
   end
 
   # Left click: focus the pane under the pointer.
@@ -557,8 +568,14 @@ defmodule Codrift.TUI do
       state.active_tab == :diff ->
         {:noreply, %{state | diff: %{state.diff | scroll: state.diff.scroll + 10}}}
 
+      agent_pane?(state) ->
+        debounce_scroll(%{state | main_scroll: max(state.main_scroll - 10, 0)})
+
       true ->
-        {:noreply, %{state | main_scroll: state.main_scroll + 10}}
+        debounce_scroll(%{
+          state
+          | main_scroll: min(state.main_scroll + 10, non_agent_max_scroll(state))
+        })
     end
   end
 
@@ -567,11 +584,20 @@ defmodule Codrift.TUI do
         %{modal: %{type: :none}} = state
       ) do
     cond do
+      Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\x15")}
+
       state.active_tab == :diff ->
         {:noreply, %{state | diff: %{state.diff | scroll: max(state.diff.scroll - 10, 0)}}}
 
+      agent_pane?(state) ->
+        debounce_scroll(%{
+          state
+          | main_scroll: min(state.main_scroll + 10, agent_max_scroll(state))
+        })
+
       true ->
-        {:noreply, %{state | main_scroll: max(state.main_scroll - 10, 0)}}
+        debounce_scroll(%{state | main_scroll: max(state.main_scroll - 10, 0)})
     end
   end
 
@@ -682,14 +708,20 @@ defmodule Codrift.TUI do
       Focus.focused?(state.focus, :sidebar) ->
         {:noreply, navigate(state, 1)}
 
-      state.active_tab == :diff ->
-        {:noreply, %{state | diff: %{state.diff | scroll: state.diff.scroll + 3}}}
-
       Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
         {:noreply, forward_raw(state, "\e[B")}
 
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff: %{state.diff | scroll: state.diff.scroll + 3}}}
+
+      agent_pane?(state) ->
+        debounce_scroll(%{state | main_scroll: max(state.main_scroll - 3, 0)})
+
       Focus.focused?(state.focus, :main) ->
-        {:noreply, %{state | main_scroll: state.main_scroll + 3}}
+        debounce_scroll(%{
+          state
+          | main_scroll: min(state.main_scroll + 3, non_agent_max_scroll(state))
+        })
 
       true ->
         {:noreply, state}
@@ -707,8 +739,14 @@ defmodule Codrift.TUI do
       Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
         {:noreply, forward_raw(state, "\e[A")}
 
+      agent_pane?(state) ->
+        debounce_scroll(%{
+          state
+          | main_scroll: min(state.main_scroll + 3, agent_max_scroll(state))
+        })
+
       Focus.focused?(state.focus, :main) ->
-        {:noreply, %{state | main_scroll: max(state.main_scroll - 3, 0)}}
+        debounce_scroll(%{state | main_scroll: max(state.main_scroll - 3, 0)})
 
       true ->
         {:noreply, state}
@@ -861,6 +899,11 @@ defmodule Codrift.TUI do
   defp dispatch_sidebar_action(_, state), do: {:noreply, state}
 
   @impl true
+  def terminate(_reason, _state) do
+    IO.write(@mouse_disable)
+  end
+
+  @impl true
   def handle_info({:agent_output, agent_id, data}, state) do
     {w, h} = state.pane_size
 
@@ -878,9 +921,10 @@ defmodule Codrift.TUI do
 
     new_scroll =
       cond do
-        # User has scrolled up — preserve position so they can read while output streams.
+        # User has scrolled away from default view (main_scroll > 0) — preserve so
+        # they can read while output streams.
         selected and state.main_scroll > 0 -> state.main_scroll
-        # At the bottom (main_scroll == 0): stay at bottom so live output is visible.
+        # At default view (main_scroll == 0): stay there so live output is visible.
         selected -> 0
         true -> state.main_scroll
       end
@@ -905,6 +949,10 @@ defmodule Codrift.TUI do
 
   def handle_info(:render_output, state) do
     {:noreply, %{state | refs: Map.put(state.refs, :output_render, nil)}, [render?: true]}
+  end
+
+  def handle_info(:scroll_render, state) do
+    {:noreply, %{state | refs: %{state.refs | scroll_render: nil}}}
   end
 
   def handle_info({:apply_resize, w, h}, state) do
@@ -2022,7 +2070,8 @@ defmodule Codrift.TUI do
         {:error, reason} -> "(could not read file: #{inspect(reason)})"
       end
 
-    cursor_info = %{type: :context_file, path: path, content: content}
+    lines = String.split(content, "\n")
+    cursor_info = %{type: :context_file, path: path, content: content, lines: lines}
 
     %{
       state
@@ -2475,7 +2524,9 @@ defmodule Codrift.TUI do
         md_sections: md_sections,
         worktree_default: wt_default
       } ->
-        content = build_initiative_md_content(md_sections, dirs, files, ctx_dir, wt_default)
+        content =
+          build_initiative_md_content(md_sections, dirs, files, ctx_dir, wt_default)
+          |> String.replace_invalid()
 
         %CodeBlock{
           content: content,
@@ -2499,7 +2550,8 @@ defmodule Codrift.TUI do
         dirs: dirs
       } ->
         # fallback when md_sections not yet populated
-        content = build_initiative_md_content([], dirs, files, ctx_dir, false)
+        content =
+          build_initiative_md_content([], dirs, files, ctx_dir, false) |> String.replace_invalid()
 
         %CodeBlock{
           content: content,
@@ -2591,21 +2643,41 @@ defmodule Codrift.TUI do
   end
 
   defp render_file_widget(state, path, content) do
-    display = if content == "", do: "(empty file — press e to edit)", else: content
-
-    %CodeBlock{
-      content: display,
-      language: detect_language(path),
-      theme: state.theme.syntax_theme,
-      line_numbers: true,
-      block: %Block{
-        title: " #{Path.basename(path)}  e: edit  d: delete ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: Styles.pane_border(state.focus, :main, state.theme)
-      },
-      scroll: {state.main_scroll, 0}
+    block = %Block{
+      title: " #{Path.basename(path)}  e: edit  d: delete ",
+      borders: [:all],
+      border_type: :rounded,
+      border_style: Styles.pane_border(state.focus, :main, state.theme)
     }
+
+    cond do
+      content == "" ->
+        %Paragraph{text: "(empty file — press e to edit)", block: block, wrap: true}
+
+      not String.valid?(content) ->
+        %Paragraph{text: "(binary file — cannot display as text)", block: block, wrap: true}
+
+      true ->
+        {_, pane_h} = state.pane_size
+        lines = Map.get(state.cursor_info, :lines) || String.split(content, "\n")
+        total = length(lines)
+        # Clamp scroll to a valid range so we never request past EOF.
+        start = min(state.main_scroll, max(total - pane_h, 0))
+        visible = Enum.slice(lines, start, pane_h)
+
+        # Pass only the visible window to the syntect NIF so it processes
+        # O(pane_h) lines regardless of file size. starting_line keeps
+        # line numbers accurate; scroll stays at 0 since we pre-slice.
+        %CodeBlock{
+          content: Enum.join(visible, "\n"),
+          language: detect_language(path),
+          theme: state.theme.syntax_theme,
+          line_numbers: true,
+          starting_line: start + 1,
+          block: block,
+          scroll: {0, 0}
+        }
+    end
   end
 
   defp render_dir_pane(state, dir) do
@@ -2687,25 +2759,31 @@ defmodule Codrift.TUI do
     do: "Navigate here then Tab to focus. Type to interact."
 
   defp render_agent_output(state, screen, focused, block) do
+    scrollback_count = length(screen.scrollback)
+    n_history = min(state.main_scroll, scrollback_count)
+
+    # Only show the prompt input at live view (n_history=0); hide it when reading history.
     prompt_suffix =
-      if focused and state.selection.agent_mode != :pty and state.input_buffer != "",
-        do: "\n> #{state.input_buffer}▌",
-        else: ""
+      if n_history == 0 and focused and state.selection.agent_mode != :pty and
+           state.input_buffer != "",
+         do: "\n> #{state.input_buffer}▌",
+         else: ""
 
+    # to_text_viewport produces exactly screen.height lines: the last n_history rows from
+    # scrollback above the first (screen.height - n_history) rows of the live screen.
+    # This keeps text size O(pane_h) regardless of scrollback depth, avoiding large
+    # paragraph renders on every scroll event.
     content =
-      if prompt_suffix == "",
-        do: VT100.to_text(screen, focused),
-        else: append_prompt(VT100.to_text(screen, false), prompt_suffix)
+      if prompt_suffix == "" do
+        VT100.to_text_viewport(screen, focused, n_history)
+      else
+        VT100.to_text_viewport(screen, false, n_history) |> append_prompt(prompt_suffix)
+      end
 
-    # When the prompt suffix is present it adds N extra lines beyond the VT100
-    # screen height (which exactly fills the pane). scroll must advance by that
-    # same N so the prompt is always visible at the bottom of the pane.
-    scroll =
-      if prompt_suffix == "",
-        do: state.main_scroll,
-        else: length(String.split(prompt_suffix, "\n"))
+    extra_lines =
+      if prompt_suffix == "", do: 0, else: length(String.split(prompt_suffix, "\n"))
 
-    %Paragraph{text: content, block: block, wrap: false, scroll: {scroll, 0}}
+    %Paragraph{text: content, block: block, wrap: false, scroll: {extra_lines, 0}}
   end
 
   defp append_prompt(%ExRatatui.Text{lines: lines} = text, suffix) do
@@ -2753,7 +2831,7 @@ defmodule Codrift.TUI do
         content =
           if files == [],
             do: "No changes in this directory.",
-            else: Enum.map_join(files, "\n", &Diff.to_unified/1)
+            else: files |> Enum.map_join("\n", &Diff.to_unified/1) |> String.replace_invalid()
 
         [
           {%CodeBlock{
@@ -2913,7 +2991,17 @@ defmodule Codrift.TUI do
         # PTY agents previously forwarded scroll as arrow sequences, which
         # navigated Claude's input history instead of scrolling the codrift
         # window — wrong UX.
-        %{state | main_scroll: max(state.main_scroll + delta, 0)}
+        # For the agent scrollback pane, main_scroll is "depth into history"
+        # (0 = live), so the wheel direction is inverted vs. doc-scroll panes.
+        # Cap at scrollback_count to prevent silent accumulation when no history exists.
+        if agent_pane?(state) do
+          new_scroll = max(state.main_scroll - delta, 0)
+          capped = min(new_scroll, agent_max_scroll(state))
+          %{state | main_scroll: capped}
+        else
+          new_scroll = max(state.main_scroll + delta, 0)
+          %{state | main_scroll: min(new_scroll, non_agent_max_scroll(state))}
+        end
     end
   end
 
@@ -3158,6 +3246,74 @@ defmodule Codrift.TUI do
       _ ->
         state.selection.agent_mode
     end
+  end
+
+  # Returns true when the main pane is showing agent output (any mode).
+  # In that mode main_scroll is "depth into scrollback history" (0 = live),
+  # so UP/DOWN semantics are inverted vs. the CodeBlock/Paragraph panes where
+  # main_scroll is the paragraph row offset (higher = further down in the doc).
+  # PTY agents (Claude, Terminal) still have their arrow keys forwarded to the
+  # PTY in earlier cond branches; this guard only affects the fallthrough cases
+  # (Ctrl+D/U and mouse scroll) that modify main_scroll directly.
+  defp agent_pane?(state) do
+    Focus.focused?(state.focus, :main) and
+      match?({:agent, _, _, _}, Enum.at(state.sidebar.entries, state.sidebar.cursor))
+  end
+
+  # Maximum useful scroll depth for the agent pane = rows in the scrollback buffer.
+  # Caps main_scroll so it never grows past what's actually available to display.
+  defp agent_max_scroll(state) do
+    case Map.get(state.agents.screens, state.selection.agent_id) do
+      nil -> 0
+      screen -> length(screen.scrollback)
+    end
+  end
+
+  # Maximum useful scroll for non-agent content panes (initiative, dir, file).
+  # Computed from the content line count stored in cursor_info; falls back to 0
+  # so the pane stays at the top when cursor_info is absent or of unknown type.
+  defp non_agent_max_scroll(state) do
+    {_, pane_h} = state.pane_size
+    max(cursor_content_lines(state.cursor_info) - pane_h, 0)
+  end
+
+  defp cursor_content_lines(%{type: :context_file, lines: lines}), do: length(lines)
+
+  defp cursor_content_lines(%{type: :context_file, content: content}),
+    do: content |> String.split("\n") |> length()
+
+  defp cursor_content_lines(%{
+         type: :initiative,
+         md_sections: sections,
+         dirs: dirs,
+         context_files: files,
+         context_dir: ctx_dir,
+         worktree_default: wt
+       }) do
+    build_initiative_md_content(sections, dirs, files, ctx_dir, wt)
+    |> String.split("\n")
+    |> length()
+  end
+
+  defp cursor_content_lines(%{type: :dir, commits: commits}), do: 8 + length(commits)
+
+  defp cursor_content_lines(%{type: :context_dir, files: files}), do: 5 + length(files)
+
+  defp cursor_content_lines(_), do: 0
+
+  # Throttles scroll renders to at most one every 16 ms (~60 fps).
+  # Crucially, the timer is only armed when no render is already pending —
+  # resetting it on every event (debounce) would cause livelock during fast
+  # scrolling: renders would never fire while the wheel is spinning.
+  defp debounce_scroll(state) do
+    new_refs =
+      if is_nil(state.refs.scroll_render) do
+        %{state.refs | scroll_render: Process.send_after(self(), :scroll_render, 16)}
+      else
+        state.refs
+      end
+
+    {:noreply, %{state | refs: new_refs}, [render?: false]}
   end
 
   defp maybe_nudge_agent(agent_id, state) do

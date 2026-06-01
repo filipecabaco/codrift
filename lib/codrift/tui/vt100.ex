@@ -40,6 +40,8 @@ defmodule Codrift.TUI.VT100 do
   @type cell :: {String.t(), Style.t()}
   @type grid :: %{non_neg_integer() => %{non_neg_integer() => cell()}}
 
+  @scrollback_limit 1000
+
   defstruct [
     :width,
     :height,
@@ -51,7 +53,8 @@ defmodule Codrift.TUI.VT100 do
     :style,
     :scroll_top,
     :scroll_bottom,
-    :incomplete
+    :incomplete,
+    scrollback: []
   ]
 
   @type t :: %__MODULE__{
@@ -65,7 +68,8 @@ defmodule Codrift.TUI.VT100 do
           style: Style.t(),
           scroll_top: non_neg_integer(),
           scroll_bottom: non_neg_integer(),
-          incomplete: binary()
+          incomplete: binary(),
+          scrollback: [%{non_neg_integer() => {String.t(), Style.t()}}]
         }
 
   @doc "Creates a new virtual screen with all cells blank."
@@ -81,7 +85,8 @@ defmodule Codrift.TUI.VT100 do
       style: @default_style,
       scroll_top: 0,
       scroll_bottom: max(height - 1, 0),
-      incomplete: ""
+      incomplete: "",
+      scrollback: []
     }
   end
 
@@ -151,6 +156,70 @@ defmodule Codrift.TUI.VT100 do
       end)
 
     %Text{lines: lines}
+  end
+
+  @doc """
+  Like `to_text/2` but prepends `n_history` rows from the scrollback buffer
+  (the most recent ones, closest to the current screen) before the screen rows.
+
+  Use this when the caller wants to render scrollback above the current screen.
+  Pass `n_history = 0` to get the same result as `to_text/2`.
+  """
+  def to_text_with_history(%__MODULE__{} = screen, show_cursor, n_history) do
+    count = length(screen.scrollback)
+    visible = Enum.slice(screen.scrollback, count - n_history, n_history)
+
+    history_lines =
+      Enum.map(visible, fn row_cells ->
+        %Line{spans: row_to_spans(row_cells, screen.width)}
+      end)
+
+    %Text{lines: history_lines ++ to_text(screen, show_cursor).lines}
+  end
+
+  @doc """
+  Produces exactly `screen.height` lines for a fixed-size viewport:
+
+  - The last `min(n_history, screen.height)` rows from scrollback (most recent, shown at top)
+  - The first `max(screen.height - n_history, 0)` rows from the live screen (shown below)
+
+  Unlike `to_text_with_history/3`, this never grows beyond screen.height lines,
+  so the caller can always use `scroll: {0, 0}` on the Paragraph — no extra
+  Ratatui paragraph-level scrolling required. This keeps rendering O(height)
+  regardless of scrollback depth.
+  """
+  def to_text_viewport(%__MODULE__{} = screen, show_cursor, n_history) do
+    sc = length(screen.scrollback)
+    history_shown = min(n_history, min(screen.height, sc))
+    screen_shown = screen.height - history_shown
+
+    history_lines =
+      screen.scrollback
+      |> Enum.slice(sc - history_shown, history_shown)
+      |> Enum.map(fn row_cells ->
+        %Line{spans: row_to_spans(row_cells, screen.width)}
+      end)
+
+    display_cursor = show_cursor and screen.cursor_visible
+
+    screen_lines =
+      Enum.map(0..(screen_shown - 1)//1, fn row ->
+        row_cells = Map.get(screen.cells, row, %{})
+
+        cells =
+          if display_cursor and row == screen.cursor_row do
+            col = screen.cursor_col
+            {ch, style} = Map.get(row_cells, col, {@empty_char, @default_style})
+            cursor_style = %{style | modifiers: Enum.uniq([:reversed | style.modifiers])}
+            Map.put(row_cells, col, {ch, cursor_style})
+          else
+            row_cells
+          end
+
+        %Line{spans: row_to_spans(cells, screen.width)}
+      end)
+
+    %Text{lines: history_lines ++ screen_lines}
   end
 
   defp row_to_spans(row_cells, width) do
@@ -533,6 +602,17 @@ defmodule Codrift.TUI.VT100 do
     bottom = screen.scroll_bottom
     n = min(n, bottom - top + 1)
 
+    # Capture rows leaving the top of the screen into the scrollback buffer.
+    # Only applies when the scroll region starts at row 0 — partial regions
+    # (scroll_top > 0) are internal terminal scrolling and stay on screen.
+    new_scrollback =
+      if top == 0 do
+        evicted = for row <- 0..(n - 1)//1, do: Map.get(screen.cells, row, %{})
+        Enum.take(screen.scrollback ++ evicted, -@scrollback_limit)
+      else
+        screen.scrollback
+      end
+
     new_cells =
       if bottom - n >= top do
         Enum.reduce(top..(bottom - n)//1, screen.cells, fn row, cells ->
@@ -547,7 +627,7 @@ defmodule Codrift.TUI.VT100 do
         Map.put(cells, row, %{})
       end)
 
-    %{screen | cells: new_cells}
+    %{screen | cells: new_cells, scrollback: new_scrollback}
   end
 
   defp scroll_down(screen, n) do
