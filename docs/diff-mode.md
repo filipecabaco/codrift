@@ -1,8 +1,8 @@
 # Diff Mode
 
-Pressing `2` enters diff mode. The sidebar transforms to show changed files grouped by directory; the main pane shows the diff content driven by the sidebar cursor. Pressing `1` returns to context mode.
+Press `2` to enter diff mode. The sidebar transforms to show changed files grouped by directory; the main pane shows the diff content driven by the sidebar cursor. Press `1` to return to context mode.
 
-## Sidebar entries
+## Sidebar structure
 
 ```
   * all files              +42 -17
@@ -13,11 +13,9 @@ Pressing `2` enters diff mode. The sidebar transforms to show changed files grou
       ○ test/foo_test.ex    +12  -7
 ```
 
-Entry types in `Codrift.TUI.Sidebar`:
-
-| Type | Description |
-|------|-------------|
-| `{:diff_all, total_adds, total_dels}` | Always first; combined totals across all dirs |
+| Entry type | Description |
+|------------|-------------|
+| `{:diff_all, adds, dels}` | Always first — combined totals across all directories |
 | `{:diff_dir, dir, adds, dels}` | One per directory that has changes |
 | `{:diff_file, dir, path, adds, dels}` | One per changed file |
 
@@ -31,13 +29,15 @@ Directories with no changes are excluded. Moving the cursor updates the content 
 | `{:diff_dir}` | All files in that directory |
 | `{:diff_file}` | Single file |
 
-The content pane always has a cyan border in diff mode (always "active" — it is the primary reading surface regardless of which pane has keyboard focus).
+The content pane always has a cyan border in diff mode — it is the primary reading surface regardless of which pane has keyboard focus.
 
-## View modes (toggle with `v`)
+## View modes
+
+Toggle between modes with `v`.
 
 ### Unified (default)
 
-Single `CodeBlock` with `language: "diff"` syntax highlighting:
+Syntax-highlighted unified diff rendered as a `CodeBlock`:
 
 ```
 --- a/lib/foo.ex
@@ -62,28 +62,31 @@ Two `Paragraph` panels with explicit span colouring:
 
 | Line type | Colour |
 |-----------|--------|
-| Removed | Red foreground (left pane, red border) |
-| Added | Green foreground (right pane, green border) |
+| Removed | Red foreground, red left border |
+| Added | Green foreground, green right border |
 | Context | Default white |
-| Padding (`~`) | Dark-gray |
-| Hunk headers | Dark-gray |
+| Padding (`~`) | Dark gray |
+| Hunk headers | Dark gray |
 
-Both modes share `diff_scroll`; `Ctrl+D`/`Ctrl+U` do half-page jumps.
+Both modes share `diff_scroll`. `Ctrl+D` / `Ctrl+U` do half-page jumps.
 
 ## Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
-| `j` / `↓` | Move diff sidebar cursor down (or scroll content when main focused) |
-| `k` / `↑` | Move diff sidebar cursor up (or scroll content when main focused) |
+| `j` / `↓` | Move sidebar cursor down (or scroll content when main pane is focused) |
+| `k` / `↑` | Move sidebar cursor up (or scroll content when main pane is focused) |
 | `v` | Toggle unified / split view |
-| `*` | Jump diff sidebar cursor to "all files" (entry 0) |
+| `*` | Jump sidebar cursor to "all files" (entry 0) |
 | `Ctrl+D` / `Ctrl+U` | Half-page scroll in diff content |
-| `r` | Refresh diff for current initiative |
-| `Ctrl+P` | Open palette → "Toggle Diff: Unified / Split" etc. |
+| `r` | Refresh diff for the current initiative |
+| `Ctrl+P` | Open palette → "Toggle Diff: Unified / Split" |
+
+## Web viewer
+
+A browser diff viewer is available at `http://localhost:7437/diff.html` while the TUI is running, with live updates via SSE at `/events/initiative/:id`.
 
 ## Implementation notes
 
-- `Codrift.Diff.to_split_rows/1` returns `[{:header | :context | :change, old | nil, new | nil}]` — typed rows used for coloured split view rendering. Syntect `language: "diff"` doesn't colour stripped-prefix content; explicit `%Span{}` rendering gives full control.
+- `Codrift.Diff.to_split_rows/1` returns `[{:header | :context | :change, old | nil, new | nil}]` — typed rows for the split view renderer. Explicit `%Span{}` colouring gives full control over per-line styling that syntax highlighting alone cannot provide.
 - `Codrift.Diff.to_unified/1` returns the unified diff string fed to the `CodeBlock` widget.
-- Web diff view available at `/diff.html` + SSE `/events/initiative/:id`.

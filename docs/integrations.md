@@ -1,13 +1,9 @@
-# Integration Setup
+# Integrations
 
-Codrift can pull context from GitHub, Linear, GitLab, Jira, and Notion. Each
-service has two auth paths:
+Codrift can pull context from GitHub, Linear, GitLab, Jira, and Notion directly into an initiative. Each service supports two auth paths:
 
-- **OAuth (recommended)** — handled entirely inside the TUI. Codrift stores the
-  token in `~/.codrift/oauth_tokens.json` (mode 0600). No secret is ever stored
-  or shipped in the binary.
-- **Env var fallback** — for CI, headless environments, or personal tokens. Set
-  the variables listed under each service and Codrift will use them automatically.
+- **OAuth (recommended)** — handled entirely inside the TUI. Tokens are stored at `~/.codrift/oauth_tokens.json` (mode 0600). No secret is ever stored in or shipped with the binary.
+- **Env var fallback** — for CI, headless environments, or personal tokens. Set the variables listed under each service and Codrift will use them automatically.
 
 ---
 
@@ -16,8 +12,7 @@ service has two auth paths:
 1. Register a developer app for the services you want (instructions below).
 2. Set the `*_CLIENT_ID` env var for each service.
 3. Open the TUI (`codrift tui`), press `Ctrl+P` → **Integrations** to connect.
-4. Press `n` → pick a service from the source picker to import an issue as an
-   initiative.
+4. Press `n` → pick a service from the source picker to import an issue as an initiative.
 
 ---
 

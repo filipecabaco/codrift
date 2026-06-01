@@ -1,10 +1,10 @@
-# Per-initiative Memory Store
+# Shared Memory
 
-Each initiative has a shared, searchable knowledge base backed by SQLite FTS5. All agents working on the same initiative can write summaries, decisions, and code snippets to it, and search it before starting work. This saves tokens and keeps agents aligned across sessions.
+Each initiative has a searchable knowledge base backed by SQLite FTS5. All agents working on the same initiative can write summaries, decisions, and code snippets to it and search it before starting work — saving tokens and keeping agents aligned across sessions.
 
 ## Storage
 
-`~/.codrift/initiatives/{id}/memory.db` — created automatically alongside `initiative.md`. Removed when the initiative is deleted.
+`~/.codrift/initiatives/{id}/memory.db` — created automatically on first write. Removed when the initiative is deleted.
 
 ## Schema
 
@@ -17,7 +17,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory USING fts5(
 );
 ```
 
-The `rowid` is implicit and used as the stable delete handle.
+The `rowid` is implicit and serves as the stable delete handle.
 
 ## Chunk types
 
@@ -31,7 +31,7 @@ The `rowid` is implicit and used as the stable delete handle.
 
 ## Using memory from agents
 
-The `initiative.md` file (picked up automatically by Claude Code via `--add-dir`) includes the initiative ID and usage instructions. Agents can use either MCP tools or CLI commands.
+The `initiative.md` file in each initiative's context folder (picked up automatically by Claude Code via `--add-dir`) includes the initiative ID and usage instructions. Agents can use either MCP tools or CLI commands.
 
 ### MCP tools (Claude Code — preferred)
 
@@ -60,11 +60,11 @@ All commands print JSON to stdout and exit 0 on success. Results include an `id`
 
 ## Module reference
 
-**`Codrift.Memory`** — pure module, no process. Opens and closes its own SQLite connection per call, safe for use in `eval` context (CLI) and inside GenServers.
+**`Codrift.Memory`** — pure module, no process. Opens and closes its own SQLite connection per call. Safe for use in `eval` context (CLI) and inside GenServers.
 
 ```elixir
 Codrift.Memory.search(initiative_id, "query")
-# → [%{id: rowid, chunk_type, content, source, rank}]
+# → [%{id: rowid, chunk_type: "decision", content: "...", source: "agent-abc", rank: -1.2}]
 
 Codrift.Memory.add(initiative_id, "decision", "we use JWT", "agent-abc")
 # → {:ok, rowid}
@@ -79,5 +79,5 @@ Codrift.Memory.list(initiative_id, chunk_type)
 # → [%{id, chunk_type, content, source}]
 
 Codrift.Memory.stats(initiative_id)
-# → %{total: n, by_type: %{"decision" => 3, "snippet" => 7, ...}}
+# → %{total: 12, by_type: %{"decision" => 3, "snippet" => 7, "note" => 2}}
 ```
