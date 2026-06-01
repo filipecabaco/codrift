@@ -145,7 +145,8 @@ defmodule Codrift.TUI do
       sidebar: %SidebarState{
         entries: Sidebar.build_entries(initiatives, agents),
         cursor: 0,
-        collapsed: false
+        collapsed: false,
+        collapsed_ids: MapSet.new()
       },
       selection: %Selection{},
       agents: %AgentState{
@@ -207,7 +208,8 @@ defmodule Codrift.TUI do
               state.sidebar.entries,
               state.sidebar.cursor,
               state.focus,
-              state.theme
+              state.theme,
+              state.sidebar.collapsed_ids
             )
           end
 
@@ -766,10 +768,13 @@ defmodule Codrift.TUI do
     do: dispatch_sidebar_action(action, state)
 
   defp dispatch_sidebar_action(:navigate_down, state),
-    do: {:noreply, navigate(state, 1)}
+    do: {:noreply, move_sidebar_cursor(state, 1)}
 
   defp dispatch_sidebar_action(:navigate_up, state),
-    do: {:noreply, navigate(state, -1)}
+    do: {:noreply, move_sidebar_cursor(state, -1)}
+
+  defp dispatch_sidebar_action(:toggle_collapse, state),
+    do: {:noreply, toggle_collapse_at_cursor(state)}
 
   defp dispatch_sidebar_action(:context_mode, state) do
     {:noreply, %{state | active_tab: :context, main_scroll: 0} |> update_context_from_cursor()}
@@ -1791,6 +1796,9 @@ defmodule Codrift.TUI do
   defp do_palette_action(:refresh, state),
     do: refresh_current(%{state | modal: %{state.modal | type: :none}})
 
+  defp do_palette_action(:toggle_collapse, state),
+    do: toggle_collapse_at_cursor(%{state | modal: %{state.modal | type: :none}})
+
   defp sync_modal(state, :palette) do
     filter = ExRatatui.text_input_get_value(state.modal.input)
     %{state | modal: %{state.modal | palette: %{filter: filter, cursor: 0}}}
@@ -1815,6 +1823,48 @@ defmodule Codrift.TUI do
       end
 
     %{state | modal: %{state.modal | worktree_git: is_git, worktree_enabled: new_enabled}}
+  end
+
+  # Always moves the sidebar cursor — used by j/k keybindings so the focus check
+  # inside navigate/2 cannot accidentally fall through to main-pane scrolling.
+  defp move_sidebar_cursor(state, delta) do
+    if state.active_tab == :diff do
+      max_idx = max(length(state.diff.sidebar_entries) - 1, 0)
+      new_cursor = min(max(state.diff.sidebar_cursor + delta, 0), max_idx)
+      %{state | diff: %{state.diff | sidebar_cursor: new_cursor, scroll: 0}}
+    else
+      max_idx = max(length(state.sidebar.entries) - 1, 0)
+      new_cursor = min(max(state.sidebar.cursor + delta, 0), max_idx)
+
+      %{state | sidebar: %{state.sidebar | cursor: new_cursor}, main_scroll: 0}
+      |> update_context_from_cursor()
+    end
+  end
+
+  defp toggle_collapse_at_cursor(state) do
+    new_collapsed_ids =
+      case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
+        {:initiative, id, _, _, _, _} ->
+          toggle_collapse_id(state.sidebar.collapsed_ids, {:initiative, id})
+
+        {:context_dir, _, path, _} ->
+          toggle_collapse_id(state.sidebar.collapsed_ids, {:context_dir, path})
+
+        {:dir, _, path, _, _} ->
+          toggle_collapse_id(state.sidebar.collapsed_ids, {:dir, path})
+
+        _ ->
+          state.sidebar.collapsed_ids
+      end
+
+    reload_sidebar(%{state | sidebar: %{state.sidebar | collapsed_ids: new_collapsed_ids}})
+    |> update_context_from_cursor()
+  end
+
+  defp toggle_collapse_id(collapsed_ids, key) do
+    if MapSet.member?(collapsed_ids, key),
+      do: MapSet.delete(collapsed_ids, key),
+      else: MapSet.put(collapsed_ids, key)
   end
 
   defp navigate(state, delta) do
@@ -2349,7 +2399,12 @@ defmodule Codrift.TUI do
         end
       end)
 
-    %{state | sidebar: %{state.sidebar | entries: Sidebar.build_entries(initiatives, agents)}}
+    full_entries = Sidebar.build_entries(initiatives, agents)
+    filtered = Sidebar.filter_entries(full_entries, state.sidebar.collapsed_ids)
+    max_idx = max(length(filtered) - 1, 0)
+    new_cursor = min(state.sidebar.cursor, max_idx)
+
+    %{state | sidebar: %{state.sidebar | entries: filtered, cursor: new_cursor}}
   end
 
   defp render_mode_bar(state) do
@@ -2876,6 +2931,39 @@ defmodule Codrift.TUI do
     end
   end
 
+  defp render_placeholder(%{sidebar: %{entries: []}} = state) do
+    %Paragraph{
+      text: """
+      Welcome to Codrift!
+
+      No initiatives yet. Here's how to get started:
+
+        n  — New initiative (blank or imported from a service)
+        a  — Add a directory to the selected initiative
+        s  — Start a Claude agent in the selected directory
+
+      An initiative groups one or more directories under a shared context.
+      Create one, add a directory, then start an agent to begin.
+
+      Integrations — import initiatives directly from:
+
+        GitHub Issues · GitHub Projects v2
+        Linear Issues · Linear Projects
+        GitLab Issues · Jira Cloud · Notion
+
+      Press n and choose a service to connect and import.
+      Use Ctrl+P → Integrations to manage service connections.
+      """,
+      block: %Block{
+        title: " Getting Started ",
+        borders: [:all],
+        border_type: :rounded,
+        border_style: Styles.pane_border(state.focus, :main, state.theme)
+      },
+      wrap: true
+    }
+  end
+
   defp render_placeholder(state) do
     %Paragraph{
       text:
@@ -3216,7 +3304,12 @@ defmodule Codrift.TUI do
       # Other
       %{id: :integrations, label: "Integrations (connect services)", hint: ""},
       %{id: :refresh, label: "Refresh", hint: Keybindings.format(kb.refresh)},
-      %{id: :theme_picker, label: "Choose Theme", hint: ""}
+      %{id: :theme_picker, label: "Choose Theme", hint: ""},
+      %{
+        id: :toggle_collapse,
+        label: "Toggle Expand/Collapse",
+        hint: Keybindings.format(kb.toggle_collapse)
+      }
     ]
   end
 

@@ -151,10 +151,62 @@ defmodule Codrift.TUI.Sidebar do
     }
   end
 
+  @doc """
+  Filters a flat entries list, removing children of collapsed parents.
+
+  `collapsed_ids` is a `MapSet` of:
+    - `{:initiative, id}` — hide context_dir, context_files, dirs, agents for that initiative
+    - `{:context_dir, path}` — hide context_files and agents under that context_dir
+    - `{:dir, path}` — hide agents under that dir
+  """
+  def filter_entries(entries, collapsed_ids) do
+    {filtered, _skip_init, _skip_sub} =
+      Enum.reduce(entries, {[], nil, false}, fn
+        {:initiative, id, _, _, _, _} = entry, {acc, _skip_init, _skip_sub} ->
+          collapsed = MapSet.member?(collapsed_ids, {:initiative, id})
+          {[entry | acc], if(collapsed, do: id, else: nil), false}
+
+        {:context_dir, initiative_id, path, _} = entry, {acc, skip_init, _skip_sub} ->
+          if skip_init == initiative_id do
+            {acc, skip_init, false}
+          else
+            collapsed = MapSet.member?(collapsed_ids, {:context_dir, path})
+            {[entry | acc], nil, collapsed}
+          end
+
+        {:context_file, initiative_id, _, _} = entry, {acc, skip_init, skip_sub} ->
+          if skip_init == initiative_id or skip_sub do
+            {acc, skip_init, skip_sub}
+          else
+            {[entry | acc], nil, false}
+          end
+
+        {:dir, initiative_id, path, _, _} = entry, {acc, skip_init, _skip_sub} ->
+          if skip_init == initiative_id do
+            {acc, skip_init, true}
+          else
+            collapsed = MapSet.member?(collapsed_ids, {:dir, path})
+            {[entry | acc], nil, collapsed}
+          end
+
+        {:agent, _, _, _} = entry, {acc, skip_init, skip_sub} ->
+          if skip_init != nil or skip_sub do
+            {acc, skip_init, skip_sub}
+          else
+            {[entry | acc], nil, false}
+          end
+
+        entry, {acc, skip_init, skip_sub} ->
+          {[entry | acc], skip_init, skip_sub}
+      end)
+
+    Enum.reverse(filtered)
+  end
+
   @doc "Renders the sidebar `%WidgetList{}` widget."
-  def render(entries, cursor, focus, theme \\ nil) do
+  def render(entries, cursor, focus, theme \\ nil, collapsed_ids \\ MapSet.new()) do
     %WidgetList{
-      items: Enum.map(entries, &item/1),
+      items: Enum.map(entries, &item(&1, collapsed_ids)),
       selected: cursor,
       block: %Block{
         title: " Initiatives ",
@@ -167,12 +219,20 @@ defmodule Codrift.TUI.Sidebar do
     }
   end
 
-  # Initiative with no running agents — show status icon only
-  defp item({:initiative, _id, name, _dirs, 0, status}) do
+  # ── Context-mode item rendering ──────────────────────────────────────────────
+
+  # item/2 variants are used by render/5 — collapsed_ids MapSet is passed so each
+  # collapsible entry can render the correct expand/collapse indicator.
+  # A catch-all at the end delegates to item/1 for non-collapsible entries.
+
+  defp item({:initiative, id, name, _dirs, 0, status}, collapsed_ids) do
+    collapsed = MapSet.member?(collapsed_ids, {:initiative, id})
     {icon, color} = status_display(status)
+    prefix = if collapsed, do: "▶ ", else: "▼ "
 
     %Line{
       spans: [
+        %Span{content: prefix, style: %Style{fg: :dark_gray}},
         %Span{content: "#{icon} ", style: %Style{fg: color}},
         %Span{content: name, style: %Style{modifiers: [:bold]}},
         %Span{content: " [#{status}]", style: %Style{fg: color}}
@@ -180,12 +240,14 @@ defmodule Codrift.TUI.Sidebar do
     }
   end
 
-  # Initiative with running agents — show agent count
-  defp item({:initiative, _id, name, _dirs, count, status}) do
+  defp item({:initiative, id, name, _dirs, count, status}, collapsed_ids) do
+    collapsed = MapSet.member?(collapsed_ids, {:initiative, id})
     {icon, color} = status_display(status)
+    prefix = if collapsed, do: "▶ ", else: "▼ "
 
     %Line{
       spans: [
+        %Span{content: prefix, style: %Style{fg: :dark_gray}},
         %Span{content: "#{icon} ", style: %Style{fg: color}},
         %Span{content: name, style: %Style{modifiers: [:bold]}},
         %Span{content: " [#{count}]", style: %Style{fg: :green}}
@@ -193,24 +255,60 @@ defmodule Codrift.TUI.Sidebar do
     }
   end
 
-  defp item({:context_dir, _initiative_id, _path, 0}) do
+  defp item({:context_dir, _initiative_id, path, 0}, collapsed_ids) do
+    collapsed = MapSet.member?(collapsed_ids, {:context_dir, path})
+    sym = if collapsed, do: "▶", else: "◈"
+
     %Line{
       spans: [
-        %Span{content: "  ◈ ", style: %Style{fg: :blue}},
+        %Span{content: "  #{sym} ", style: %Style{fg: :blue}},
         %Span{content: "context", style: %Style{fg: :blue}}
       ]
     }
   end
 
-  defp item({:context_dir, _initiative_id, _path, count}) do
+  defp item({:context_dir, _initiative_id, path, count}, collapsed_ids) do
+    collapsed = MapSet.member?(collapsed_ids, {:context_dir, path})
+    sym = if collapsed, do: "▶", else: "◈"
+
     %Line{
       spans: [
-        %Span{content: "  ◈ ", style: %Style{fg: :blue}},
+        %Span{content: "  #{sym} ", style: %Style{fg: :blue}},
         %Span{content: "context", style: %Style{fg: :blue}},
         %Span{content: " [#{count}]", style: %Style{fg: :green}}
       ]
     }
   end
+
+  defp item({:dir, _initiative_id, path, wt_status, 0}, collapsed_ids) do
+    collapsed = MapSet.member?(collapsed_ids, {:dir, path})
+    sym = if collapsed, do: "▶", else: "▼"
+
+    spans =
+      [
+        %Span{content: "  #{sym} ", style: %Style{fg: :dark_gray}},
+        %Span{content: Path.basename(path), style: %Style{fg: :dark_gray}}
+      ] ++ wt_spans(wt_status)
+
+    %Line{spans: spans}
+  end
+
+  defp item({:dir, _initiative_id, path, wt_status, count}, collapsed_ids) do
+    collapsed = MapSet.member?(collapsed_ids, {:dir, path})
+    sym = if collapsed, do: "▶", else: "▼"
+
+    spans =
+      [
+        %Span{content: "  #{sym} ", style: %Style{fg: :cyan}},
+        %Span{content: Path.basename(path), style: %Style{fg: :white}}
+      ] ++
+        wt_spans(wt_status) ++
+        [%Span{content: " [#{count}]", style: %Style{fg: :dark_gray}}]
+
+    %Line{spans: spans}
+  end
+
+  defp item(entry, _collapsed_ids), do: item(entry)
 
   defp item({:context_file, _initiative_id, _path, name}) do
     %Line{
@@ -219,28 +317,6 @@ defmodule Codrift.TUI.Sidebar do
         %Span{content: name, style: %Style{fg: :white}}
       ]
     }
-  end
-
-  defp item({:dir, _initiative_id, path, wt_status, 0}) do
-    spans =
-      [
-        %Span{content: "  ▸ ", style: %Style{fg: :dark_gray}},
-        %Span{content: Path.basename(path), style: %Style{fg: :dark_gray}}
-      ] ++ wt_spans(wt_status)
-
-    %Line{spans: spans}
-  end
-
-  defp item({:dir, _initiative_id, path, wt_status, count}) do
-    spans =
-      [
-        %Span{content: "  ▸ ", style: %Style{fg: :cyan}},
-        %Span{content: Path.basename(path), style: %Style{fg: :white}}
-      ] ++
-        wt_spans(wt_status) ++
-        [%Span{content: " [#{count}]", style: %Style{fg: :dark_gray}}]
-
-    %Line{spans: spans}
   end
 
   defp item({:agent, _id, adapter, status}) do
