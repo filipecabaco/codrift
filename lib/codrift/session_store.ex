@@ -19,8 +19,6 @@ defmodule Codrift.SessionStore do
 
   use GenServer
 
-  @default_path Path.expand("~/.codrift/codrift.db")
-
   # ── Public API ──────────────────────────────────────────────────────────────
 
   def start_link(opts \\ []) do
@@ -61,7 +59,7 @@ defmodule Codrift.SessionStore do
 
   @impl true
   def init(opts) do
-    path = Keyword.get(opts, :path, @default_path)
+    path = Keyword.get(opts, :path, Path.expand("~/.codrift/codrift.db"))
 
     path |> Path.dirname() |> File.mkdir_p!()
 
