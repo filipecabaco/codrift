@@ -50,9 +50,11 @@ defmodule Codrift.Updater do
 
     case fetch_latest_version() do
       {:ok, latest} ->
-        if current == latest or current == "dev",
-          do: {:up_to_date, current},
-          else: {:update_available, current, latest}
+        cond do
+          current == "dev" -> {:up_to_date, current}
+          Version.compare(latest, current) == :gt -> {:update_available, current, latest}
+          true -> {:up_to_date, current}
+        end
 
       {:error, reason} ->
         {:error, reason}

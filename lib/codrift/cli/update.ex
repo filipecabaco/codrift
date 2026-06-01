@@ -5,6 +5,8 @@ defmodule Codrift.CLI.Update do
 
   @spec run([String.t()]) :: :ok
   def run(["--check"]) do
+    Application.ensure_all_started(:req)
+
     case Updater.check() do
       {:update_available, _current, latest} ->
         IO.puts(latest)
@@ -16,6 +18,7 @@ defmodule Codrift.CLI.Update do
   end
 
   def run([]) do
+    Application.ensure_all_started(:req)
     current = Updater.current_version()
     IO.puts("Current version: #{current}")
     IO.write("Checking for updates... ")
