@@ -114,7 +114,14 @@ defmodule Codrift.TUI do
     editor: %EditorState{},
     modal: %ModalState{},
     diff: %{files: [], scroll: 0, view_mode: :unified, sidebar_entries: [], sidebar_cursor: 0},
-    refs: %{resize: nil, sidebar_tick: nil, status_timer: nil, nudge: nil, restore: nil}
+    refs: %{
+      resize: nil,
+      sidebar_tick: nil,
+      status_timer: nil,
+      nudge: nil,
+      restore: nil,
+      output_render: nil
+    }
   ]
 
   @impl true
@@ -560,9 +567,6 @@ defmodule Codrift.TUI do
         %{modal: %{type: :none}} = state
       ) do
     cond do
-      Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
-        {:noreply, forward_raw(state, "\x15")}
-
       state.active_tab == :diff ->
         {:noreply, %{state | diff: %{state.diff | scroll: max(state.diff.scroll - 10, 0)}}}
 
@@ -873,19 +877,34 @@ defmodule Codrift.TUI do
     selected = agent_id == state.selection.agent_id
 
     new_scroll =
-      if selected,
-        # VT100 screen is sized exactly to the pane; it manages its own viewport.
-        # Always snap to 0 so new output shows the current terminal state.
-        do: 0,
-        else: state.main_scroll
+      cond do
+        # User has scrolled up — preserve position so they can read while output streams.
+        selected and state.main_scroll > 0 -> state.main_scroll
+        # At the bottom (main_scroll == 0): stay at bottom so live output is visible.
+        selected -> 0
+        true -> state.main_scroll
+      end
+
+    new_refs =
+      if selected and is_nil(Map.get(state.refs, :output_render)) do
+        ref = Process.send_after(self(), :render_output, 16)
+        Map.put(state.refs, :output_render, ref)
+      else
+        state.refs
+      end
 
     new_state = %{
       state
       | agents: %{state.agents | screens: new_screens, outputs: outputs},
-        main_scroll: new_scroll
+        main_scroll: new_scroll,
+        refs: new_refs
     }
 
-    {:noreply, new_state, [render?: selected]}
+    {:noreply, new_state, [render?: false]}
+  end
+
+  def handle_info(:render_output, state) do
+    {:noreply, %{state | refs: Map.put(state.refs, :output_render, nil)}, [render?: true]}
   end
 
   def handle_info({:apply_resize, w, h}, state) do
@@ -2678,7 +2697,15 @@ defmodule Codrift.TUI do
         do: VT100.to_text(screen, focused),
         else: append_prompt(VT100.to_text(screen, false), prompt_suffix)
 
-    %Paragraph{text: content, block: block, wrap: false, scroll: {state.main_scroll, 0}}
+    # When the prompt suffix is present it adds N extra lines beyond the VT100
+    # screen height (which exactly fills the pane). scroll must advance by that
+    # same N so the prompt is always visible at the bottom of the pane.
+    scroll =
+      if prompt_suffix == "",
+        do: state.main_scroll,
+        else: length(String.split(prompt_suffix, "\n"))
+
+    %Paragraph{text: content, block: block, wrap: false, scroll: {scroll, 0}}
   end
 
   defp append_prompt(%ExRatatui.Text{lines: lines} = text, suffix) do
@@ -2881,13 +2908,11 @@ defmodule Codrift.TUI do
         %{state | sidebar: %{state.sidebar | cursor: new_cursor}}
         |> update_context_from_cursor()
 
-      state.selection.agent_mode == :pty ->
-        # PTY agents: forward scroll as arrow-key sequences (3 lines per tick)
-        seq = if delta < 0, do: "\e[A", else: "\e[B"
-        Enum.reduce(1..abs(delta), state, fn _, s -> forward_raw(s, seq) end)
-
       true ->
-        # Code viewer / initiative / diff panes: move main_scroll
+        # All main-pane content (including PTY agents): move main_scroll.
+        # PTY agents previously forwarded scroll as arrow sequences, which
+        # navigated Claude's input history instead of scrolling the codrift
+        # window — wrong UX.
         %{state | main_scroll: max(state.main_scroll + delta, 0)}
     end
   end
