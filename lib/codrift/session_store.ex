@@ -145,17 +145,16 @@ defmodule Codrift.SessionStore do
     rows = fetch_all_initiative_ids(db)
     stale = Enum.reject(rows, &(&1 in valid_ids))
 
-    Enum.each(stale, fn initiative_id ->
-      {:ok, stmt} =
-        Exqlite.Sqlite3.prepare(
-          db,
-          "DELETE FROM claude_sessions WHERE initiative_id = ?1"
-        )
+    {:ok, stmt} =
+      Exqlite.Sqlite3.prepare(db, "DELETE FROM claude_sessions WHERE initiative_id = ?1")
 
+    Enum.each(stale, fn initiative_id ->
       :ok = Exqlite.Sqlite3.bind(stmt, [initiative_id])
       :done = Exqlite.Sqlite3.step(db, stmt)
-      :ok = Exqlite.Sqlite3.release(db, stmt)
+      :ok = Exqlite.Sqlite3.reset(stmt)
     end)
+
+    :ok = Exqlite.Sqlite3.release(db, stmt)
 
     {:reply, length(stale), state}
   end

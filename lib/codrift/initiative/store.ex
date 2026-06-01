@@ -74,13 +74,10 @@ defmodule Codrift.Initiative.Store do
   Accepts an optional `server` pid/name as the last positional argument.
   """
   def add_dir(id, dir, opts \\ [])
+  def add_dir(id, dir, opts) when is_list(opts), do: add_dir(id, dir, opts, __MODULE__)
+  def add_dir(id, dir, server), do: add_dir(id, dir, [], server)
 
-  def add_dir(id, dir, opts) when is_list(opts),
-    do: GenServer.call(__MODULE__, {:add_dir, id, dir, opts})
-
-  def add_dir(id, dir, server), do: GenServer.call(server, {:add_dir, id, dir, []})
-
-  @doc "Same as `add_dir/3` but allows passing opts and a server in one call."
+  @doc "Same as `add_dir/3` but allows passing both opts and a server."
   def add_dir(id, dir, opts, server), do: GenServer.call(server, {:add_dir, id, dir, opts})
 
   @doc "Removes a directory from an initiative. No-op if the dir is not present."
@@ -143,12 +140,8 @@ defmodule Codrift.Initiative.Store do
   @impl true
   def handle_call({:create, name, dirs}, _from, state) do
     initiative = Initiative.new(name, dirs)
-    ctx = ctx_path(state.context_dir_base, initiative.id)
-    File.mkdir_p!(ctx)
-    ensure_git_repo(ctx)
-    write_initiative_md(ctx, initiative)
     new_state = put_initiative(state, initiative)
-    {:reply, {:ok, initiative}, new_state}
+    {:reply, {:ok, initiative}, new_state, {:continue, {:setup_context, initiative}}}
   end
 
   def handle_call({:get, id}, _from, state) do
@@ -180,14 +173,8 @@ defmodule Codrift.Initiative.Store do
            end
          end) do
       {:reply, {:ok, initiative}, new_state} ->
-        update_initiative_md_dirs(initiative, state.context_dir_base)
-
-        case Enum.find(initiative.dirs, &(&1.path == dir)) do
-          nil -> :ok
-          entry -> ClaudePermissions.add(DirEntry.effective_path(entry), "Read")
-        end
-
-        {:reply, {:ok, initiative}, new_state}
+        {:reply, {:ok, initiative}, new_state,
+         {:continue, {:add_dir_side_effects, initiative, dir}}}
 
       error_reply ->
         error_reply
@@ -198,11 +185,12 @@ defmodule Codrift.Initiative.Store do
     case Map.fetch(state.initiatives, id) do
       {:ok, initiative} ->
         {to_remove, remaining} = Enum.split_with(initiative.dirs, &(&1.path == dir))
+        # Worktree removal is synchronous: callers expect the directory to be
+        # gone before the reply (e.g. the TUI refreshes immediately after).
         Enum.each(to_remove, &cleanup_worktree/1)
         updated = %{initiative | dirs: remaining}
         new_state = put_initiative(state, updated)
-        update_initiative_md_dirs(updated, state.context_dir_base)
-        {:reply, {:ok, updated}, new_state}
+        {:reply, {:ok, updated}, new_state, {:continue, {:update_initiative_md, updated}}}
 
       :error ->
         {:reply, {:error, :not_found}, state}
@@ -217,6 +205,8 @@ defmodule Codrift.Initiative.Store do
       {initiative, initiatives} ->
         new_state = %{state | initiatives: initiatives}
         persist(new_state)
+        # Worktree and context-dir cleanup are synchronous: callers (TUI, tests)
+        # expect the directory to be absent before the reply returns.
         Enum.each(initiative.dirs, &cleanup_worktree/1)
         safe_rm_context_dir!(ctx_path(state.context_dir_base, id), state.context_dir_base)
         {:reply, :ok, new_state}
@@ -263,8 +253,7 @@ defmodule Codrift.Initiative.Store do
 
             updated = %{initiative | dirs: dirs}
             new_state = put_initiative(state, updated)
-            update_initiative_md_dirs(updated, state.context_dir_base)
-            {:reply, {:ok, updated}, new_state}
+            {:reply, {:ok, updated}, new_state, {:continue, {:update_initiative_md, updated}}}
 
           %DirEntry{} = entry ->
             cleanup_worktree(entry)
@@ -272,13 +261,37 @@ defmodule Codrift.Initiative.Store do
             dirs = Enum.map(initiative.dirs, fn e -> if e.path == dir, do: cleared, else: e end)
             updated = %{initiative | dirs: dirs}
             new_state = put_initiative(state, updated)
-            update_initiative_md_dirs(updated, state.context_dir_base)
-            {:reply, {:ok, updated}, new_state}
+            {:reply, {:ok, updated}, new_state, {:continue, {:update_initiative_md, updated}}}
         end
 
       :error ->
         {:reply, {:error, :not_found}, state}
     end
+  end
+
+  @impl true
+  def handle_continue({:setup_context, initiative}, state) do
+    ctx = ctx_path(state.context_dir_base, initiative.id)
+    File.mkdir_p!(ctx)
+    ensure_git_repo(ctx)
+    write_initiative_md(ctx, initiative)
+    {:noreply, state}
+  end
+
+  def handle_continue({:add_dir_side_effects, initiative, dir}, state) do
+    update_initiative_md_dirs(initiative, state.context_dir_base)
+
+    case Enum.find(initiative.dirs, &(&1.path == dir)) do
+      nil -> :ok
+      entry -> ClaudePermissions.add(DirEntry.effective_path(entry), "Read")
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_continue({:update_initiative_md, initiative}, state) do
+    update_initiative_md_dirs(initiative, state.context_dir_base)
+    {:noreply, state}
   end
 
   defp put_initiative(state, initiative) do
@@ -512,7 +525,19 @@ defmodule Codrift.Initiative.Store do
       |> Enum.flat_map(&parse_raw_initiative/1)
       |> Map.new()
     else
-      _ -> %{}
+      false ->
+        %{}
+
+      {:error, reason} ->
+        Logger.error("Codrift.Initiative.Store: failed to load #{path}: #{inspect(reason)}")
+        %{}
+
+      {:ok, _} ->
+        Logger.error(
+          "Codrift.Initiative.Store: #{path} has unexpected structure — starting empty"
+        )
+
+        %{}
     end
   end
 

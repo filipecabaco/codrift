@@ -54,6 +54,9 @@ defmodule Codrift.Agent.Adapters.Claude do
   def env(_dir), do: [{"TERM", "xterm-256color"}, {"COLORTERM", "truecolor"}]
 
   @impl true
+  def session_persistable?, do: true
+
+  @impl true
   def parse_status(output) do
     cond do
       # Claude Code's interactive prompt uses ❯ (U+276F) or > as the prompt char.

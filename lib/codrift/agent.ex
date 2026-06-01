@@ -79,6 +79,14 @@ defmodule Codrift.Agent do
   """
   @callback parse_status(output :: binary()) :: :idle | :running | :awaiting_input | nil
 
+  @doc """
+  Returns `true` when the adapter supports session persistence.
+
+  Adapters that persist sessions (e.g. Claude Code via `--resume`) should
+  return `true`. All others return `false`.
+  """
+  @callback session_persistable?() :: boolean()
+
   @doc ~S[Returns the human-readable adapter name (e.g. "claude", "aider", "terminal").]
   def adapter_name(module), do: module |> Module.split() |> List.last() |> String.downcase()
 end

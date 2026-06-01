@@ -27,18 +27,13 @@ defmodule Codrift.Integration.Sync do
     with {:ok, adapter} <- Integration.adapter_for(service),
          {:ok, item} <- adapter.get_item(item_id, []) do
       new_status = Integration.map_item_status(item.status)
+      context = adapter.to_initiative_context(item)
 
       if new_status != initiative.status do
         Logger.info("Integration sync: #{initiative.id} #{service}/#{item_id} → #{new_status}")
         Store.set_status(initiative.id, new_status, store)
+        Integration.write_integration_files(initiative.id, service, item_id, context)
       end
-
-      Integration.write_integration_files(
-        initiative.id,
-        service,
-        item_id,
-        adapter.to_initiative_context(item)
-      )
     else
       {:error, reason} ->
         Logger.warning(

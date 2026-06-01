@@ -27,6 +27,9 @@ defmodule Codrift.Agent.Adapters.Aider do
   def env(_dir), do: []
 
   @impl true
+  def session_persistable?, do: false
+
+  @impl true
   def parse_status(output) do
     cond do
       String.contains?(output, "aider>") -> :awaiting_input

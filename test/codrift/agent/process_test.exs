@@ -57,15 +57,20 @@ defmodule Codrift.AgentProcessTest do
     pid = start_agent()
     :ok = AgentProcess.subscribe(pid)
 
-    AgentProcess.send_input(pid, "first")
+    AgentProcess.send_input(pid, "alpha")
     assert_receive {:agent_output, _, _}, 500
 
-    AgentProcess.send_input(pid, "second")
+    AgentProcess.send_input(pid, "beta")
     assert_receive {:agent_output, _, _}, 500
 
-    output = AgentProcess.recent_output(pid)
-    joined = Enum.join(output)
-    assert String.contains?(joined, "first")
+    joined = pid |> AgentProcess.recent_output() |> Enum.join()
+
+    assert String.contains?(joined, "alpha")
+    assert String.contains?(joined, "beta")
+
+    {alpha_pos, _} = :binary.match(joined, "alpha")
+    {beta_pos, _} = :binary.match(joined, "beta")
+    assert alpha_pos < beta_pos, "expected 'alpha' before 'beta' in output"
   end
 
   test "parse_status updates status on matching output" do
@@ -91,11 +96,15 @@ defmodule Codrift.AgentProcessTest do
     assert %{status: _} = AgentProcess.status(pid)
   end
 
-  test "send_input is a no-op when agent port is nil (stopped state)" do
+  test "send_input is a no-op when agent is stopped" do
     pid = start_agent()
-    # Force internal stopped state by sending a fake exit_status from the port
-    # (we don't have access to the port ref, so we test the guard indirectly:
-    # the process stays alive after the port exits naturally)
+    :ok = AgentProcess.subscribe(pid)
+
+    :sys.replace_state(pid, &%{&1 | status: :stopped})
+
+    AgentProcess.send_input(pid, "should be ignored")
+
+    refute_receive {:agent_output, _, _}, 100
     assert Process.alive?(pid)
   end
 

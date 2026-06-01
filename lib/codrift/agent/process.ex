@@ -30,7 +30,6 @@ defmodule Codrift.AgentProcess do
   use GenServer
   require Logger
 
-  alias Codrift.Agent.Adapters.Claude
   alias Codrift.Initiative.Store
 
   defstruct [
@@ -114,11 +113,12 @@ defmodule Codrift.AgentProcess do
     }
 
     # Generate or retrieve a stable session UUID before launching the process.
-    # For Claude adapters this is passed as --session-id (first run) or
-    # --resume (subsequent runs). Storing it upfront means we never need to
-    # scan the filesystem after startup to discover which UUID was created.
+    # Passed as --session-id (first run) or --resume (subsequent runs) for
+    # adapters that support session persistence. Storing it upfront means we
+    # never need to scan the filesystem after startup to discover which UUID
+    # was created.
     session_id =
-      if adapter == Claude do
+      if adapter.session_persistable?() do
         ensure_session_id(id, initiative_id, dir)
       else
         nil
