@@ -44,6 +44,9 @@ defmodule Codrift.MixProject do
     bin_path = Path.join([release.path, "bin", to_string(release.name)])
     content = File.read!(bin_path)
 
+    no_args_case =
+      "  \"\")\n    exec \"$RELEASE_ROOT/bin/codrift\" eval 'Codrift.CLI.Main.run([])'\n    ;;"
+
     cases =
       Enum.map_join(@cli_commands, "\n\n", fn cmd ->
         "  #{cmd})\n    shift\n    exec \"$RELEASE_ROOT/bin/codrift\" eval " <>
@@ -52,7 +55,9 @@ defmodule Codrift.MixProject do
 
     File.write!(
       bin_path,
-      String.replace(content, "\n  *)\n", "\n\n#{cases}\n\n  *)\n", global: false)
+      String.replace(content, "\n  *)\n", "\n\n#{no_args_case}\n\n#{cases}\n\n  *)\n",
+        global: false
+      )
     )
 
     release
