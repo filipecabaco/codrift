@@ -86,11 +86,20 @@ case ":${PATH}:" in
   *":${BIN_DIR}:"*)
     ;;
   *)
-    printf 'Add %s to your PATH:\n' "${BIN_DIR}"
-    # Use single quotes around the outer heredoc so $PATH is NOT expanded here
-    printf '  # bash / zsh:\n'
-    printf '  echo '"'"'export PATH="%s:$PATH"'"'"' >> ~/.zshrc\n' "${BIN_DIR}"
-    printf '  export PATH="%s:$PATH"\n\n' "${BIN_DIR}"
+    EXPORT_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
+    ADDED=0
+    for rc in "${HOME}/.zshrc" "${HOME}/.bashrc" "${HOME}/.profile"; do
+      if [ -f "${rc}" ] && ! grep -qF "${BIN_DIR}" "${rc}" 2>/dev/null; then
+        printf '\n# Added by codrift installer\n%s\n' "${EXPORT_LINE}" >> "${rc}"
+        printf 'Added %s to PATH in %s\n' "${BIN_DIR}" "${rc}"
+        ADDED=1
+      fi
+    done
+    if [ "${ADDED}" -eq 0 ] && [ ! -f "${HOME}/.zshrc" ] && [ ! -f "${HOME}/.bashrc" ]; then
+      printf '\n# Added by codrift installer\n%s\n' "${EXPORT_LINE}" >> "${HOME}/.profile"
+      printf 'Added %s to PATH in ~/.profile\n' "${BIN_DIR}"
+    fi
+    printf 'Run: source ~/.zshrc  (or open a new terminal)\n\n'
     ;;
 esac
 
