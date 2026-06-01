@@ -53,6 +53,8 @@ jobs:
         run: sudo apt-get install -y libonig-dev
 
       - name: Build release
+        env:
+          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.target == 'aarch64-linux-gnu' && 'thin' || 'true' }}
         run: mix release
 
       - name: Rename tarball with platform suffix
