@@ -23,5 +23,7 @@ defmodule Mix.Tasks.Codrift.Tui do
   @shortdoc "Start the Codrift TUI"
 
   @impl Mix.Task
-  def run(args), do: Codrift.CLI.TUI.run(args)
+  alias Codrift.CLI.TUI
+
+  def run(args), do: TUI.run(args)
 end

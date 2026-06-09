@@ -6,7 +6,7 @@ Codrift is a TUI for running Claude Code, Aider, and shell agents side-by-side. 
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ ● Context  ○ 2: Diff                                         │
+│ ● 1: Context  ○ 2: Diff  ○ 3: Tree                          │
 ├─────────────────┬────────────────────────────────────────────┤
 │ Initiatives     │                                            │
 │  ● my-app       │  Initiative / dir / agent output           │
@@ -27,11 +27,13 @@ Codrift is a TUI for running Claude Code, Aider, and shell agents side-by-side. 
 - **Multiple agents per directory** — Claude Code, Aider, and a raw terminal shell, all running simultaneously
 - **Git worktrees** — each directory gets an isolated branch; agents never touch your main checkout
 - **Live diff view** — colour-coded split/unified diff per initiative, updated as agents work
+- **Tree view** — mode `3` shows a file-tree browser with syntax-highlighted previews; `e` opens any file in your `$EDITOR` inside the TUI
 - **Shared memory** — FTS5 knowledge base per initiative; agents search it before starting, write to it when done
 - **MCP server** — Claude Code and other tools connect to Codrift and call its tools over SSE
 - **External integrations** — pull context from GitHub, Linear, GitLab, Jira, Notion, and more
 - **Session persistence** — Claude sessions survive TUI restarts; agents resume where they left off
 - **Context folders** — each initiative has `~/.codrift/initiatives/{id}/` picked up automatically by `--add-dir`
+- **Quick-open** — `codrift <file…>` opens files in a temporary initiative; promote to a named one with `P`
 
 ---
 
@@ -97,33 +99,68 @@ While the TUI is running, an MCP server listens at `http://localhost:7437/mcp/ss
 
 | Category | Tools |
 |----------|-------|
-| Initiatives | `list_initiatives`, `create_initiative`, `add_dir`, `delete_initiative`, `get_diff` |
+| Initiatives | `list_initiatives`, `create_initiative`, `add_dir`, `delete_initiative`, `set_initiative_status`, `get_diff` |
 | Agents | `list_agents`, `start_agent`, `send_to_agent`, `get_agent_output` |
 | Memory | `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list` |
-| Integrations | `list_integration_items`, `import_from_integration`, `sync_initiative_context` |
+| Integrations | `start_oauth_flow`, `save_guided_token`, `get_oauth_status`, `list_integration_items`, `import_from_integration`, `sync_initiative_context` |
 
 ---
 
 ## Keyboard reference
 
+### Global
+
 | Key | Action |
 |-----|--------|
 | `j` / `k` / `↑` / `↓` | Navigate sidebar / scroll pane |
-| `n` | New initiative |
+| `1` | Context view |
+| `2` | Diff view |
+| `3` | Tree view |
+| `Ctrl+P` | Command palette |
+| `Ctrl+B` | Toggle sidebar |
+| `Ctrl+D` / `Ctrl+U` | Half-page scroll |
+| `Ctrl+Q` | Quit |
+
+### Initiatives & agents
+
+| Key | Action |
+|-----|--------|
+| `n` | New initiative (or new file/dir in tree mode) |
 | `a` | Add directory to initiative |
 | `s` | Start agent (Claude / Aider / Terminal) |
 | `d` | Delete or stop (context-sensitive) |
 | `W` | Toggle git worktree for current directory |
 | `[` / `]` | Cycle initiative status |
-| `1` / `2` | Context view / Diff view |
+| `P` | Promote temp initiative to named |
+
+### Context & diff
+
+| Key | Action |
+|-----|--------|
+| `c` | Create context file |
+| `e` | Open context file / tree file in `$EDITOR` |
 | `v` | Toggle unified ↔ split diff |
 | `r` | Refresh diff |
-| `Ctrl+D` / `Ctrl+U` | Half-page scroll |
-| `Ctrl+P` | Command palette |
-| `Ctrl+B` | Toggle sidebar |
-| `Ctrl+Q` | Quit |
+| `*` | Reset diff to all files |
 
-All keys are configurable in `~/.codrift/keybindings.json`.
+### Tree view
+
+| Key | Action |
+|-----|--------|
+| `Enter` / `Space` | Expand / collapse directory |
+| `→` / `←` | Expand / collapse directory |
+| `e` | Open file at cursor in `$EDITOR` |
+| `Tab` | Cycle focus between sidebar and preview pane |
+
+### Input
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+V` | Paste mode toggle (fallback for terminals without bracketed paste) |
+| `Shift+Enter` | Insert newline in input |
+| `Tab` | Insert tab character |
+
+All keys are configurable in `~/.codrift/keybindings.json`. See [docs/keyboard.md](docs/keyboard.md) for the full reference.
 
 ---
 
@@ -171,6 +208,12 @@ codrift integration import <service> <item_id>
 codrift integration revoke <service>
 codrift integration tokens
 ```
+
+---
+
+## Documentation
+
+[Architecture](docs/architecture.md) · [Keyboard reference](docs/keyboard.md) · [Tree view](docs/tree-view.md) · [Diff mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md)
 
 ---
 

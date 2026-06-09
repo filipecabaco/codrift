@@ -105,6 +105,13 @@ defmodule Codrift.TUI do
           | :theme_picker
           | :new_tree_item
           | :promote_name
+          | :new_context_file
+          | :integration_item_id
+          | :service_guided_token
+          | :source_picker
+          | :service_auth_url
+          | :service_device_flow
+          | :service_setup
   @type tab :: :context | :diff | :tree
 
   defstruct [
@@ -525,6 +532,16 @@ defmodule Codrift.TUI do
          theme: theme
      }}
   end
+
+  # Text-input key routing — ADDING A MODAL CHECKLIST
+  #
+  # If your new modal renders a TextInput widget, add its type atom to BOTH
+  # guards below (printable chars + navigation/delete keys). Omitting it
+  # silently breaks typing: the key falls through to the no-modal branch.
+  #
+  # Modals WITHOUT TextInput (pickers, confirmations, info screens) must NOT
+  # appear here: :confirm_delete, :source_picker, :theme_picker,
+  # :service_auth_url, :service_device_flow, :service_setup.
 
   def handle_event(%Key{code: code, kind: "press"}, %{modal: %{type: modal}} = state)
       when modal in [
