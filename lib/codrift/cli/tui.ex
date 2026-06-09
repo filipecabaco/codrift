@@ -14,12 +14,21 @@ defmodule Codrift.CLI.TUI do
 
   @doc "Starts the full application and opens the TUI. Blocks until the TUI exits."
   @spec run([String.t()]) :: :ok
-  def run(_args) do
+  def run([]) do
+    start_tui([])
+  end
+
+  def run(paths) do
+    initiative = Codrift.Initiative.create_temp(paths)
+    start_tui(temp_initiative: initiative)
+  end
+
+  defp start_tui(opts) do
     {:ok, _} = Application.ensure_all_started(:codrift)
 
     Logger.configure(level: :error)
 
-    {:ok, pid} = Codrift.TUI.start_link([])
+    {:ok, pid} = Codrift.TUI.start_link(opts)
     ref = Process.monitor(pid)
 
     receive do

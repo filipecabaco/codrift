@@ -9,6 +9,10 @@ defmodule Mix.Tasks.Codrift.Tui do
   ## Usage
 
       mix codrift.tui
+      mix codrift.tui file1.ex lib/foo/bar.ex
+
+  Pass one or more file or directory paths to open them as a temporary
+  initiative directly in the TUI.
 
   The web server keeps running in the background while the TUI is open,
   so `http://localhost:7437/diff.html` and `POST /mcp` remain accessible.
@@ -19,16 +23,5 @@ defmodule Mix.Tasks.Codrift.Tui do
   @shortdoc "Start the Codrift TUI"
 
   @impl Mix.Task
-  def run(_args) do
-    {:ok, _} = Application.ensure_all_started(:codrift)
-
-    Logger.configure(level: :error)
-
-    {:ok, pid} = Codrift.TUI.start_link([])
-    ref = Process.monitor(pid)
-
-    receive do
-      {:DOWN, ^ref, :process, _pid, _reason} -> :ok
-    end
-  end
+  def run(args), do: Codrift.CLI.TUI.run(args)
 end

@@ -104,6 +104,7 @@ defmodule Codrift.TUI do
           | :palette
           | :theme_picker
           | :new_tree_item
+          | :promote_name
   @type tab :: :context | :diff | :tree
 
   defstruct [
@@ -130,6 +131,7 @@ defmodule Codrift.TUI do
       initiative_id: nil,
       initiative_name: nil
     },
+    temp_initiative: nil,
     vim_editor: nil,
     refs: %{
       resize: nil,
@@ -149,11 +151,13 @@ defmodule Codrift.TUI do
   @mouse_disable "\e[?1000l\e[?1006l"
 
   @impl true
-  def mount(_opts) do
+  def mount(opts) do
+    temp_initiative = Keyword.get(opts, :temp_initiative)
     IO.write(@mouse_enable)
     Process.send_after(self(), :autostart_sessions, 300)
     Codrift.Updater.check_async(self())
-    initiatives = Store.list()
+    persisted = Store.list()
+    initiatives = if temp_initiative, do: [temp_initiative | persisted], else: persisted
     agents = Enum.map(AgentSupervisor.list_agents(), &AgentProcess.status/1)
 
     {term_w, term_h} = ExRatatui.terminal_size()
@@ -170,7 +174,11 @@ defmodule Codrift.TUI do
       active_tab: :context,
       cursor_info: nil,
       main_scroll: 0,
-      status: build_default_status(keybindings),
+      status:
+        if(temp_initiative,
+          do: build_temp_status(keybindings),
+          else: build_default_status(keybindings)
+        ),
       input_buffer: "",
       theme: theme,
       kb: %{bindings: keybindings, reverse: keybindings_reverse},
@@ -195,6 +203,7 @@ defmodule Codrift.TUI do
         theme_picker: %{cursor: 0, before: nil},
         dir_picker: %{suggestions: [], cursor: 0}
       },
+      temp_initiative: temp_initiative,
       diff: %{files: [], scroll: 0, view_mode: :unified, sidebar_entries: [], sidebar_cursor: 0},
       refs: %{
         resize: nil,
@@ -371,6 +380,9 @@ defmodule Codrift.TUI do
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :new_name}} = state),
     do: {:noreply, confirm_name(state)}
 
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :promote_name}} = state),
+    do: {:noreply, confirm_promote(state)}
+
   def handle_event(
         %Key{code: "enter", kind: "press"},
         %{modal: %{type: :new_tree_item}} = state
@@ -522,7 +534,8 @@ defmodule Codrift.TUI do
              :new_context_file,
              :new_tree_item,
              :integration_item_id,
-             :service_guided_token
+             :service_guided_token,
+             :promote_name
            ] and byte_size(code) == 1 do
     ExRatatui.text_input_handle_key(state.modal.input, code)
     {:noreply, sync_modal(state, modal)}
@@ -536,7 +549,8 @@ defmodule Codrift.TUI do
              :new_context_file,
              :new_tree_item,
              :integration_item_id,
-             :service_guided_token
+             :service_guided_token,
+             :promote_name
            ] and code in ["backspace", "delete", "left", "right", "home", "end"] do
     ExRatatui.text_input_handle_key(state.modal.input, code)
     {:noreply, sync_modal(state, modal)}
@@ -812,6 +826,21 @@ defmodule Codrift.TUI do
     else
       {:noreply, state}
     end
+  end
+
+  # Promote temp initiative — only available when TUI was opened with file args.
+  def handle_event(
+        %Key{code: "P", kind: "press"},
+        %{modal: %{type: :none}, temp_initiative: %Initiative{}} = state
+      ) do
+    ExRatatui.text_input_set_value(state.modal.input, "")
+
+    {:noreply,
+     %{
+       state
+       | modal: %{state.modal | type: :promote_name},
+         status: "Name for this initiative  Enter: save  Esc: cancel"
+     }}
   end
 
   # Generic single-character key handler.
@@ -1421,6 +1450,29 @@ defmodule Codrift.TUI do
           },
           status: "↑/↓: navigate  Tab: complete  Enter: create  Esc: cancel"
       }
+    end
+  end
+
+  defp confirm_promote(%{temp_initiative: initiative} = state) do
+    name = String.trim(ExRatatui.text_input_get_value(state.modal.input))
+
+    if name == "" do
+      flash_status(state, "Name cannot be empty")
+    else
+      dirs = Enum.map(initiative.dirs, & &1.path)
+
+      case Store.create(name, dirs) do
+        {:ok, _saved} ->
+          state
+          |> Map.put(:temp_initiative, nil)
+          |> Map.update!(:modal, &%{&1 | type: :none})
+          |> reload_sidebar()
+          |> then(&%{&1 | status: build_default_status(&1.kb.bindings)})
+          |> flash_status("Initiative '#{name}' saved")
+
+        {:error, reason} ->
+          flash_status(state, "Failed to save: #{inspect(reason)}")
+      end
     end
   end
 
@@ -2890,7 +2942,12 @@ defmodule Codrift.TUI do
   end
 
   defp reload_sidebar(state) do
-    initiatives = Store.list()
+    persisted = Store.list()
+
+    initiatives =
+      if state.temp_initiative,
+        do: [state.temp_initiative | persisted],
+        else: persisted
 
     agents =
       AgentSupervisor.list_agents()
@@ -3744,6 +3801,8 @@ defmodule Codrift.TUI do
 
   # ── External editor helpers ──────────────────────────────────────────────────
 
+  # Dialyzer cannot trace through :exec.run/2's return type from erlexec.
+  @dialyzer {:nowarn_function, open_in_editor: 2}
   defp open_in_editor(state, path) do
     editor = System.get_env("EDITOR", "vim")
     editor_bin = System.find_executable(editor) || editor
@@ -4060,6 +4119,10 @@ defmodule Codrift.TUI do
       "#{f.(kb.diff_mode)}:diff  " <>
       "#{f.(kb.palette)}:palette  " <>
       "#{f.(kb.quit)}:quit"
+  end
+
+  defp build_temp_status(kb) do
+    build_default_status(kb) <> "  P:promote"
   end
 
   # Builds the command palette actions list with hints from the active keybindings.

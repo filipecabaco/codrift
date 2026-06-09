@@ -4,6 +4,37 @@ defmodule Codrift.InitiativeTest do
 
   alias Codrift.Initiative
 
+  describe "create_temp/1" do
+    @tag :tmp_dir
+    test "builds a temp initiative from file paths", %{tmp_dir: tmp_dir} do
+      file = Path.join(tmp_dir, "foo.ex")
+      File.write!(file, "")
+
+      initiative = Initiative.create_temp([file])
+
+      assert initiative.status == :planning
+      assert String.starts_with?(initiative.name, "tmp-")
+      assert [%{path: ^tmp_dir}] = initiative.dirs
+    end
+
+    @tag :tmp_dir
+    test "deduplicates dirs that share a parent", %{tmp_dir: tmp_dir} do
+      for name <- ["a.ex", "b.ex"], do: File.write!(Path.join(tmp_dir, name), "")
+
+      initiative =
+        Initiative.create_temp([Path.join(tmp_dir, "a.ex"), Path.join(tmp_dir, "b.ex")])
+
+      assert length(initiative.dirs) == 1
+    end
+
+    @tag :tmp_dir
+    test "treats a directory path directly as a dir", %{tmp_dir: tmp_dir} do
+      initiative = Initiative.create_temp([tmp_dir])
+
+      assert [%{path: ^tmp_dir}] = initiative.dirs
+    end
+  end
+
   describe "to_map/1 and from_map/1" do
     test "roundtrips a plain initiative with no integration" do
       original = Initiative.new("my-project", ["/some/dir"])

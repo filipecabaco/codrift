@@ -34,6 +34,35 @@ defmodule Codrift.Initiative do
           worktree_default: boolean()
         }
 
+  @doc """
+  Creates a temporary (unsaved) initiative from a list of file or directory paths.
+
+  Each path is resolved to its parent directory (or itself when it is already a
+  directory).  Duplicate directories are collapsed to one entry.  The initiative
+  is named `tmp-<unix-timestamp>` and has status `:planning`; it is **not**
+  written to the store.
+  """
+  def create_temp(paths) do
+    dirs =
+      paths
+      |> Enum.map(fn p ->
+        abs = Path.expand(p)
+        if File.dir?(abs), do: abs, else: Path.dirname(abs)
+      end)
+      |> Enum.uniq()
+      |> Enum.map(&DirEntry.new/1)
+
+    timestamp = DateTime.utc_now() |> DateTime.to_unix()
+
+    %__MODULE__{
+      id: Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+      name: "tmp-#{timestamp}",
+      dirs: dirs,
+      created_at: DateTime.utc_now(),
+      status: :planning
+    }
+  end
+
   @doc "Creates a new initiative with a random ID and the current UTC timestamp."
   def new(name, dirs \\ []) do
     %__MODULE__{

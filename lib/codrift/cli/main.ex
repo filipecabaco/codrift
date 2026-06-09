@@ -35,6 +35,9 @@ defmodule Codrift.CLI.Main do
   def run(["mcp" | rest]), do: MCP.run(rest)
   def run(["update" | rest]), do: Update.run(rest)
 
+  # Positional file/dir arguments: open as a temporary initiative in the TUI.
+  def run(paths) when paths != [], do: TUI.run(paths)
+
   def run(_) do
     IO.puts("""
     Usage:

@@ -48,6 +48,9 @@ defmodule Codrift.TUI.Modals do
 
   def render(%{modal: %{type: :theme_picker}} = state, frame), do: theme_picker(state, frame)
 
+  def render(%{modal: %{type: :promote_name}} = state, frame),
+    do: promote_name(state, frame)
+
   @doc """
   Filters `actions` whose label contains `query` (case-insensitive).
   An empty query returns the full list unchanged.
@@ -69,6 +72,19 @@ defmodule Codrift.TUI.Modals do
       {%Paragraph{text: "Name:", style: %Style{fg: :white}}, %{inner | height: 1}},
       {input(state.modal.input, "e.g. my-project"), %{inner | y: inner.y + 1, height: 1}},
       {hint("Enter: next  Esc: cancel"), %{inner | y: inner.y + 3, height: 1}}
+    ]
+  end
+
+  defp promote_name(state, frame) do
+    rect = Layout.center_rect(frame, 50, 7)
+    inner = Layout.inset(rect, 1)
+
+    [
+      {%Clear{}, rect},
+      {bordered(rect, " Promote Initiative ", :green), rect},
+      {%Paragraph{text: "Name:", style: %Style{fg: :white}}, %{inner | height: 1}},
+      {input(state.modal.input, "e.g. my-project"), %{inner | y: inner.y + 1, height: 1}},
+      {hint("Enter: save  Esc: cancel"), %{inner | y: inner.y + 3, height: 1}}
     ]
   end
 
