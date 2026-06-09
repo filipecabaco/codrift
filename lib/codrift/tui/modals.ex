@@ -74,19 +74,11 @@ defmodule Codrift.TUI.Modals do
 
   defp new_dir(state, frame) do
     suggestions = state.modal.dir_picker.suggestions
-    worktree_git = state.modal.worktree_git
-    extra = if worktree_git, do: 2, else: 0
+    extra = if state.modal.worktree_git, do: 2, else: 0
     base_h = if suggestions == [], do: 7, else: min(4 + length(suggestions) + 1, 18)
-    total_height = base_h + extra
-    rect = Layout.center_rect(frame, 65, total_height)
+    rect = Layout.center_rect(frame, 65, base_h + extra)
     inner = Layout.inset(rect, 1)
-
-    title =
-      case state.modal.context do
-        {:creating, name} -> " New Initiative: directory for '#{name}' "
-        :add_dir -> " Add Directory "
-        _ -> " Directory "
-      end
+    title = dir_modal_title(state.modal.context)
 
     base = [
       {%Clear{}, rect},
@@ -95,44 +87,42 @@ defmodule Codrift.TUI.Modals do
        %{inner | height: 1}}
     ]
 
-    worktree_widgets =
-      if worktree_git do
-        enabled = state.modal.worktree_enabled
-        toggle = if enabled, do: "[x]", else: "[ ]"
-        style = if enabled, do: %Style{fg: :green}, else: %Style{fg: :dark_gray}
+    base ++
+      worktree_toggle_widgets(state.modal, inner) ++
+      dir_picker_widgets(state.modal.dir_picker, inner, extra)
+  end
 
-        [
-          {%Paragraph{text: "#{toggle} Use git worktree  (w to toggle)", style: style},
-           %{inner | y: inner.y + 2, height: 1}}
-        ]
-      else
-        []
-      end
+  defp dir_modal_title({:creating, name}), do: " New Initiative: directory for '#{name}' "
+  defp dir_modal_title(:add_dir), do: " Add Directory "
+  defp dir_modal_title(_), do: " Directory "
 
-    if suggestions == [] do
-      hint_y = inner.y + 3 + extra
+  defp worktree_toggle_widgets(%{worktree_git: true, worktree_enabled: enabled}, inner) do
+    toggle = if enabled, do: "[x]", else: "[ ]"
+    style = if enabled, do: %Style{fg: :green}, else: %Style{fg: :dark_gray}
 
-      base ++
-        worktree_widgets ++
-        [{hint("Enter: confirm  Esc: cancel"), %{inner | y: hint_y, height: 1}}]
-    else
-      items =
-        Enum.map(suggestions, fn path -> "#{Path.basename(path)}  #{Path.dirname(path)}/" end)
+    [
+      {%Paragraph{text: "#{toggle} Use git worktree  (w to toggle)", style: style},
+       %{inner | y: inner.y + 2, height: 1}}
+    ]
+  end
 
-      sug_y = inner.y + 2 + extra
-      sug_height = inner.height - 2 - extra
+  defp worktree_toggle_widgets(_, _inner), do: []
 
-      base ++
-        worktree_widgets ++
-        [
-          {%WidgetList{
-             items: items,
-             selected: state.modal.dir_picker.cursor,
-             highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
-             highlight_symbol: "▶ "
-           }, %{inner | y: sug_y, height: sug_height}}
-        ]
-    end
+  defp dir_picker_widgets(%{suggestions: [], cursor: _}, inner, extra) do
+    [{hint("Enter: confirm  Esc: cancel"), %{inner | y: inner.y + 3 + extra, height: 1}}]
+  end
+
+  defp dir_picker_widgets(%{suggestions: suggestions, cursor: cursor}, inner, extra) do
+    items = Enum.map(suggestions, &"#{Path.basename(&1)}  #{Path.dirname(&1)}/")
+
+    [
+      {%WidgetList{
+         items: items,
+         selected: cursor,
+         highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
+         highlight_symbol: "▶ "
+       }, %{inner | y: inner.y + 2 + extra, height: inner.height - 2 - extra}}
+    ]
   end
 
   defp confirm_delete(%{modal: %{context: {:delete_initiative, _id, name}}}, frame) do

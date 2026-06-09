@@ -67,10 +67,7 @@ defmodule Codrift.MixProject do
     [
       {:francis, "~> 0.2"},
       {:req, "~> 0.5"},
-      {:ex_ratatui,
-       github: "filipecabaco/ex_ratatui",
-       ref: "3784823fff0356c560c6d75c78b600cc64c1bf9e",
-       override: true},
+      {:ex_ratatui, github: "filipecabaco/ex_ratatui", branch: "main", override: true},
       {:erlexec, "~> 2.0"},
       {:exqlite, "~> 0.23"},
       {:quantum, "~> 3.0"},

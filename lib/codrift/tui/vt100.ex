@@ -54,7 +54,8 @@ defmodule Codrift.TUI.VT100 do
     :scroll_top,
     :scroll_bottom,
     :incomplete,
-    scrollback: []
+    scrollback: [],
+    scrollback_count: 0
   ]
 
   @type t :: %__MODULE__{
@@ -69,7 +70,8 @@ defmodule Codrift.TUI.VT100 do
           scroll_top: non_neg_integer(),
           scroll_bottom: non_neg_integer(),
           incomplete: binary(),
-          scrollback: [%{non_neg_integer() => {String.t(), Style.t()}}]
+          scrollback: [%{non_neg_integer() => {String.t(), Style.t()}}],
+          scrollback_count: non_neg_integer()
         }
 
   @doc "Creates a new virtual screen with all cells blank."
@@ -86,7 +88,8 @@ defmodule Codrift.TUI.VT100 do
       scroll_top: 0,
       scroll_bottom: max(height - 1, 0),
       incomplete: "",
-      scrollback: []
+      scrollback: [],
+      scrollback_count: 0
     }
   end
 
@@ -166,11 +169,13 @@ defmodule Codrift.TUI.VT100 do
   Pass `n_history = 0` to get the same result as `to_text/2`.
   """
   def to_text_with_history(%__MODULE__{} = screen, show_cursor, n_history) do
-    count = length(screen.scrollback)
-    visible = Enum.slice(screen.scrollback, count - n_history, n_history)
-
+    # scrollback is stored newest-first; take the n_history most recent rows and
+    # reverse to oldest-first for display above the live screen.
     history_lines =
-      Enum.map(visible, fn row_cells ->
+      screen.scrollback
+      |> Enum.take(n_history)
+      |> Enum.reverse()
+      |> Enum.map(fn row_cells ->
         %Line{spans: row_to_spans(row_cells, screen.width)}
       end)
 
@@ -189,13 +194,21 @@ defmodule Codrift.TUI.VT100 do
   regardless of scrollback depth.
   """
   def to_text_viewport(%__MODULE__{} = screen, show_cursor, n_history) do
-    sc = length(screen.scrollback)
+    sc = screen.scrollback_count
+    # history_shown: how many scrollback rows fit in the viewport.
+    # skip: how far into the scrollback to start (implements the sliding window
+    # so n_history > screen.height continues to show deeper history instead of
+    # repeating the same rows).
     history_shown = min(n_history, min(screen.height, sc))
+    skip = n_history - history_shown
     screen_shown = screen.height - history_shown
 
+    # scrollback is stored newest-first; skip the `skip` most-recent rows, take
+    # `history_shown`, then reverse to oldest-first order for display.
     history_lines =
       screen.scrollback
-      |> Enum.slice(sc - history_shown, history_shown)
+      |> Enum.slice(skip, history_shown)
+      |> Enum.reverse()
       |> Enum.map(fn row_cells ->
         %Line{spans: row_to_spans(row_cells, screen.width)}
       end)
@@ -605,12 +618,25 @@ defmodule Codrift.TUI.VT100 do
     # Capture rows leaving the top of the screen into the scrollback buffer.
     # Only applies when the scroll region starts at row 0 — partial regions
     # (scroll_top > 0) are internal terminal scrolling and stay on screen.
-    new_scrollback =
+    #
+    # Scrollback is stored newest-first so we can prepend in O(1) per line.
+    # Evicted rows arrive oldest-to-newest (row 0 first); reversing them and
+    # prepending keeps the newest-first invariant.
+    # We only call Enum.take (O(limit)) when the buffer is actually full,
+    # avoiding the copy cost on every line during the fill-up phase.
+    {new_scrollback, new_scrollback_count} =
       if top == 0 do
         evicted = for row <- 0..(n - 1)//1, do: Map.get(screen.cells, row, %{})
-        Enum.take(screen.scrollback ++ evicted, -@scrollback_limit)
+        new_list = Enum.reverse(evicted) ++ screen.scrollback
+        new_count = screen.scrollback_count + n
+
+        if new_count > @scrollback_limit do
+          {Enum.take(new_list, @scrollback_limit), @scrollback_limit}
+        else
+          {new_list, new_count}
+        end
       else
-        screen.scrollback
+        {screen.scrollback, screen.scrollback_count}
       end
 
     new_cells =
@@ -627,7 +653,12 @@ defmodule Codrift.TUI.VT100 do
         Map.put(cells, row, %{})
       end)
 
-    %{screen | cells: new_cells, scrollback: new_scrollback}
+    %{
+      screen
+      | cells: new_cells,
+        scrollback: new_scrollback,
+        scrollback_count: new_scrollback_count
+    }
   end
 
   defp scroll_down(screen, n) do

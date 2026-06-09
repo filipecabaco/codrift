@@ -32,6 +32,7 @@ defmodule Codrift.Config.Keybindings do
   | `status_next` | `]` | Cycle initiative status forward |
   | `context_mode` | `1` | Switch to context view |
   | `diff_mode` | `2` | Switch to diff view |
+  | `tree_mode` | `3` | Switch to tree view |
   | `toggle_diff_view` | `v` | Toggle unified/split diff |
   | `diff_all_files` | `*` | Show all changed files |
   | `quit` | `ctrl+q` | Quit Codrift |
@@ -60,6 +61,7 @@ defmodule Codrift.Config.Keybindings do
     status_next: "]",
     context_mode: "1",
     diff_mode: "2",
+    tree_mode: "3",
     toggle_diff_view: "v",
     diff_all_files: "*",
     quit: "ctrl+q",
@@ -83,6 +85,7 @@ defmodule Codrift.Config.Keybindings do
           | :status_next
           | :context_mode
           | :diff_mode
+          | :tree_mode
           | :toggle_diff_view
           | :diff_all_files
           | :quit
@@ -185,6 +188,7 @@ defmodule Codrift.Config.Keybindings do
   defp string_to_action("status_next"), do: :status_next
   defp string_to_action("context_mode"), do: :context_mode
   defp string_to_action("diff_mode"), do: :diff_mode
+  defp string_to_action("tree_mode"), do: :tree_mode
   defp string_to_action("toggle_diff_view"), do: :toggle_diff_view
   defp string_to_action("diff_all_files"), do: :diff_all_files
   defp string_to_action("quit"), do: :quit

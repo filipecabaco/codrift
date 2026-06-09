@@ -51,6 +51,8 @@ defmodule Codrift.TUI do
   | `*` | Reset diff sidebar to "all files" (diff mode only) |
   | `r` | Refresh current pane |
   | `Ctrl+D` / `Ctrl+U` | Scroll half-page |
+  | `Ctrl+F` / `Ctrl+B` | Scroll full page (like `less`) |
+  | `PgDn` / `PgUp` | Scroll full page |
   | `Ctrl+Q` / `Ctrl+C` | Quit (kills all running agents) |
 
   ## Themes
@@ -68,10 +70,11 @@ defmodule Codrift.TUI do
   alias ExRatatui.Event.{Key, Mouse, Paste}
   alias ExRatatui.{Focus, Layout, Style}
   alias ExRatatui.Layout.Rect
+  alias ExRatatui.Text.{Line, Span}
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.CodeBlock
+  alias ExRatatui.Widgets.List, as: WidgetList
   alias ExRatatui.Widgets.Paragraph
-  alias ExRatatui.Widgets.Textarea
 
   alias Codrift.Agent.Adapters.{Aider, Claude, Terminal}
   alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative, Paths}
@@ -83,18 +86,25 @@ defmodule Codrift.TUI do
   alias Codrift.TUI.{
     AgentState,
     DirPicker,
-    EditorState,
     Modals,
     ModalState,
     Selection,
     Sidebar,
     SidebarState,
     Styles,
+    Tree,
     VT100
   }
 
-  @type modal :: :none | :new_name | :new_dir | :confirm_delete | :palette | :theme_picker
-  @type tab :: :context | :diff
+  @type modal ::
+          :none
+          | :new_name
+          | :new_dir
+          | :confirm_delete
+          | :palette
+          | :theme_picker
+          | :new_tree_item
+  @type tab :: :context | :diff | :tree
 
   defstruct [
     :focus,
@@ -111,9 +121,16 @@ defmodule Codrift.TUI do
     sidebar: %SidebarState{},
     selection: %Selection{},
     agents: %AgentState{},
-    editor: %EditorState{},
     modal: %ModalState{},
     diff: %{files: [], scroll: 0, view_mode: :unified, sidebar_entries: [], sidebar_cursor: 0},
+    tree: %{
+      entries: [],
+      cursor: 0,
+      expanded: MapSet.new(),
+      initiative_id: nil,
+      initiative_name: nil
+    },
+    vim_editor: nil,
     refs: %{
       resize: nil,
       sidebar_tick: nil,
@@ -169,11 +186,6 @@ defmodule Codrift.TUI do
         outputs: %{},
         screens: %{}
       },
-      editor: %EditorState{
-        file: nil,
-        ref: ExRatatui.textarea_new(),
-        autosave: nil
-      },
       modal: %ModalState{
         type: :none,
         input: ExRatatui.text_input_new(),
@@ -213,21 +225,26 @@ defmodule Codrift.TUI do
           Layout.split(body_rect, :horizontal, [{:percentage, 30}, {:percentage, 70}])
 
         sidebar_widget =
-          if state.active_tab == :diff do
-            Sidebar.render_diff(
-              state.diff.sidebar_entries,
-              state.diff.sidebar_cursor,
-              state.focus,
-              state.theme
-            )
-          else
-            Sidebar.render(
-              state.sidebar.entries,
-              state.sidebar.cursor,
-              state.focus,
-              state.theme,
-              state.sidebar.collapsed_ids
-            )
+          cond do
+            state.active_tab == :diff ->
+              Sidebar.render_diff(
+                state.diff.sidebar_entries,
+                state.diff.sidebar_cursor,
+                state.focus,
+                state.theme
+              )
+
+            state.active_tab == :tree ->
+              render_tree_sidebar(state)
+
+            true ->
+              Sidebar.render(
+                state.sidebar.entries,
+                state.sidebar.cursor,
+                state.focus,
+                state.theme,
+                state.sidebar.collapsed_ids
+              )
           end
 
         {[{sidebar_widget, sidebar_rect}], mr}
@@ -239,6 +256,18 @@ defmodule Codrift.TUI do
         [{render_footer(state), footer_rect}]
 
     base ++ render_main_area(state, main_rect) ++ Modals.render(state, frame)
+  end
+
+  @impl true
+  def handle_event(%Paste{content: text}, %{vim_editor: %{exec_pid: exec_pid}} = state) do
+    :exec.send(exec_pid, text)
+    {:noreply, state}
+  end
+
+  def handle_event(%Key{kind: "press"} = key, %{vim_editor: %{exec_pid: exec_pid}} = state) do
+    raw = key_to_raw(key)
+    if raw != "", do: :exec.send(exec_pid, raw)
+    {:noreply, state}
   end
 
   @impl true
@@ -317,21 +346,6 @@ defmodule Codrift.TUI do
   # Edit mode — a context file is open for editing.
   # These clauses must come BEFORE the modal/normal handlers.
 
-  # Esc: flush any pending autosave and exit edit mode.
-  def handle_event(%Key{code: "esc", kind: "press"}, %{editor: %{file: f}} = state)
-      when not is_nil(f) do
-    {:noreply, save_and_close_editing(state)}
-  end
-
-  # Every other keypress in edit mode: forward to textarea + arm a 500 ms autosave.
-  def handle_event(%Key{kind: "press"} = key, %{editor: %{file: f}} = state)
-      when not is_nil(f) do
-    ExRatatui.textarea_handle_key(state.editor.ref, key.code, key.modifiers)
-    if state.editor.autosave, do: Process.cancel_timer(state.editor.autosave)
-    ref = Process.send_after(self(), :autosave, 500)
-    {:noreply, %{state | editor: %{state.editor | autosave: ref}}}
-  end
-
   def handle_event(%Key{code: "esc", kind: "press"}, %{modal: %{type: :theme_picker}} = state) do
     {:noreply,
      %{
@@ -356,6 +370,12 @@ defmodule Codrift.TUI do
 
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :new_name}} = state),
     do: {:noreply, confirm_name(state)}
+
+  def handle_event(
+        %Key{code: "enter", kind: "press"},
+        %{modal: %{type: :new_tree_item}} = state
+      ),
+      do: {:noreply, confirm_tree_item(state)}
 
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :source_picker}} = state),
     do: {:noreply, confirm_source(state)}
@@ -500,6 +520,7 @@ defmodule Codrift.TUI do
              :new_dir,
              :palette,
              :new_context_file,
+             :new_tree_item,
              :integration_item_id,
              :service_guided_token
            ] and byte_size(code) == 1 do
@@ -513,6 +534,7 @@ defmodule Codrift.TUI do
              :new_dir,
              :palette,
              :new_context_file,
+             :new_tree_item,
              :integration_item_id,
              :service_guided_token
            ] and code in ["backspace", "delete", "left", "right", "home", "end"] do
@@ -543,12 +565,13 @@ defmodule Codrift.TUI do
   end
 
   # Plain Tab (no modifiers): insert \t in main non-PTY, forward in PTY, cycle from sidebar.
+  # In tree mode the main pane is a navigable list, not a text input, so Tab always cycles focus.
   def handle_event(%Key{code: "tab", kind: "press"} = key, %{modal: %{type: :none}} = state) do
     cond do
       Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
         {:noreply, forward_raw(state, "\t")}
 
-      Focus.focused?(state.focus, :main) ->
+      Focus.focused?(state.focus, :main) and state.active_tab != :tree ->
         {:noreply, %{state | input_buffer: state.input_buffer <> "\t"}}
 
       true ->
@@ -601,6 +624,103 @@ defmodule Codrift.TUI do
     end
   end
 
+  # Ctrl+F / Ctrl+B — full-page scroll (like less/man). PTY agents receive the
+  # raw bytes; non-PTY panes jump a full pane height at once.
+  def handle_event(
+        %Key{code: "f", kind: "press", modifiers: ["ctrl"]},
+        %{modal: %{type: :none}} = state
+      ) do
+    {_, pane_h} = state.pane_size
+
+    cond do
+      Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\x06")}
+
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff: %{state.diff | scroll: state.diff.scroll + pane_h}}}
+
+      agent_pane?(state) ->
+        debounce_scroll(%{state | main_scroll: max(state.main_scroll - pane_h, 0)})
+
+      true ->
+        debounce_scroll(%{
+          state
+          | main_scroll: min(state.main_scroll + pane_h, non_agent_max_scroll(state))
+        })
+    end
+  end
+
+  def handle_event(
+        %Key{code: "b", kind: "press", modifiers: ["ctrl"]},
+        %{modal: %{type: :none}} = state
+      ) do
+    {_, pane_h} = state.pane_size
+
+    cond do
+      not Focus.focused?(state.focus, :main) ->
+        action = Map.get(state.kb.reverse, "ctrl+b")
+        dispatch_sidebar_action(action, state)
+
+      state.selection.agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\x02")}
+
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff: %{state.diff | scroll: max(state.diff.scroll - pane_h, 0)}}}
+
+      agent_pane?(state) ->
+        debounce_scroll(%{
+          state
+          | main_scroll: min(state.main_scroll + pane_h, agent_max_scroll(state))
+        })
+
+      true ->
+        debounce_scroll(%{state | main_scroll: max(state.main_scroll - pane_h, 0)})
+    end
+  end
+
+  # PgDn / PgUp — same full-page jump, forwarded as standard sequences to PTY agents.
+  def handle_event(%Key{code: "page_down", kind: "press"}, %{modal: %{type: :none}} = state) do
+    {_, pane_h} = state.pane_size
+
+    cond do
+      Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\e[6~")}
+
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff: %{state.diff | scroll: state.diff.scroll + pane_h}}}
+
+      agent_pane?(state) ->
+        debounce_scroll(%{state | main_scroll: max(state.main_scroll - pane_h, 0)})
+
+      true ->
+        debounce_scroll(%{
+          state
+          | main_scroll: min(state.main_scroll + pane_h, non_agent_max_scroll(state))
+        })
+    end
+  end
+
+  def handle_event(%Key{code: "page_up", kind: "press"}, %{modal: %{type: :none}} = state) do
+    {_, pane_h} = state.pane_size
+
+    cond do
+      Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\e[5~")}
+
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff: %{state.diff | scroll: max(state.diff.scroll - pane_h, 0)}}}
+
+      agent_pane?(state) ->
+        debounce_scroll(%{
+          state
+          | main_scroll: min(state.main_scroll + pane_h, agent_max_scroll(state))
+        })
+
+      true ->
+        debounce_scroll(%{state | main_scroll: max(state.main_scroll - pane_h, 0)})
+    end
+  end
+
   # Ctrl+V toggles paste accumulation mode (non-PTY main pane).
   # In paste mode, Enter inserts \n instead of submitting, so pasted
   # multi-line text lands in the buffer as one block. Press Ctrl+V again
@@ -645,20 +765,26 @@ defmodule Codrift.TUI do
 
   # Main pane focused — route to agent based on its mode.
   # In paste_mode, Enter inserts \n so multi-line pastes land as one block.
+  # In tree mode, Enter toggles expand/collapse of the entry at cursor.
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :none}} = state) do
-    if Focus.focused?(state.focus, :main) do
-      case state.selection.agent_mode do
-        :pty ->
-          {:noreply, forward_raw(state, "\r")}
+    cond do
+      state.active_tab == :tree ->
+        {:noreply, tree_toggle_at_cursor(state)}
 
-        _ when state.paste_mode ->
-          {:noreply, %{state | input_buffer: state.input_buffer <> "\n"}}
+      Focus.focused?(state.focus, :main) ->
+        case state.selection.agent_mode do
+          :pty ->
+            {:noreply, forward_raw(state, "\r")}
 
-        _ ->
-          {:noreply, send_agent_input(state)}
-      end
-    else
-      {:noreply, state}
+          _ when state.paste_mode ->
+            {:noreply, %{state | input_buffer: state.input_buffer <> "\n"}}
+
+          _ ->
+            {:noreply, send_agent_input(state)}
+        end
+
+      true ->
+        {:noreply, state}
     end
   end
 
@@ -733,11 +859,11 @@ defmodule Codrift.TUI do
       Focus.focused?(state.focus, :sidebar) ->
         {:noreply, navigate(state, -1)}
 
-      state.active_tab == :diff ->
-        {:noreply, %{state | diff: %{state.diff | scroll: max(state.diff.scroll - 3, 0)}}}
-
       Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
         {:noreply, forward_raw(state, "\e[A")}
+
+      state.active_tab == :diff ->
+        {:noreply, %{state | diff: %{state.diff | scroll: max(state.diff.scroll - 3, 0)}}}
 
       agent_pane?(state) ->
         debounce_scroll(%{
@@ -754,18 +880,28 @@ defmodule Codrift.TUI do
   end
 
   def handle_event(%Key{code: "right", kind: "press"}, %{modal: %{type: :none}} = state) do
-    if Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty do
-      {:noreply, forward_raw(state, "\e[C")}
-    else
-      {:noreply, state}
+    cond do
+      state.active_tab == :tree ->
+        {:noreply, tree_expand_at_cursor(state)}
+
+      Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\e[C")}
+
+      true ->
+        {:noreply, state}
     end
   end
 
   def handle_event(%Key{code: "left", kind: "press"}, %{modal: %{type: :none}} = state) do
-    if Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty do
-      {:noreply, forward_raw(state, "\e[D")}
-    else
-      {:noreply, state}
+    cond do
+      state.active_tab == :tree ->
+        {:noreply, tree_collapse_at_cursor(state)}
+
+      Focus.focused?(state.focus, :main) and state.selection.agent_mode == :pty ->
+        {:noreply, forward_raw(state, "\e[D")}
+
+      true ->
+        {:noreply, state}
     end
   end
 
@@ -790,12 +926,38 @@ defmodule Codrift.TUI do
     {:stop, state}
   end
 
+  # Tree mode intercepts — before normal sidebar/PTY routing.
+  defp dispatch_char(_action, " ", _focus, %{active_tab: :tree} = state),
+    do: {:noreply, tree_toggle_at_cursor(state)}
+
+  defp dispatch_char(:edit_context, _code, _focus, %{active_tab: :tree} = state),
+    do: {:noreply, open_tree_file_editor(state)}
+
+  defp dispatch_char(:new_initiative, _code, _focus, %{active_tab: :tree} = state),
+    do: {:noreply, open_new_tree_item_modal(state)}
+
+  defp dispatch_char(:delete, _code, _focus, %{active_tab: :tree} = state),
+    do: {:noreply, open_tree_delete_confirm(state)}
+
+  defp dispatch_char(:navigate_down, _code, true, %{active_tab: :tree} = state),
+    do: debounce_scroll(%{state | main_scroll: state.main_scroll + 3})
+
+  defp dispatch_char(:navigate_up, _code, true, %{active_tab: :tree} = state),
+    do: debounce_scroll(%{state | main_scroll: max(state.main_scroll - 3, 0)})
+
+  defp dispatch_char(action, _code, _focus, %{active_tab: :tree} = state),
+    do: dispatch_sidebar_action(action, state)
+
+  # Sidebar structural actions work regardless of which pane has focus.
+  defp dispatch_char(:toggle_collapse, _code, _focus, state),
+    do: {:noreply, toggle_collapse_at_cursor(state)}
+
   defp dispatch_char(_action, code, true, %{selection: %{agent_mode: :pty}} = state),
     do: {:noreply, forward_raw(state, code)}
 
   defp dispatch_char(:edit_context, code, true, state) do
     case state.cursor_info do
-      %{type: :context_file, path: path} -> {:noreply, start_editing(state, path)}
+      %{type: :context_file, path: path} -> {:noreply, open_in_editor(state, path)}
       _ -> {:noreply, %{state | input_buffer: state.input_buffer <> code}}
     end
   end
@@ -833,6 +995,16 @@ defmodule Codrift.TUI do
     {:noreply, refresh_diff(new_state)}
   end
 
+  defp dispatch_sidebar_action(:tree_mode, state) do
+    {:noreply,
+     refresh_tree(%{
+       state
+       | active_tab: :tree,
+         main_scroll: 0,
+         focus: Focus.new([:sidebar, :main])
+     })}
+  end
+
   defp dispatch_sidebar_action(:toggle_diff_view, %{active_tab: :diff} = state) do
     new_mode = if state.diff.view_mode == :unified, do: :split, else: :unified
     {:noreply, %{state | diff: %{state.diff | view_mode: new_mode, scroll: 0}}}
@@ -862,7 +1034,7 @@ defmodule Codrift.TUI do
 
   defp dispatch_sidebar_action(:edit_context, state) do
     case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
-      {:context_file, _, path, _} -> {:noreply, start_editing(state, path)}
+      {:context_file, _, path, _} -> {:noreply, open_in_editor(state, path)}
       _ -> {:noreply, state}
     end
   end
@@ -968,11 +1140,24 @@ defmodule Codrift.TUI do
 
       resize_selected_pty(state.selection.agent_id, pane_w, pane_h)
 
+      new_vim_editor =
+        case state.vim_editor do
+          %{ospid: ospid, screen: screen} = vim ->
+            inner_w = max(pane_w - 2, 10)
+            inner_h = max(pane_h - 2, 5)
+            :exec.winsz(ospid, inner_h, inner_w)
+            %{vim | screen: VT100.resize(screen, inner_w, inner_h)}
+
+          nil ->
+            nil
+        end
+
       {:noreply,
        %{
          state
          | pane_size: {pane_w, pane_h},
            agents: %{state.agents | screens: new_screens},
+           vim_editor: new_vim_editor,
            main_scroll: 0,
            refs: %{state.refs | resize: nil}
        }}
@@ -1077,40 +1262,6 @@ defmodule Codrift.TUI do
     {:noreply, reload_sidebar(%{state | refs: %{state.refs | sidebar_tick: ref}})}
   end
 
-  # Autosave fires 500 ms after the last keystroke while editing a file.
-  def handle_info(:autosave, %{editor: %{file: nil}} = state) do
-    {:noreply, state}
-  end
-
-  def handle_info(:autosave, state) do
-    # Silent save — don't interrupt the editing status hint.
-    # Only surface errors. Guard against writing outside the managed context tree.
-    new_state =
-      if Store.context_file_path?(state.editor.file) do
-        content = ExRatatui.textarea_get_value(state.editor.ref)
-
-        case File.write(state.editor.file, content) do
-          :ok ->
-            %{state | editor: %{state.editor | autosave: nil}}
-
-          {:error, r} ->
-            %{
-              state
-              | editor: %{state.editor | autosave: nil},
-                status: "Autosave failed: #{inspect(r)}"
-            }
-        end
-      else
-        %{
-          state
-          | editor: %{state.editor | autosave: nil},
-            status: "Autosave refused: path outside Codrift folder"
-        }
-      end
-
-    {:noreply, new_state}
-  end
-
   def handle_info({:device_auth_complete, service, return_to}, state) do
     base =
       if state.modal.type == :service_device_flow,
@@ -1198,6 +1349,25 @@ defmodule Codrift.TUI do
 
   def handle_info({:update_available, latest}, state) do
     {:noreply, flash_status(state, "codrift #{latest} available — run `codrift update`", 8000)}
+  end
+
+  def handle_info({:stdout, ospid, data}, %{vim_editor: %{ospid: ospid} = vim} = state) do
+    updated_screen = VT100.process(vim.screen, data)
+    {:noreply, %{state | vim_editor: %{vim | screen: updated_screen}}, [render?: true]}
+  end
+
+  def handle_info(
+        {:DOWN, ospid, :process, _pid, _reason},
+        %{vim_editor: %{ospid: ospid, path: path}} = state
+      ) do
+    new_state =
+      state
+      |> Map.put(:vim_editor, nil)
+      |> reload_sidebar()
+      |> update_context_from_cursor()
+      |> flash_status("Edited #{Path.basename(path)}")
+
+    {:noreply, new_state, [render?: true]}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -1746,6 +1916,38 @@ defmodule Codrift.TUI do
     end
   end
 
+  defp do_delete(%{modal: %{context: {:delete_tree_file, path}}} = state) do
+    case File.rm(path) do
+      :ok ->
+        state
+        |> then(&%{&1 | modal: %{&1.modal | type: :none, context: nil}})
+        |> rebuild_tree()
+        |> flash_status("Deleted #{Path.basename(path)}")
+
+      {:error, reason} ->
+        flash_status(
+          %{state | modal: %{state.modal | type: :none, context: nil}},
+          "Delete failed: #{inspect(reason)}"
+        )
+    end
+  end
+
+  defp do_delete(%{modal: %{context: {:delete_tree_dir, path}}} = state) do
+    case File.rm_rf(path) do
+      {:ok, _} ->
+        state
+        |> then(&%{&1 | modal: %{&1.modal | type: :none, context: nil}})
+        |> rebuild_tree()
+        |> flash_status("Deleted #{Path.basename(path)}/")
+
+      {:error, reason, _} ->
+        flash_status(
+          %{state | modal: %{state.modal | type: :none, context: nil}},
+          "Delete failed: #{inspect(reason)}"
+        )
+    end
+  end
+
   defp execute_palette_action(state) do
     filtered = Modals.filter_actions(state.modal.actions, state.modal.palette.filter)
 
@@ -1762,6 +1964,16 @@ defmodule Codrift.TUI do
     do:
       %{state | modal: %{state.modal | type: :none}, active_tab: :context, main_scroll: 0}
       |> update_context_from_cursor()
+
+  defp do_palette_action(:tree_mode, state),
+    do:
+      refresh_tree(%{
+        state
+        | modal: %{state.modal | type: :none},
+          active_tab: :tree,
+          main_scroll: 0,
+          focus: Focus.new([:sidebar, :main])
+      })
 
   defp do_palette_action(:diff_mode, state) do
     refresh_diff(%{
@@ -1830,7 +2042,7 @@ defmodule Codrift.TUI do
   defp do_palette_action(:edit_context_file, state) do
     case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
       {:context_file, _, path, _} ->
-        start_editing(%{state | modal: %{state.modal | type: :none}}, path)
+        open_in_editor(%{state | modal: %{state.modal | type: :none}}, path)
 
       _ ->
         flash_status(
@@ -1895,16 +2107,21 @@ defmodule Codrift.TUI do
   # Always moves the sidebar cursor — used by j/k keybindings so the focus check
   # inside navigate/2 cannot accidentally fall through to main-pane scrolling.
   defp move_sidebar_cursor(state, delta) do
-    if state.active_tab == :diff do
-      max_idx = max(length(state.diff.sidebar_entries) - 1, 0)
-      new_cursor = min(max(state.diff.sidebar_cursor + delta, 0), max_idx)
-      %{state | diff: %{state.diff | sidebar_cursor: new_cursor, scroll: 0}}
-    else
-      max_idx = max(length(state.sidebar.entries) - 1, 0)
-      new_cursor = min(max(state.sidebar.cursor + delta, 0), max_idx)
+    cond do
+      state.active_tab == :diff ->
+        max_idx = max(length(state.diff.sidebar_entries) - 1, 0)
+        new_cursor = min(max(state.diff.sidebar_cursor + delta, 0), max_idx)
+        %{state | diff: %{state.diff | sidebar_cursor: new_cursor, scroll: 0}}
 
-      %{state | sidebar: %{state.sidebar | cursor: new_cursor}, main_scroll: 0}
-      |> update_context_from_cursor()
+      state.active_tab == :tree ->
+        move_tree_cursor(state, delta)
+
+      true ->
+        max_idx = max(length(state.sidebar.entries) - 1, 0)
+        new_cursor = min(max(state.sidebar.cursor + delta, 0), max_idx)
+
+        %{state | sidebar: %{state.sidebar | cursor: new_cursor}, main_scroll: 0}
+        |> update_context_from_cursor()
     end
   end
 
@@ -1936,17 +2153,22 @@ defmodule Codrift.TUI do
 
   defp navigate(state, delta) do
     if Focus.focused?(state.focus, :sidebar) do
-      if state.active_tab == :diff do
-        # In diff mode the sidebar shows diff entries; navigate those independently.
-        max_idx = max(length(state.diff.sidebar_entries) - 1, 0)
-        new_cursor = min(max(state.diff.sidebar_cursor + delta, 0), max_idx)
-        %{state | diff: %{state.diff | sidebar_cursor: new_cursor, scroll: 0}}
-      else
-        max_idx = max(length(state.sidebar.entries) - 1, 0)
-        new_cursor = min(max(state.sidebar.cursor + delta, 0), max_idx)
+      cond do
+        state.active_tab == :diff ->
+          # In diff mode the sidebar shows diff entries; navigate those independently.
+          max_idx = max(length(state.diff.sidebar_entries) - 1, 0)
+          new_cursor = min(max(state.diff.sidebar_cursor + delta, 0), max_idx)
+          %{state | diff: %{state.diff | sidebar_cursor: new_cursor, scroll: 0}}
 
-        %{state | sidebar: %{state.sidebar | cursor: new_cursor}, main_scroll: 0}
-        |> update_context_from_cursor()
+        state.active_tab == :tree ->
+          move_tree_cursor(state, delta)
+
+        true ->
+          max_idx = max(length(state.sidebar.entries) - 1, 0)
+          new_cursor = min(max(state.sidebar.cursor + delta, 0), max_idx)
+
+          %{state | sidebar: %{state.sidebar | cursor: new_cursor}, main_scroll: 0}
+          |> update_context_from_cursor()
       end
     else
       case state.active_tab do
@@ -2010,6 +2232,17 @@ defmodule Codrift.TUI do
             {:error, _} -> []
           end
 
+        line_count =
+          build_initiative_md_content(
+            md_sections,
+            dir_infos,
+            context_files,
+            context_dir,
+            initiative.worktree_default || false
+          )
+          |> String.split("\n")
+          |> length()
+
         cursor_info = %{
           type: :initiative,
           name: initiative.name,
@@ -2019,7 +2252,8 @@ defmodule Codrift.TUI do
           context_files: context_files,
           dirs: dir_infos,
           md_sections: md_sections,
-          worktree_default: initiative.worktree_default
+          worktree_default: initiative.worktree_default,
+          line_count: line_count
         }
 
         %{
@@ -2287,19 +2521,21 @@ defmodule Codrift.TUI do
   defp do_toggle_worktree_default(state, initiative_id) do
     case Store.get(initiative_id) do
       {:ok, initiative} ->
-        new_default = not initiative.worktree_default
-
-        case Store.set_worktree_default(initiative_id, new_default) do
-          {:ok, _} ->
-            label = if new_default, do: "ON", else: "OFF"
-            flash_status(state, "Worktree default #{label} for this initiative")
-
-          {:error, reason} ->
-            flash_status(state, "Failed: #{inspect(reason)}")
-        end
+        apply_worktree_default_toggle(state, initiative_id, not initiative.worktree_default)
 
       _ ->
         state
+    end
+  end
+
+  defp apply_worktree_default_toggle(state, initiative_id, new_default) do
+    case Store.set_worktree_default(initiative_id, new_default) do
+      {:ok, _} ->
+        label = if new_default, do: "ON", else: "OFF"
+        flash_status(state, "Worktree default #{label} for this initiative")
+
+      {:error, reason} ->
+        flash_status(state, "Failed: #{inspect(reason)}")
     end
   end
 
@@ -2401,10 +2637,209 @@ defmodule Codrift.TUI do
     do: %{state | modal: %{state.modal | type: :none, context: nil}}
 
   defp refresh_current(%{active_tab: :diff} = state), do: refresh_diff(state)
+  defp refresh_current(%{active_tab: :tree} = state), do: rebuild_tree(state)
 
   defp refresh_current(state) do
     state |> reload_sidebar() |> update_context_from_cursor()
   end
+
+  # ── Tree view helpers ─────────────────────────────────────────────────────────
+
+  # Builds tree entries from the initiative at the current sidebar cursor.
+  # Resets the expanded set when switching to a different initiative.
+  defp refresh_tree(state) do
+    id = initiative_id_from_sidebar_cursor(state)
+
+    case id && Store.get(id) do
+      {:ok, initiative} ->
+        expanded = if id == state.tree.initiative_id, do: state.tree.expanded, else: MapSet.new()
+        entries = Tree.build_visible(initiative, expanded)
+
+        %{
+          state
+          | tree: %{
+              state.tree
+              | entries: entries,
+                initiative_id: id,
+                initiative_name: initiative.name,
+                cursor: 0,
+                expanded: expanded
+            }
+        }
+
+      _ ->
+        %{
+          state
+          | tree: %{state.tree | entries: [], initiative_id: nil, initiative_name: nil, cursor: 0}
+        }
+    end
+  end
+
+  # Rebuilds tree entries in place, preserving cursor and expanded state.
+  defp rebuild_tree(state) do
+    case state.tree.initiative_id && Store.get(state.tree.initiative_id) do
+      {:ok, initiative} ->
+        entries = Tree.build_visible(initiative, state.tree.expanded)
+        max_cursor = max(length(entries) - 1, 0)
+
+        %{
+          state
+          | tree: %{state.tree | entries: entries, cursor: min(state.tree.cursor, max_cursor)}
+        }
+
+      _ ->
+        state
+    end
+  end
+
+  defp move_tree_cursor(state, delta) do
+    max_idx = max(length(state.tree.entries) - 1, 0)
+    new_cursor = min(max(state.tree.cursor + delta, 0), max_idx)
+    %{state | tree: %{state.tree | cursor: new_cursor}, main_scroll: 0}
+  end
+
+  defp tree_toggle_at_cursor(state) do
+    case Enum.at(state.tree.entries, state.tree.cursor) do
+      {:tree_dir, path, _depth, _expanded?} ->
+        new_expanded = Tree.toggle_expand(state.tree.expanded, path)
+        rebuild_tree(%{state | tree: %{state.tree | expanded: new_expanded}})
+
+      _ ->
+        state
+    end
+  end
+
+  defp tree_expand_at_cursor(state) do
+    case Enum.at(state.tree.entries, state.tree.cursor) do
+      {:tree_dir, path, _depth, false} ->
+        new_expanded = MapSet.put(state.tree.expanded, path)
+        rebuild_tree(%{state | tree: %{state.tree | expanded: new_expanded}})
+
+      _ ->
+        state
+    end
+  end
+
+  defp tree_collapse_at_cursor(state) do
+    case Enum.at(state.tree.entries, state.tree.cursor) do
+      {:tree_dir, path, _depth, true} ->
+        new_expanded = MapSet.delete(state.tree.expanded, path)
+        rebuild_tree(%{state | tree: %{state.tree | expanded: new_expanded}})
+
+      _ ->
+        state
+    end
+  end
+
+  defp initiative_id_from_sidebar_cursor(state) do
+    case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
+      {:initiative, id, _, _, _, _} -> id
+      {:dir, id, _, _, _} -> id
+      {:context_dir, id, _, _} -> id
+      {:context_file, id, _, _} -> id
+      _ -> nil
+    end
+  end
+
+  defp open_tree_file_editor(state) do
+    case Enum.at(state.tree.entries, state.tree.cursor) do
+      {:tree_file, path, _depth} -> open_in_editor(state, path)
+      _ -> flash_status(state, "Select a file to open")
+    end
+  end
+
+  defp open_new_tree_item_modal(state) do
+    case tree_cursor_parent_path(state) do
+      nil ->
+        flash_status(state, "Navigate to a directory first")
+
+      parent ->
+        ExRatatui.text_input_set_value(state.modal.input, "")
+
+        %{
+          state
+          | modal: %{state.modal | type: :new_tree_item, context: {:new_tree_item, parent}},
+            status: "Name (append / for dir) — Enter: create  Esc: cancel"
+        }
+    end
+  end
+
+  defp tree_cursor_parent_path(state) do
+    case Enum.at(state.tree.entries, state.tree.cursor) do
+      {:tree_dir, path, _depth, _expanded?} -> path
+      {:tree_file, path, _depth} -> Path.dirname(path)
+      nil -> nil
+    end
+  end
+
+  defp open_tree_delete_confirm(state) do
+    case Enum.at(state.tree.entries, state.tree.cursor) do
+      {:tree_dir, path, _depth, _expanded?} ->
+        %{
+          state
+          | modal: %{state.modal | type: :confirm_delete, context: {:delete_tree_dir, path}}
+        }
+
+      {:tree_file, path, _depth} ->
+        %{
+          state
+          | modal: %{state.modal | type: :confirm_delete, context: {:delete_tree_file, path}}
+        }
+
+      nil ->
+        flash_status(state, "Navigate to an item first")
+    end
+  end
+
+  defp confirm_tree_item(%{modal: %{context: {:new_tree_item, parent}}} = state) do
+    name = state.modal.input |> ExRatatui.text_input_get_value() |> String.trim()
+
+    cond do
+      name == "" ->
+        flash_status(state, "Name cannot be empty")
+
+      String.contains?(name, "..") ->
+        flash_status(state, "Name must not contain '..'")
+
+      String.ends_with?(name, "/") ->
+        dir_name = String.trim_trailing(name, "/")
+        path = Path.join(parent, dir_name)
+
+        case File.mkdir_p(path) do
+          :ok ->
+            state
+            |> then(&%{&1 | modal: %{&1.modal | type: :none, context: nil}})
+            |> rebuild_tree()
+            |> flash_status("Created #{dir_name}/")
+
+          {:error, reason} ->
+            flash_status(
+              %{state | modal: %{state.modal | type: :none, context: nil}},
+              "Failed: #{inspect(reason)}"
+            )
+        end
+
+      true ->
+        path = Path.join(parent, name)
+
+        case File.write(path, "") do
+          :ok ->
+            state
+            |> then(&%{&1 | modal: %{&1.modal | type: :none, context: nil}})
+            |> rebuild_tree()
+            |> flash_status("Created #{name}")
+
+          {:error, reason} ->
+            flash_status(
+              %{state | modal: %{state.modal | type: :none, context: nil}},
+              "Failed: #{inspect(reason)}"
+            )
+        end
+    end
+  end
+
+  defp confirm_tree_item(state),
+    do: %{state | modal: %{state.modal | type: :none, context: nil}}
 
   defp refresh_diff(%{selection: %{initiative_id: nil}} = state) do
     flash_status(state, "Select an initiative first")
@@ -2476,16 +2911,20 @@ defmodule Codrift.TUI do
   end
 
   defp render_mode_bar(state) do
-    {context_style, diff_style} =
+    {context_style, diff_style, tree_style} =
       case state.active_tab do
         :context ->
-          {%Style{fg: :yellow, modifiers: [:bold]}, %Style{fg: :dark_gray}}
+          {%Style{fg: :yellow, modifiers: [:bold]}, %Style{fg: :dark_gray},
+           %Style{fg: :dark_gray}}
 
         :diff ->
-          {%Style{fg: :dark_gray}, %Style{fg: :yellow, modifiers: [:bold]}}
-      end
+          {%Style{fg: :dark_gray}, %Style{fg: :yellow, modifiers: [:bold]},
+           %Style{fg: :dark_gray}}
 
-    alias ExRatatui.Text.{Line, Span}
+        :tree ->
+          {%Style{fg: :dark_gray}, %Style{fg: :dark_gray},
+           %Style{fg: :yellow, modifiers: [:bold]}}
+      end
 
     %ExRatatui.Widgets.Paragraph{
       text: %ExRatatui.Text{
@@ -2494,7 +2933,9 @@ defmodule Codrift.TUI do
             spans: [
               %Span{content: " 1: Context ", style: context_style},
               %Span{content: " │ ", style: %Style{fg: :dark_gray}},
-              %Span{content: "2: Diff ", style: diff_style}
+              %Span{content: "2: Diff ", style: diff_style},
+              %Span{content: " │ ", style: %Style{fg: :dark_gray}},
+              %Span{content: "3: Tree ", style: tree_style}
             ]
           }
         ]
@@ -2624,22 +3065,6 @@ defmodule Codrift.TUI do
           }
         }
     end
-  end
-
-  defp render_file_widget(%{editor: %{file: path}} = state, path, _content) do
-    %Textarea{
-      state: state.editor.ref,
-      style: %Style{fg: :white},
-      cursor_style: %Style{modifiers: [:reversed]},
-      cursor_line_style: %Style{bg: :dark_gray},
-      line_number_style: %Style{fg: :dark_gray},
-      block: %Block{
-        title: " ~ #{Path.basename(path)}  Esc: save & close  autosaves ",
-        borders: [:all],
-        border_type: :rounded,
-        border_style: %Style{fg: :yellow}
-      }
-    }
   end
 
   defp render_file_widget(state, path, content) do
@@ -2808,12 +3233,34 @@ defmodule Codrift.TUI do
     end
   end
 
+  defp render_main_area(%{vim_editor: vim_editor} = state, rect) when not is_nil(vim_editor) do
+    [{render_vim_pane(state), rect}]
+  end
+
   defp render_main_area(%{active_tab: :diff} = state, rect) do
     render_diff_content(state, rect)
   end
 
+  defp render_main_area(%{active_tab: :tree} = state, rect) do
+    render_tree_content(state, rect)
+  end
+
   defp render_main_area(state, rect) do
     [{render_main(state), rect}]
+  end
+
+  defp render_vim_pane(state) do
+    border = Styles.pane_border(state.focus, :main, state.theme)
+
+    block = %Block{
+      title: " vim — #{Path.basename(state.vim_editor.path)} ",
+      borders: [:all],
+      border_type: :rounded,
+      border_style: border
+    }
+
+    content = VT100.to_text_viewport(state.vim_editor.screen, true, 0)
+    %Paragraph{text: content, block: block, wrap: false, scroll: {0, 0}}
   end
 
   # ── Diff content pane ────────────────────────────────────────────────────────
@@ -2966,6 +3413,172 @@ defmodule Codrift.TUI do
   defp next_view_mode(:unified), do: "split"
   defp next_view_mode(:split), do: "unified"
 
+  # ── Tree sidebar and content pane ─────────────────────────────────────────────
+
+  defp render_tree_sidebar(state) do
+    border = Styles.pane_border(state.focus, :sidebar, state.theme)
+    title = tree_view_title(state)
+
+    if state.tree.entries == [] do
+      %Paragraph{
+        text: %ExRatatui.Text{
+          lines: [
+            %Line{
+              spans: [
+                %Span{
+                  content: "  No directories — add a directory with 'a'.",
+                  style: %Style{fg: :dark_gray}
+                }
+              ]
+            }
+          ]
+        },
+        block: %Block{
+          title: title,
+          borders: [:all],
+          border_type: :rounded,
+          border_style: border
+        }
+      }
+    else
+      %WidgetList{
+        items: Enum.map(state.tree.entries, &tree_item/1),
+        selected: state.tree.cursor,
+        block: %Block{
+          title: title,
+          borders: [:all],
+          border_type: :rounded,
+          border_style: border
+        },
+        highlight_style: Styles.sidebar_highlight(state.theme),
+        highlight_symbol: "▶ "
+      }
+    end
+  end
+
+  defp render_tree_content(state, rect) do
+    border = Styles.pane_border(state.focus, :main, state.theme)
+
+    widget =
+      case Enum.at(state.tree.entries, state.tree.cursor) do
+        {:tree_file, path, _depth} ->
+          content =
+            case File.read(path) do
+              {:ok, text} -> text
+              {:error, _} -> "Unable to read file."
+            end
+
+          %CodeBlock{
+            content: content,
+            language: path_to_language(path),
+            theme: state.theme.syntax_theme,
+            scroll: {state.main_scroll, 0},
+            block: %Block{
+              title: " #{Path.basename(path)} ",
+              borders: [:all],
+              border_type: :rounded,
+              border_style: border
+            }
+          }
+
+        {:tree_dir, path, _depth, _expanded?} ->
+          %Paragraph{
+            text: %ExRatatui.Text{
+              lines: [
+                %Line{
+                  spans: [%Span{content: "  #{path}", style: %Style{fg: :dark_gray}}]
+                }
+              ]
+            },
+            block: %Block{
+              title: " Directory ",
+              borders: [:all],
+              border_type: :rounded,
+              border_style: border
+            }
+          }
+
+        nil ->
+          %Paragraph{
+            text: %ExRatatui.Text{
+              lines: [
+                %Line{
+                  spans: [
+                    %Span{content: "  Select a file to preview.", style: %Style{fg: :dark_gray}}
+                  ]
+                }
+              ]
+            },
+            block: %Block{
+              title: " Preview ",
+              borders: [:all],
+              border_type: :rounded,
+              border_style: border
+            }
+          }
+      end
+
+    [{widget, rect}]
+  end
+
+  @ext_to_language %{
+    ".ex" => "elixir",
+    ".exs" => "elixir",
+    ".js" => "javascript",
+    ".jsx" => "javascript",
+    ".ts" => "typescript",
+    ".tsx" => "typescript",
+    ".py" => "python",
+    ".rb" => "ruby",
+    ".rs" => "rust",
+    ".go" => "go",
+    ".c" => "c",
+    ".h" => "c",
+    ".cpp" => "cpp",
+    ".json" => "json",
+    ".yaml" => "yaml",
+    ".yml" => "yaml",
+    ".toml" => "toml",
+    ".md" => "md",
+    ".sh" => "bash",
+    ".html" => "html",
+    ".css" => "css",
+    ".sql" => "sql"
+  }
+
+  defp path_to_language(path) do
+    Map.get(@ext_to_language, Path.extname(path), "text")
+  end
+
+  defp tree_view_title(state) do
+    if state.tree.initiative_name,
+      do: " Tree: #{state.tree.initiative_name} ",
+      else: " Tree "
+  end
+
+  defp tree_item({:tree_dir, path, depth, expanded?}) do
+    sym = if expanded?, do: "▼", else: "▶"
+    indent = String.duplicate("  ", depth)
+
+    %Line{
+      spans: [
+        %Span{content: "#{indent}#{sym} ", style: %Style{fg: :cyan}},
+        %Span{content: Path.basename(path), style: %Style{fg: :white, modifiers: [:bold]}}
+      ]
+    }
+  end
+
+  defp tree_item({:tree_file, path, depth}) do
+    indent = String.duplicate("  ", depth)
+
+    %Line{
+      spans: [
+        %Span{content: "#{indent}  – ", style: %Style{fg: :dark_gray}},
+        %Span{content: Path.basename(path), style: %Style{fg: :white}}
+      ]
+    }
+  end
+
   # Scroll whichever pane the mouse cursor is over.
   # If the pointer is in the sidebar column, scroll the sidebar (navigate).
   # If it's in the main pane and the agent is a PTY, forward scroll as
@@ -2976,6 +3589,9 @@ defmodule Codrift.TUI do
     sidebar_width = if state.sidebar.collapsed, do: 0, else: round(term_w * 0.30)
 
     cond do
+      x < sidebar_width and state.active_tab == :tree ->
+        move_tree_cursor(state, delta)
+
       x < sidebar_width ->
         # Scrolling over the sidebar navigates its cursor
         new_cursor =
@@ -3126,46 +3742,72 @@ defmodule Codrift.TUI do
     end
   end
 
-  # ── Text editor helpers ──────────────────────────────────────────────────────
+  # ── External editor helpers ──────────────────────────────────────────────────
 
-  defp start_editing(state, path) do
-    content =
-      case File.read(path) do
-        {:ok, text} -> text
-        {:error, _} -> ""
-      end
+  defp open_in_editor(state, path) do
+    editor = System.get_env("EDITOR", "vim")
+    editor_bin = System.find_executable(editor) || editor
+    {w, h} = state.pane_size
+    # Subtract 2 for the block border so vim sees the usable area
+    inner_w = max(w - 2, 10)
+    inner_h = max(h - 2, 5)
+    cmd = [editor_bin, path]
 
-    ExRatatui.textarea_set_value(state.editor.ref, content)
+    pty_opts = [
+      :pty,
+      {:winsz, {inner_h, inner_w}},
+      :stdin,
+      {:stdout, self()},
+      :monitor,
+      {:env, [{"TERM", "xterm-256color"}]}
+    ]
 
-    %{
-      state
-      | editor: %{state.editor | file: path},
-        status:
-          "editing — Esc: save & close  Ctrl+K: kill line  Ctrl+W: delete word  autosaves every 500 ms"
-    }
+    case :exec.run(cmd, pty_opts) do
+      {:ok, exec_pid, ospid} ->
+        vim_editor = %{
+          exec_pid: exec_pid,
+          ospid: ospid,
+          screen: VT100.new(inner_w, inner_h),
+          path: path
+        }
+
+        %{state | vim_editor: vim_editor}
+        |> flash_status("Editing #{Path.basename(path)} in #{editor} — :q to close")
+
+      {:error, reason} ->
+        flash_status(state, "Failed to open editor: #{inspect(reason)}")
+    end
   end
 
-  # Saves and exits edit mode (Esc). Shows a brief confirmation then restores
-  # the default shortcuts hint after 2 s.
-  defp save_and_close_editing(state) do
-    if state.editor.autosave, do: Process.cancel_timer(state.editor.autosave)
-    base = %{state | editor: %{state.editor | file: nil, autosave: nil}}
+  @key_sequences %{
+    "enter" => "\r",
+    "esc" => "\e",
+    "backspace" => "\x7f",
+    "tab" => "\t",
+    "up" => "\e[A",
+    "down" => "\e[B",
+    "right" => "\e[C",
+    "left" => "\e[D",
+    "page_up" => "\e[5~",
+    "page_down" => "\e[6~",
+    "home" => "\e[H",
+    "end" => "\e[F",
+    "delete" => "\e[3~"
+  }
 
-    if Store.context_file_path?(state.editor.file) do
-      content = ExRatatui.textarea_get_value(state.editor.ref)
+  defp key_to_raw(%Key{code: code, modifiers: modifiers}) do
+    cond do
+      "ctrl" in modifiers and byte_size(code) == 1 ->
+        <<:binary.first(code) - ?a + 1>>
 
-      case File.write(state.editor.file, content) do
-        :ok ->
-          base
-          |> reload_sidebar()
-          |> update_context_from_cursor()
-          |> flash_status("Saved #{Path.basename(state.editor.file)}")
+      Map.has_key?(@key_sequences, code) ->
+        @key_sequences[code]
 
-        {:error, reason} ->
-          flash_status(base, "Save failed: #{inspect(reason)}", 3000)
-      end
-    else
-      flash_status(base, "Refused: path outside Codrift context folder", 3000)
+      byte_size(code) == 1 ->
+        code
+
+      true ->
+        ""
     end
   end
 
@@ -3265,13 +3907,17 @@ defmodule Codrift.TUI do
   defp agent_max_scroll(state) do
     case Map.get(state.agents.screens, state.selection.agent_id) do
       nil -> 0
-      screen -> length(screen.scrollback)
+      screen -> screen.scrollback_count
     end
   end
 
   # Maximum useful scroll for non-agent content panes (initiative, dir, file).
   # Computed from the content line count stored in cursor_info; falls back to 0
   # so the pane stays at the top when cursor_info is absent or of unknown type.
+  # Tree mode has no cursor_info for file content; use a large value and let
+  # the CodeBlock widget clamp to the actual file length when rendering.
+  defp non_agent_max_scroll(%{active_tab: :tree}), do: 99_999
+
   defp non_agent_max_scroll(state) do
     {_, pane_h} = state.pane_size
     max(cursor_content_lines(state.cursor_info) - pane_h, 0)
@@ -3282,18 +3928,7 @@ defmodule Codrift.TUI do
   defp cursor_content_lines(%{type: :context_file, content: content}),
     do: content |> String.split("\n") |> length()
 
-  defp cursor_content_lines(%{
-         type: :initiative,
-         md_sections: sections,
-         dirs: dirs,
-         context_files: files,
-         context_dir: ctx_dir,
-         worktree_default: wt
-       }) do
-    build_initiative_md_content(sections, dirs, files, ctx_dir, wt)
-    |> String.split("\n")
-    |> length()
-  end
+  defp cursor_content_lines(%{type: :initiative, line_count: count}), do: count
 
   defp cursor_content_lines(%{type: :dir, commits: commits}), do: 8 + length(commits)
 
@@ -3438,6 +4073,7 @@ defmodule Codrift.TUI do
       },
       %{id: :context_mode, label: "Context View", hint: Keybindings.format(kb.context_mode)},
       %{id: :diff_mode, label: "Diff View", hint: Keybindings.format(kb.diff_mode)},
+      %{id: :tree_mode, label: "Tree View", hint: Keybindings.format(kb.tree_mode)},
       %{
         id: :toggle_diff_view,
         label: "Toggle Diff: Unified / Split",

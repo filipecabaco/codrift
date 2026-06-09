@@ -164,14 +164,7 @@ defmodule Codrift.Initiative.Store do
     worktree_enabled = Keyword.get(opts, :worktree_enabled, false)
     ctx = ctx_path(state.context_dir_base, id)
 
-    case update_initiative(state, id, fn i ->
-           if Enum.any?(i.dirs, &(&1.path == dir)) do
-             i
-           else
-             entry = build_dir_entry(ctx, id, dir, worktree_enabled)
-             %{i | dirs: [entry | i.dirs]}
-           end
-         end) do
+    case update_initiative(state, id, &maybe_add_dir(&1, ctx, id, dir, worktree_enabled)) do
       {:reply, {:ok, initiative}, new_state} ->
         {:reply, {:ok, initiative}, new_state,
          {:continue, {:add_dir_side_effects, initiative, dir}}}
@@ -229,43 +222,58 @@ defmodule Codrift.Initiative.Store do
 
   def handle_call({:toggle_dir_worktree, id, dir}, _from, state) do
     case Map.fetch(state.initiatives, id) do
-      {:ok, initiative} ->
-        case Enum.find(initiative.dirs, &(&1.path == dir)) do
-          nil ->
-            {:reply, {:error, :not_found}, state}
+      {:ok, initiative} -> do_toggle_dir_worktree(state, initiative, id, dir)
+      :error -> {:reply, {:error, :not_found}, state}
+    end
+  end
 
-          %DirEntry{worktree_path: nil} = entry ->
-            ctx = ctx_path(state.context_dir_base, id)
-
-            updated_entry =
-              case Worktree.ensure(ctx, id, dir) do
-                {:ok, wt_path} ->
-                  ClaudePermissions.add(wt_path, "Read")
-                  %{entry | worktree_enabled: true, worktree_path: wt_path}
-
-                {:error, reason} ->
-                  Logger.warning("Codrift.Worktree: enable failed for #{dir}: #{inspect(reason)}")
-                  entry
-              end
-
-            dirs =
-              Enum.map(initiative.dirs, fn e -> if e.path == dir, do: updated_entry, else: e end)
-
-            updated = %{initiative | dirs: dirs}
-            new_state = put_initiative(state, updated)
-            {:reply, {:ok, updated}, new_state, {:continue, {:update_initiative_md, updated}}}
-
-          %DirEntry{} = entry ->
-            cleanup_worktree(entry)
-            cleared = %{entry | worktree_enabled: false, worktree_path: nil}
-            dirs = Enum.map(initiative.dirs, fn e -> if e.path == dir, do: cleared, else: e end)
-            updated = %{initiative | dirs: dirs}
-            new_state = put_initiative(state, updated)
-            {:reply, {:ok, updated}, new_state, {:continue, {:update_initiative_md, updated}}}
-        end
-
-      :error ->
+  defp do_toggle_dir_worktree(state, initiative, id, dir) do
+    case Enum.find(initiative.dirs, &(&1.path == dir)) do
+      nil ->
         {:reply, {:error, :not_found}, state}
+
+      entry ->
+        updated = apply_worktree_toggle(initiative, entry, id, dir, state)
+        new_state = put_initiative(state, updated)
+        {:reply, {:ok, updated}, new_state, {:continue, {:update_initiative_md, updated}}}
+    end
+  end
+
+  defp apply_worktree_toggle(initiative, %DirEntry{worktree_path: nil} = entry, id, dir, state) do
+    ctx = ctx_path(state.context_dir_base, id)
+    updated_entry = enable_worktree_entry(entry, ctx, id, dir)
+    update_initiative_dirs(initiative, dir, updated_entry)
+  end
+
+  defp apply_worktree_toggle(initiative, entry, _id, dir, _state) do
+    cleanup_worktree(entry)
+    cleared = %{entry | worktree_enabled: false, worktree_path: nil}
+    update_initiative_dirs(initiative, dir, cleared)
+  end
+
+  defp enable_worktree_entry(entry, ctx, id, dir) do
+    case Worktree.ensure(ctx, id, dir) do
+      {:ok, wt_path} ->
+        ClaudePermissions.add(wt_path, "Read")
+        %{entry | worktree_enabled: true, worktree_path: wt_path}
+
+      {:error, reason} ->
+        Logger.warning("Codrift.Worktree: enable failed for #{dir}: #{inspect(reason)}")
+        entry
+    end
+  end
+
+  defp update_initiative_dirs(initiative, dir, updated_entry) do
+    dirs = Enum.map(initiative.dirs, &if(&1.path == dir, do: updated_entry, else: &1))
+    %{initiative | dirs: dirs}
+  end
+
+  defp maybe_add_dir(initiative, ctx, id, dir, worktree_enabled) do
+    if Enum.any?(initiative.dirs, &(&1.path == dir)) do
+      initiative
+    else
+      entry = build_dir_entry(ctx, id, dir, worktree_enabled)
+      %{initiative | dirs: [entry | initiative.dirs]}
     end
   end
 

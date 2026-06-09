@@ -129,14 +129,26 @@ access. SQLite for session persistence; SQLite FTS5 for per-initiative memory.
 |---|------|-------|
 | 42 | Worktree UX improvements | Sidebar `[wt]`/`[wt*]` label per dir (yellow when dirty); `Worktree.status/1` (branch, dirty?); `codrift initiative worktree-enable/disable/status` CLI commands; 296 tests. See [Worktrees](docs/worktrees.md). |
 
+### ✅ Done — Tree view
+
+| # | Step | Notes |
+|---|------|-------|
+| 44 | Tree view (mode 3) | Third mode (`3` key, `Ctrl+P` palette). **Sidebar** shows the file-tree of all dirs in the active initiative (WidgetList, sidebar border/highlight). **Main pane** shows a syntax-highlighted `CodeBlock` preview of the selected file; directory entries show a path hint; empty entries show a placeholder. `j`/`k`, arrows, and mouse wheel over the sidebar navigate the tree cursor and update the preview. `Enter`/`Space` toggle expand/collapse dirs; `→`/`←` expand/collapse; `e` opens the file in the embedded vim PTY. `n` new file/dir, `d` delete with confirmation. Entering tree mode sets sidebar focus automatically. `Tab` cycles focus to the main pane for preview scrolling. `path_to_language/1` maps 20+ extensions to syntax themes. Mode bar shows `1: Context │ 2: Diff │ 3: Tree`. 307 tests. |
+
+### ✅ Done — Embedded editor
+
+| # | Step | Notes |
+|---|------|-------|
+| 45 | Embedded `$EDITOR` in main pane | Dropped the custom textarea editor (step 19) and the suspend-TUI approach. `e` key spawns the editor as an erlexec PTY inside the main pane — identical to how Terminal agents work. `open_in_editor/2` calls `:exec.run([editor_bin, path], [:pty, {:winsz, {rows, cols}}, :stdin, {:stdout, self()}, :monitor, {:env, [...]}])`. Output streams as `{:stdout, ospid, data}` → `VT100.process` → re-render. All keypresses forwarded raw via `key_to_raw/1` + `:exec.send`. Resize events send `:exec.winsz` and resize the VT100 screen. On exit (`{:DOWN, ospid, ...}`), vim_editor cleared, sidebar reloaded. Key details: `{:winsz, {rows, cols}}` must be a startup option (not post-spawn) so vim sees correct dimensions on its first `ioctl`; `System.find_executable` used to resolve absolute editor path before passing to erlexec. Editor selection: reads `$EDITOR` env var, falls back to `vim`. `e` in tree mode opens any file at the tree cursor; same `open_in_editor/2` covers both context files and tree files. Future step adds `editor` key to `~/.codrift/settings.json`. |
+
 ### ⬜ Upcoming
 
 | # | Step | Notes |
 |---|------|-------|
-| 38 | Additional CLI adapters | Codex CLI, Opencode, Cursor Agent, Gemini CLI, Copilot CLI, Amp, Goose, Aider (complete). See *Upcoming: Additional CLI Adapters* below. |
-| 40 | Website | Landing page: hero + install one-liner, feature bullets, asciinema demo, GitHub link. Domain: `codrift.sh`. |
-| 43 | Tree view (mode 3) | **Next up.** Third mode (`3` key, `Ctrl+P` palette) showing a file-tree of all dirs in the active initiative. Keyboard-driven: navigate with `j`/`k`, expand/collapse dirs with `Enter`/`Space`, open file in `$EDITOR` with `e`, create file/dir with `n`, delete with `d` (confirmation prompt). Mode bar becomes `1: Context │ 2: Diff │ 3: Tree`. Like diff view, tree view always reflects the currently focused initiative — switching sidebar focus updates the tree root. |
-| 44 | Replace in-TUI editor with `$EDITOR` (vim) | Drop the custom textarea editor (step 19). `e` key suspends the TUI, opens the context file in `$EDITOR` (defaults to `vim`), then resumes the TUI on exit. Users get their own editor config, plugins, and keybindings for free — no custom editor to maintain. |
+| 43 | Additional CLI adapters | Codex CLI, Opencode, Cursor Agent, Gemini CLI, Copilot CLI, Amp, Goose, Aider (complete). See *Upcoming: Additional CLI Adapters* below. |
+| 46 | Split panes | **Pane layout engine.** Any main-area pane can be split horizontally (`Ctrl+\`) or vertically (`Ctrl+-`). Each resulting pane is an independent *view slot* that can hold any of: a sidebar item (agent output, terminal, diff), a new spawned agent, or a new terminal (`$SHELL`). Pane focus cycles with `Ctrl+W` (forward) / `Ctrl+Shift+W` (backward); focused pane gets a highlighted border. Closing a pane (`Ctrl+X`) merges its space back into the neighbour. Layout is pure data (`%PaneNode{split: :h | :v, ratio: float, left: pane, right: pane}` / `%PaneLeaf{type, ref}`) — no processes, just a binary tree rendered recursively into a bounding box. Pane content is driven by the existing `render_*` helpers; resize broadcasts go only to PTY leaves within the visible tree. Palette entries: *Split Horizontal*, *Split Vertical*, *Close Pane*, *Focus Next Pane*. |
+| 47 | Website | Landing page: hero + install one-liner, feature bullets, asciinema demo, GitHub link. Domain: `codrift.sh`. |
+| 48 | Multi-buffer search in tree view | **Project-wide search and edit.** `/` in tree mode opens a search prompt; results render as a single virtual buffer of file excerpts — one block per match, separated by `── path/to/file:line ──` headers. Users edit results directly; on save (`Ctrl+S` or `Enter` confirmation), changes are batch-applied back to source files. Supports regex via `:re` flag. Implemented as `Codrift.TUI.MultiBuffer`: a list of `%{file, line, col_start, col_end, text}` fragments compiled into a renderable pane. Edits are tracked per-fragment; `MultiBuffer.apply/1` writes each diff back via `File.write/2`. Keyboard: `n`/`N` jump between match groups; `Ctrl+R` re-run search; `Esc` closes without applying. Closest Vim analogue is nvim-spectre / quickfix + `:cfdo %s///g`; Zed calls this a *multibuffer*. No external process needed — all in-process. |
 
 ---
 

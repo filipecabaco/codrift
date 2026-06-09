@@ -122,11 +122,6 @@ defmodule Codrift.TUIStateTest do
         outputs: Map.get(overrides, :agent_outputs, %{}),
         screens: Map.get(overrides, :vt100_screens, %{})
       },
-      editor: %Codrift.TUI.EditorState{
-        file: Map.get(overrides, :editing_file),
-        ref: Map.get(overrides, :editor_ref, ExRatatui.textarea_new()),
-        autosave: Map.get(overrides, :autosave_ref)
-      },
       modal: %Codrift.TUI.ModalState{
         type: Map.get(overrides, :modal, :none),
         input: Map.get(overrides, :modal_input, ExRatatui.text_input_new()),
@@ -776,7 +771,24 @@ defmodule Codrift.TUIStateTest do
       assert Map.has_key?(new_state.agents.screens, agent_id)
     end
 
-    test "output for the selected agent resets main_scroll to 0" do
+    test "output for the selected agent at scroll 0 stays at 0" do
+      agent_id = "selected-agent"
+
+      state =
+        base_state(%{
+          selected_agent_id: agent_id,
+          vt100_screens: %{},
+          agent_outputs: %{},
+          pane_size: {80, 20},
+          main_scroll: 0
+        })
+
+      {:noreply, new_state, _} = TUI.handle_info({:agent_output, agent_id, "data"}, state)
+
+      assert new_state.main_scroll == 0
+    end
+
+    test "output for the selected agent preserves scroll when user has scrolled up" do
       agent_id = "selected-agent"
 
       state =
@@ -790,7 +802,7 @@ defmodule Codrift.TUIStateTest do
 
       {:noreply, new_state, _} = TUI.handle_info({:agent_output, agent_id, "data"}, state)
 
-      assert new_state.main_scroll == 0
+      assert new_state.main_scroll == 7
     end
 
     test "output for a non-selected agent does not reset main_scroll" do

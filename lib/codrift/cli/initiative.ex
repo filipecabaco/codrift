@@ -100,50 +100,12 @@ defmodule Codrift.CLI.Initiative do
   def run(["worktree-enable", id, dir | _]) do
     expanded = Path.expand(dir)
     ctx = context_path(id)
-
-    update_initiative(id, fn i ->
-      case Enum.find(i.dirs, &(&1.path == expanded)) do
-        nil ->
-          fail("directory not in initiative: #{expanded}")
-
-        %DirEntry{worktree_path: wt} when is_binary(wt) ->
-          fail("worktree already enabled for #{expanded} at #{wt}")
-
-        entry ->
-          case Worktree.ensure(ctx, id, expanded) do
-            {:ok, wt_path} ->
-              updated_entry = %{entry | worktree_enabled: true, worktree_path: wt_path}
-
-              dirs =
-                Enum.map(i.dirs, fn e -> if e.path == expanded, do: updated_entry, else: e end)
-
-              %{i | dirs: dirs}
-
-            {:error, reason} ->
-              fail("worktree creation failed: #{reason}")
-          end
-      end
-    end)
+    update_initiative(id, &enable_worktree_for_dir(&1, ctx, id, expanded))
   end
 
   def run(["worktree-disable", id, dir | _]) do
     expanded = Path.expand(dir)
-
-    update_initiative(id, fn i ->
-      case Enum.find(i.dirs, &(&1.path == expanded)) do
-        nil ->
-          fail("directory not in initiative: #{expanded}")
-
-        %DirEntry{worktree_path: nil} ->
-          fail("no worktree is enabled for #{expanded}")
-
-        entry ->
-          Worktree.remove(expanded, entry.worktree_path)
-          cleared = %{entry | worktree_enabled: false, worktree_path: nil}
-          dirs = Enum.map(i.dirs, fn e -> if e.path == expanded, do: cleared, else: e end)
-          %{i | dirs: dirs}
-      end
-    end)
+    update_initiative(id, &disable_worktree_for_dir(&1, expanded))
   end
 
   def run(["allow-read", id | _]) do
@@ -186,20 +148,7 @@ defmodule Codrift.CLI.Initiative do
         fail("initiative not found: #{id}")
 
       initiative ->
-        statuses =
-          Enum.map(initiative.dirs, fn entry ->
-            wt_info =
-              if entry.worktree_enabled and is_binary(entry.worktree_path) and
-                   File.dir?(entry.worktree_path) do
-                st = Worktree.status(entry.worktree_path)
-                %{enabled: true, path: entry.worktree_path, branch: st.branch, dirty: st.dirty?}
-              else
-                %{enabled: false, path: nil, branch: nil, dirty: false}
-              end
-
-            %{dir: entry.path, worktree: wt_info}
-          end)
-
+        statuses = Enum.map(initiative.dirs, &dir_worktree_status/1)
         print_json(%{initiative_id: id, dirs: statuses})
     end
   end
@@ -290,6 +239,58 @@ defmodule Codrift.CLI.Initiative do
     end
 
     if File.dir?(expanded), do: File.rm_rf!(expanded)
+  end
+
+  defp enable_worktree_for_dir(initiative, ctx, id, expanded) do
+    case Enum.find(initiative.dirs, &(&1.path == expanded)) do
+      nil ->
+        fail("directory not in initiative: #{expanded}")
+
+      %DirEntry{worktree_path: wt} when is_binary(wt) ->
+        fail("worktree already enabled for #{expanded} at #{wt}")
+
+      entry ->
+        case Worktree.ensure(ctx, id, expanded) do
+          {:ok, wt_path} ->
+            updated_entry = %{entry | worktree_enabled: true, worktree_path: wt_path}
+            %{initiative | dirs: replace_dir(initiative.dirs, expanded, updated_entry)}
+
+          {:error, reason} ->
+            fail("worktree creation failed: #{reason}")
+        end
+    end
+  end
+
+  defp disable_worktree_for_dir(initiative, expanded) do
+    case Enum.find(initiative.dirs, &(&1.path == expanded)) do
+      nil ->
+        fail("directory not in initiative: #{expanded}")
+
+      %DirEntry{worktree_path: nil} ->
+        fail("no worktree is enabled for #{expanded}")
+
+      entry ->
+        Worktree.remove(expanded, entry.worktree_path)
+        cleared = %{entry | worktree_enabled: false, worktree_path: nil}
+        %{initiative | dirs: replace_dir(initiative.dirs, expanded, cleared)}
+    end
+  end
+
+  defp dir_worktree_status(entry) do
+    wt_info =
+      if entry.worktree_enabled and is_binary(entry.worktree_path) and
+           File.dir?(entry.worktree_path) do
+        st = Worktree.status(entry.worktree_path)
+        %{enabled: true, path: entry.worktree_path, branch: st.branch, dirty: st.dirty?}
+      else
+        %{enabled: false, path: nil, branch: nil, dirty: false}
+      end
+
+    %{dir: entry.path, worktree: wt_info}
+  end
+
+  defp replace_dir(dirs, path, updated_entry) do
+    Enum.map(dirs, &if(&1.path == path, do: updated_entry, else: &1))
   end
 
   defp print_json(data), do: IO.puts(JSON.encode!(data))

@@ -16,9 +16,7 @@ defmodule Codrift.ClaudePermissions do
   Returns the updated allow list.
   """
   def add(dir, rule) do
-    if not File.dir?(dir) do
-      []
-    else
+    if File.dir?(dir) do
       path = settings_path(dir)
       settings = read(path)
       allow = get_in(settings, ["permissions", "allow"]) || []
@@ -30,6 +28,8 @@ defmodule Codrift.ClaudePermissions do
         write(path, set_allow(settings, updated_allow))
         updated_allow
       end
+    else
+      []
     end
   end
 

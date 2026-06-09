@@ -37,21 +37,24 @@ defmodule Codrift.Worktree do
   Returns `{:ok, worktree_path}` on success, or `{:error, reason}` on failure.
   """
   def ensure(context_path, initiative_id, source_path) do
-    if not git_repo?(source_path) do
-      {:error, "#{source_path} is not a git repository"}
-    else
+    if git_repo?(source_path) do
       wt_path = worktree_path(context_path, source_path)
+      do_ensure_worktree(source_path, wt_path, initiative_id)
+    else
+      {:error, "#{source_path} is not a git repository"}
+    end
+  end
 
-      if File.dir?(wt_path) do
-        {:ok, wt_path}
-      else
-        File.mkdir_p!(Path.dirname(wt_path))
-        branch = branch_name(initiative_id, source_path)
+  defp do_ensure_worktree(source_path, wt_path, initiative_id) do
+    if File.dir?(wt_path) do
+      {:ok, wt_path}
+    else
+      File.mkdir_p!(Path.dirname(wt_path))
+      branch = branch_name(initiative_id, source_path)
 
-        case create_worktree(source_path, wt_path, branch) do
-          :ok -> {:ok, wt_path}
-          {:error, _} = err -> err
-        end
+      case create_worktree(source_path, wt_path, branch) do
+        :ok -> {:ok, wt_path}
+        {:error, _} = err -> err
       end
     end
   end
