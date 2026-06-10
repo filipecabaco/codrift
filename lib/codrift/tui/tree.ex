@@ -26,6 +26,24 @@ defmodule Codrift.TUI.Tree do
     end)
   end
 
+  @doc """
+  Returns a flat list of all `{:tree_file, path, depth}` entries for the
+  initiative, used by `SidebarFilter` to search across the full file tree.
+
+  Uses `git ls-files --cached --others --exclude-standard` as the primary
+  backend so `.gitignore` patterns are respected automatically and build
+  artifacts (`_build/`, `deps/`, `node_modules/`, etc.) are excluded for
+  free. Falls back to a naive recursive traversal with a built-in exclusion
+  list for directories that are not inside a git repository.
+  """
+  @spec all_files(map()) :: [entry()]
+  def all_files(initiative) do
+    Enum.flat_map(initiative.dirs, fn dir_entry ->
+      path = DirEntry.effective_path(dir_entry)
+      files_for_dir(path)
+    end)
+  end
+
   @doc "Toggles expanded/collapsed state for `path` in the expanded `MapSet`."
   @spec toggle_expand(MapSet.t(), String.t()) :: MapSet.t()
   def toggle_expand(expanded, path) do
@@ -34,7 +52,60 @@ defmodule Codrift.TUI.Tree do
       else: MapSet.put(expanded, path)
   end
 
+  # Directories always excluded during naive fallback traversal.
+  @ignored_dirs ~w[_build deps node_modules .git .elixir_ls priv/plts
+                   __pycache__ .venv venv dist build target .next .nuxt
+                   .cache vendor coverage .tox]
+
   # ── Private ───────────────────────────────────────────────────────────────────
+
+  defp files_for_dir(base) do
+    case git_ls_files(base) do
+      [_ | _] = files -> files
+      [] -> list_all_files_naive(base, base, 0)
+    end
+  end
+
+  defp git_ls_files(base) do
+    case System.cmd(
+           "git",
+           ["ls-files", "--cached", "--others", "--exclude-standard"],
+           cd: base,
+           stderr_to_stdout: false
+         ) do
+      {output, 0} ->
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.map(fn rel ->
+          depth = max(length(Path.split(rel)) - 1, 0)
+          {:tree_file, Path.join(base, rel), depth}
+        end)
+
+      _ ->
+        []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp list_all_files_naive(base, path, depth) do
+    case File.ls(path) do
+      {:ok, names} ->
+        names
+        |> Enum.reject(&(String.starts_with?(&1, ".") or &1 in @ignored_dirs))
+        |> Enum.sort()
+        |> Enum.flat_map(&file_or_recurse_naive(base, Path.join(path, &1), depth))
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  defp file_or_recurse_naive(base, child, depth) do
+    if File.dir?(child),
+      do: list_all_files_naive(base, child, depth + 1),
+      else: [{:tree_file, child, depth}]
+  end
 
   defp build_for_dir(path, depth, expanded) do
     is_expanded = MapSet.member?(expanded, path)

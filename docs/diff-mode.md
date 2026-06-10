@@ -70,12 +70,41 @@ Two `Paragraph` panels with explicit span colouring:
 
 Both modes share `diff_scroll`. `Ctrl+D` / `Ctrl+U` do half-page jumps.
 
+## File filter
+
+Press `/` to activate the filter at the top of the sidebar. Only matching `{:diff_file, …}` entries are shown; directory headers are hidden while a query is active. The filter mode is inferred from the query:
+
+| Query | Mode |
+|-------|------|
+| `foo` | fuzzy — substring match |
+| `*.test.ts` | glob — `*`/`?` wildcards |
+| `/\.ex$/` | regex — Elixir `Regex`, case-insensitive |
+| `#test` `#config` `#doc` `#schema` `#router` | tag — predefined file groups |
+
+```
+┌ *.ex  glob  e.g. *.test.ts ────────────┐
+│ ▶ lib/foo.ex                  +20  -5  │
+│   lib/bar.ex                  +10  -5  │
+└────────────────────────────────────────┘
+```
+
+| Key | Action |
+|-----|--------|
+| `/` | Activate filter |
+| any printable key | Append to query |
+| `Backspace` | Delete last character |
+| `Esc` | Clear filter and restore full sidebar |
+
+Moving the cursor in a filtered view still drives the content pane normally.
+
 ## Keyboard shortcuts
 
 | Key | Action |
 |-----|--------|
 | `j` / `↓` | Move sidebar cursor down (or scroll content when main pane is focused) |
 | `k` / `↑` | Move sidebar cursor up (or scroll content when main pane is focused) |
+| `/` | Activate fuzzy file filter |
+| `Esc` | Clear filter (when filter is visible) |
 | `v` | Toggle unified / split view |
 | `*` | Jump sidebar cursor to "all files" (entry 0) |
 | `Ctrl+D` / `Ctrl+U` | Half-page scroll in diff content |

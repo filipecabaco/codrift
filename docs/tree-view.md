@@ -40,14 +40,73 @@ Tree mode replaces the sidebar with a file-tree of all directories in the active
 
 On exit, the tree sidebar reloads automatically.
 
+## File filter
+
+Press `/` to activate the filter input at the top of the sidebar. All files across every directory are searched regardless of expand state. The filter mode is inferred automatically from what you type:
+
+| Query | Mode | Matches |
+|-------|------|---------|
+| `router` | fuzzy | any file whose name or path contains `router` |
+| `*.test.ts` | glob | shell-style wildcards (`*` = any chars, `?` = one char) |
+| `/\.test\./` | regex | Elixir `Regex` — case-insensitive, strip trailing `/` |
+| `#test` | tag | predefined group: test files (`_test.`, `.spec.`, `test/`) |
+| `#config` | tag | config files (`.env`, `config.`, `mix.exs`) |
+| `#doc` | tag | docs (`.md`, `README`, `docs/`) |
+| `#schema` | tag | schema / migration files |
+| `#router` | tag | router / routes files |
+
+Unknown `#tag` falls back to substring match on the tag word.
+
+```
+┌ #test  tag  #test #config #doc … ─────┐
+│ ▶ test/router_test.ex                 │
+│   test/helpers/auth_test.ex           │
+└────────────────────────────────────────┘
+```
+
+| Key | Action |
+|-----|--------|
+| `/` | Activate filter |
+| any printable key | Append to query |
+| `Backspace` | Delete last character |
+| `Esc` | Clear filter and return to normal tree view |
+
+While a filter is active, `j`/`k`/`↑`/`↓` navigate the filtered list and `e` opens the selected file as normal. Expand/collapse (`→`/`←`/`Space`) are suspended during filtering.
+
 ## Syntax highlighting
 
-The preview pane maps file extensions to syntax themes via `path_to_language/1`. Supported extensions include:
+The preview pane maps file extensions to syntect's built-in language set via `path_to_language/1`.
 
-`.ex` `.exs` `.erl` `.hrl` `.js` `.ts` `.jsx` `.tsx` `.py` `.rb` `.go` `.rs` `.c` `.cpp` `.h` `.java` `.json` `.yaml` `.yml` `.toml` `.html` `.css` `.sh` `.md`
+| Languages | Extensions |
+|-----------|-----------|
+| Elixir | `.ex` `.exs` |
+| Erlang | `.erl` `.hrl` |
+| JavaScript / TypeScript | `.js` `.jsx` `.ts` `.tsx` |
+| Python | `.py` |
+| Ruby | `.rb` |
+| Rust | `.rs` |
+| Go | `.go` |
+| Java / Kotlin | `.java` `.kt` `.kts` |
+| Scala | `.scala` |
+| C# | `.cs` |
+| C / C++ / Objective-C | `.c` `.h` `.cpp` `.cc` `.cxx` `.hpp` `.m` |
+| Haskell | `.hs` |
+| OCaml | `.ml` `.mli` |
+| Lua | `.lua` |
+| PHP | `.php` |
+| Perl | `.pl` `.pm` |
+| Lisp | `.lisp` `.el` |
+| R | `.r` `.R` |
+| Groovy | `.groovy` |
+| D | `.d` |
+| Bash | `.sh` `.bash` `.zsh` `.fish` |
+| SQL | `.sql` |
+| JSON | `.json` |
+| YAML | `.yaml` `.yml` |
+| XML | `.xml` |
+| HTML | `.html` |
+| CSS / SCSS | `.css` `.scss` |
+| Markdown | `.md` |
+| Diff | `.diff` `.patch` |
 
-Files with unrecognised extensions render as plain text.
-
-## Project-wide search (upcoming)
-
-`/` in tree mode will open a multi-buffer search prompt (step 48 in the plan). Results render as a single virtual buffer of file excerpts; edits are batch-applied back to source files on save.
+TypeScript and Kotlin use JavaScript/Java highlighting (closest built-in match). Files with unrecognised extensions render as plain text.

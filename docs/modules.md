@@ -142,6 +142,43 @@ Builds and renders sidebar entries for context mode and diff mode.
 `render/3` — context sidebar widget
 `render_diff/3` — diff sidebar widget
 
+## Codrift.TUI.SidebarFilter
+
+Pure module. Filter state and matching logic for the sidebar in tree and diff modes.
+
+Holds `%{query: String.t(), active: boolean()}`. Mode is inferred from the query — no explicit switching:
+
+| Query form | Mode | Behaviour |
+|------------|------|-----------|
+| plain text | `:fuzzy` | case-insensitive substring |
+| starts with `/` | `:regex` | Elixir `Regex`, case-insensitive |
+| starts with `#` | `:tag` | predefined groups: `#test` `#config` `#doc` `#schema` `#router` |
+| contains `*` or `?` | `:glob` | shell wildcards |
+
+| Function | Description |
+|----------|-------------|
+| `new/0` | Blank, inactive filter |
+| `activate/1` | Marks filter as accepting input |
+| `deactivate/1` | Clears query and deactivates |
+| `put_char/2` | Appends a printable character |
+| `backspace/1` | Removes the last character |
+| `mode/1` | Returns `:fuzzy \| :glob \| :regex \| :tag` |
+| `matches?/2` | Tests a string under the active mode |
+| `apply_tree/3` | Filters `all_files` to matching `{:tree_file, …}` entries |
+| `apply_diff/2` | Retains only matching `{:diff_file, …}` entries |
+
+Extend via `@tag_patterns`, `mode/1`, or `do_match/3`.
+
+## Codrift.TUI.Tree
+
+Pure module. Builds and navigates the file tree sidebar for tree mode.
+
+| Function | Description |
+|----------|-------------|
+| `build_visible/2` | Flat list of entries respecting the `expanded` MapSet |
+| `all_files/1` | Flat list of all `{:tree_file, …}` entries across every directory, regardless of expand state — used by `SidebarFilter` |
+| `toggle_expand/2` | Toggles a path in the expanded `MapSet` |
+
 ## Codrift.Config.Keybindings
 
 Pure module. Loads `~/.codrift/keybindings.json` at TUI start; merges user overrides over built-in defaults.

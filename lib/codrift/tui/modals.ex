@@ -7,11 +7,13 @@ defmodule Codrift.TUI.Modals do
   """
 
   alias Codrift.Agent
-  alias Codrift.Config.Theme
+  alias Codrift.Config.{Keybindings, Theme}
   alias Codrift.OAuth.Config, as: OAuthConfig
   alias Codrift.TUI.Layout
+  alias ExRatatui.Layout, as: ExLayout
 
   alias ExRatatui.Style
+  alias ExRatatui.Text.{Line, Span}
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.Clear
   alias ExRatatui.Widgets.List, as: WidgetList
@@ -53,6 +55,7 @@ defmodule Codrift.TUI.Modals do
     do: promote_name(state, frame)
 
   def render(%{modal: %{type: :agent_picker}} = state, frame), do: agent_picker(state, frame)
+  def render(%{modal: %{type: :shortcuts}} = state, frame), do: shortcuts(state, frame)
 
   @doc """
   Filters `actions` whose label contains `query` (case-insensitive).
@@ -554,4 +557,100 @@ defmodule Codrift.TUI.Modals do
   end
 
   defp hint(text), do: %Paragraph{text: text, style: %Style{fg: :dark_gray}}
+
+  # ── Shortcuts modal ───────────────────────────────────────────────────────────
+
+  defp shortcuts(state, frame) do
+    kb = state.kb.bindings
+    rect = Layout.center_rect(frame, 76, 24)
+    inner = Layout.inset(rect, 1)
+
+    [left_rect, right_rect] =
+      ExLayout.split(inner, :horizontal, [{:percentage, 50}, {:percentage, 50}])
+
+    hint_rect = %{inner | y: inner.y + inner.height - 1, height: 1}
+
+    [
+      {%Clear{}, rect},
+      {bordered(rect, " Keyboard Shortcuts ", :cyan), rect},
+      {shortcuts_left(kb), %{left_rect | height: left_rect.height - 1}},
+      {shortcuts_right(kb), %{right_rect | height: right_rect.height - 1}},
+      {hint("Esc / Enter: close"), hint_rect}
+    ]
+  end
+
+  defp shortcuts_left(kb) do
+    %Paragraph{
+      text: %ExRatatui.Text{
+        lines:
+          section("GLOBAL") ++
+            row(kb.navigate_down, "navigate down") ++
+            row(kb.navigate_up, "navigate up") ++
+            row(kb.palette, "command palette") ++
+            row(kb.toggle_sidebar, "toggle sidebar") ++
+            row("ctrl+d / ctrl+u", "scroll half page") ++
+            row(kb.quit, "quit") ++
+            [blank()] ++
+            section("AGENTS & CONTEXT") ++
+            row(kb.new_initiative, "new initiative") ++
+            row(kb.add_dir, "add directory") ++
+            row(kb.start_agent, "start agent") ++
+            row(kb.delete, "delete / stop") ++
+            row("#{kb.status_prev}/#{kb.status_next}", "cycle status") ++
+            row(kb.new_context, "new context file") ++
+            row(kb.edit_context, "edit / open file")
+      }
+    }
+  end
+
+  defp shortcuts_right(kb) do
+    %Paragraph{
+      text: %ExRatatui.Text{
+        lines:
+          section("DIFF") ++
+            row("/", "filter files") ++
+            row("Esc", "clear filter") ++
+            row(kb.toggle_diff_view, "unified / split") ++
+            row(kb.diff_all_files, "show all files") ++
+            row(kb.refresh, "refresh diff") ++
+            [blank()] ++
+            section("TREE") ++
+            row("/", "filter files") ++
+            row("Esc", "clear filter") ++
+            row("Enter / Spc", "expand / collapse") ++
+            row("→ / ←", "expand / collapse") ++
+            row(kb.edit_context, "open in editor") ++
+            row(kb.new_initiative, "new file or dir") ++
+            row(kb.delete, "delete") ++
+            [blank()] ++
+            section("PTY") ++
+            row(kb.start_terminal, "open terminal") ++
+            row("?", "show this pane")
+      }
+    }
+  end
+
+  defp section(title) do
+    [
+      %Line{
+        spans: [%Span{content: " #{title}", style: %Style{fg: :cyan, modifiers: [:bold]}}]
+      }
+    ]
+  end
+
+  defp row(key, desc) do
+    key_str = Keybindings.format(key)
+    padded = String.pad_trailing("  #{key_str}", 16)
+
+    [
+      %Line{
+        spans: [
+          %Span{content: padded, style: %Style{fg: :yellow}},
+          %Span{content: desc, style: %Style{fg: :white}}
+        ]
+      }
+    ]
+  end
+
+  defp blank, do: %Line{spans: [%Span{content: ""}]}
 end

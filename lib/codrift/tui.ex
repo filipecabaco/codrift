@@ -91,6 +91,7 @@ defmodule Codrift.TUI do
     ModalState,
     Selection,
     Sidebar,
+    SidebarFilter,
     SidebarState,
     Styles,
     Tree,
@@ -114,6 +115,7 @@ defmodule Codrift.TUI do
           | :service_device_flow
           | :service_setup
           | :agent_picker
+          | :shortcuts
   @type tab :: :context | :diff | :tree
 
   defstruct [
@@ -132,13 +134,22 @@ defmodule Codrift.TUI do
     selection: %Selection{},
     agents: %AgentState{},
     modal: %ModalState{},
-    diff: %{files: [], scroll: 0, view_mode: :unified, sidebar_entries: [], sidebar_cursor: 0},
+    diff: %{
+      files: [],
+      scroll: 0,
+      view_mode: :unified,
+      sidebar_entries: [],
+      sidebar_cursor: 0,
+      filter: %{query: "", active: false}
+    },
     tree: %{
       entries: [],
+      all_files: [],
       cursor: 0,
       expanded: MapSet.new(),
       initiative_id: nil,
-      initiative_name: nil
+      initiative_name: nil,
+      filter: %{query: "", active: false}
     },
     temp_initiative: nil,
     vim_editor: nil,
@@ -213,7 +224,14 @@ defmodule Codrift.TUI do
         dir_picker: %{suggestions: [], cursor: 0}
       },
       temp_initiative: temp_initiative,
-      diff: %{files: [], scroll: 0, view_mode: :unified, sidebar_entries: [], sidebar_cursor: 0},
+      diff: %{
+        files: [],
+        scroll: 0,
+        view_mode: :unified,
+        sidebar_entries: [],
+        sidebar_cursor: 0,
+        filter: SidebarFilter.new()
+      },
       refs: %{
         resize: nil,
         sidebar_tick: Process.send_after(self(), :sidebar_tick, 2000),
@@ -242,30 +260,9 @@ defmodule Codrift.TUI do
         [sidebar_rect, mr] =
           Layout.split(body_rect, :horizontal, [{:percentage, 30}, {:percentage, 70}])
 
-        sidebar_widget =
-          cond do
-            state.active_tab == :diff ->
-              Sidebar.render_diff(
-                state.diff.sidebar_entries,
-                state.diff.sidebar_cursor,
-                state.focus,
-                state.theme
-              )
+        sidebar_widgets = build_sidebar_widgets(state, sidebar_rect)
 
-            state.active_tab == :tree ->
-              render_tree_sidebar(state)
-
-            true ->
-              Sidebar.render(
-                state.sidebar.entries,
-                state.sidebar.cursor,
-                state.focus,
-                state.theme,
-                state.sidebar.collapsed_ids
-              )
-          end
-
-        {[{sidebar_widget, sidebar_rect}], mr}
+        {sidebar_widgets, mr}
       end
 
     base =
@@ -412,6 +409,9 @@ defmodule Codrift.TUI do
 
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :palette}} = state),
     do: {:noreply, execute_palette_action(state)}
+
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :shortcuts}} = state),
+    do: {:noreply, %{state | modal: %{state.modal | type: :none}}}
 
   def handle_event(
         %Key{code: "enter", kind: "press"},
@@ -838,28 +838,58 @@ defmodule Codrift.TUI do
   end
 
   def handle_event(%Key{code: "esc", kind: "press"}, %{modal: %{type: :none}} = state) do
-    if Focus.focused?(state.focus, :main) do
-      case state.selection.agent_mode do
-        :pty -> {:noreply, forward_raw(state, "\e")}
-        _ -> {:noreply, flash_status(%{state | input_buffer: ""}, "Input cleared")}
-      end
-    else
-      {:noreply, state}
+    cond do
+      state.active_tab == :diff and SidebarFilter.visible?(state.diff.filter) ->
+        {:noreply,
+         %{
+           state
+           | diff: %{
+               state.diff
+               | filter: SidebarFilter.deactivate(state.diff.filter),
+                 sidebar_cursor: 0
+             }
+         }}
+
+      state.active_tab == :tree and SidebarFilter.visible?(state.tree.filter) ->
+        {:noreply,
+         %{
+           state
+           | tree: %{state.tree | filter: SidebarFilter.deactivate(state.tree.filter), cursor: 0}
+         }}
+
+      Focus.focused?(state.focus, :main) ->
+        case state.selection.agent_mode do
+          :pty -> {:noreply, forward_raw(state, "\e")}
+          _ -> {:noreply, flash_status(%{state | input_buffer: ""}, "Input cleared")}
+        end
+
+      true ->
+        {:noreply, state}
     end
   end
 
   def handle_event(%Key{code: "backspace", kind: "press"}, %{modal: %{type: :none}} = state) do
-    if Focus.focused?(state.focus, :main) do
-      case state.selection.agent_mode do
-        :pty ->
-          {:noreply, forward_raw(state, "\x7f")}
+    cond do
+      state.active_tab == :diff and SidebarFilter.active?(state.diff.filter) ->
+        new_filter = SidebarFilter.backspace(state.diff.filter)
+        {:noreply, %{state | diff: %{state.diff | filter: new_filter, sidebar_cursor: 0}}}
 
-        _ ->
-          new_buf = String.slice(state.input_buffer, 0..-2//1)
-          {:noreply, %{state | input_buffer: new_buf}}
-      end
-    else
-      {:noreply, state}
+      state.active_tab == :tree and SidebarFilter.active?(state.tree.filter) ->
+        new_filter = SidebarFilter.backspace(state.tree.filter)
+        {:noreply, %{state | tree: %{state.tree | filter: new_filter, cursor: 0}}}
+
+      Focus.focused?(state.focus, :main) ->
+        case state.selection.agent_mode do
+          :pty ->
+            {:noreply, forward_raw(state, "\x7f")}
+
+          _ ->
+            new_buf = String.slice(state.input_buffer, 0..-2//1)
+            {:noreply, %{state | input_buffer: new_buf}}
+        end
+
+      true ->
+        {:noreply, state}
     end
   end
 
@@ -876,6 +906,32 @@ defmodule Codrift.TUI do
        | modal: %{state.modal | type: :promote_name},
          status: "Name for this initiative  Enter: save  Esc: cancel"
      }}
+  end
+
+  # When the sidebar filter is active in diff/tree mode, all printable chars feed
+  # the filter query rather than triggering sidebar actions.
+  # Only applies when the sidebar has focus — main-pane actions work normally.
+  def handle_event(
+        %Key{code: code, kind: "press"},
+        %{modal: %{type: :none}, active_tab: tab} = state
+      )
+      when byte_size(code) == 1 and tab in [:diff, :tree] do
+    filter = if tab == :diff, do: state.diff.filter, else: state.tree.filter
+
+    if SidebarFilter.active?(filter) and Focus.focused?(state.focus, :sidebar) do
+      new_filter = SidebarFilter.put_char(filter, code)
+
+      new_state =
+        if tab == :diff,
+          do: %{state | diff: %{state.diff | filter: new_filter, sidebar_cursor: 0}},
+          else: %{state | tree: %{state.tree | filter: new_filter, cursor: 0}}
+
+      {:noreply, new_state}
+    else
+      action = Map.get(state.kb.reverse, code)
+      focus = Focus.focused?(state.focus, :main)
+      dispatch_char(action, code, focus, state)
+    end
   end
 
   # Generic single-character key handler.
@@ -989,6 +1045,31 @@ defmodule Codrift.TUI do
     save_all_sessions(state)
     {:stop, state}
   end
+
+  # Activate sidebar filter with "/" in diff or tree mode.
+  # all_files is computed here (lazily) so tab switching stays instant.
+  defp dispatch_char(_action, "/", _focus, %{active_tab: :diff} = state),
+    do:
+      {:noreply,
+       %{state | diff: %{state.diff | filter: SidebarFilter.activate(state.diff.filter)}}}
+
+  defp dispatch_char(_action, "/", _focus, %{active_tab: :tree} = state) do
+    all_files = load_tree_all_files(state)
+
+    {:noreply,
+     %{
+       state
+       | tree: %{
+           state.tree
+           | all_files: all_files,
+             filter: SidebarFilter.activate(state.tree.filter)
+         }
+     }}
+  end
+
+  # "?" opens the shortcuts pane from sidebar in any mode (not when main PTY is focused).
+  defp dispatch_char(_action, "?", false, state),
+    do: {:noreply, %{state | modal: %{state.modal | type: :shortcuts}}}
 
   # Tree mode intercepts — before normal sidebar/PTY routing.
   defp dispatch_char(_action, " ", _focus, %{active_tab: :tree} = state),
@@ -2169,6 +2250,34 @@ defmodule Codrift.TUI do
   defp do_palette_action(:toggle_collapse, state),
     do: toggle_collapse_at_cursor(%{state | modal: %{state.modal | type: :none}})
 
+  defp do_palette_action(:shortcuts, state),
+    do: %{state | modal: %{state.modal | type: :shortcuts}}
+
+  defp do_palette_action(:filter_files, %{active_tab: :diff} = state) do
+    %{
+      state
+      | modal: %{state.modal | type: :none},
+        diff: %{state.diff | filter: SidebarFilter.activate(state.diff.filter)}
+    }
+  end
+
+  defp do_palette_action(:filter_files, %{active_tab: :tree} = state) do
+    all_files = load_tree_all_files(state)
+
+    %{
+      state
+      | modal: %{state.modal | type: :none},
+        tree: %{
+          state.tree
+          | all_files: all_files,
+            filter: SidebarFilter.activate(state.tree.filter)
+        }
+    }
+  end
+
+  defp do_palette_action(:filter_files, state),
+    do: %{state | modal: %{state.modal | type: :none}}
+
   defp sync_modal(state, :palette) do
     filter = ExRatatui.text_input_get_value(state.modal.input)
     %{state | modal: %{state.modal | palette: %{filter: filter, cursor: 0}}}
@@ -2195,12 +2304,36 @@ defmodule Codrift.TUI do
     %{state | modal: %{state.modal | worktree_git: is_git, worktree_enabled: new_enabled}}
   end
 
+  defp filtered_tree_entries(%{tree: %{filter: filter, entries: entries, all_files: all_files}}) do
+    SidebarFilter.apply_tree(filter, all_files, entries)
+  end
+
+  defp tree_entry_at_cursor(state) do
+    Enum.at(filtered_tree_entries(state), state.tree.cursor)
+  end
+
+  defp load_tree_all_files(%{tree: %{all_files: [_ | _] = files}}), do: files
+
+  defp load_tree_all_files(%{tree: %{initiative_id: id}}) when not is_nil(id) do
+    case Store.get(id) do
+      {:ok, initiative} -> Tree.all_files(initiative)
+      _ -> []
+    end
+  end
+
+  defp load_tree_all_files(_), do: []
+
+  defp visible_diff_entries(%{diff: %{filter: filter, sidebar_entries: entries}}) do
+    SidebarFilter.apply_diff(filter, entries)
+  end
+
   # Always moves the sidebar cursor — used by j/k keybindings so the focus check
   # inside navigate/2 cannot accidentally fall through to main-pane scrolling.
   defp move_sidebar_cursor(state, delta) do
     cond do
       state.active_tab == :diff ->
-        max_idx = max(length(state.diff.sidebar_entries) - 1, 0)
+        entries = visible_diff_entries(state)
+        max_idx = max(length(entries) - 1, 0)
         new_cursor = min(max(state.diff.sidebar_cursor + delta, 0), max_idx)
         %{state | diff: %{state.diff | sidebar_cursor: new_cursor, scroll: 0}}
 
@@ -2778,17 +2911,26 @@ defmodule Codrift.TUI do
           | tree: %{
               state.tree
               | entries: entries,
+                all_files: [],
                 initiative_id: id,
                 initiative_name: initiative.name,
                 cursor: 0,
-                expanded: expanded
+                expanded: expanded,
+                filter: SidebarFilter.new()
             }
         }
 
       _ ->
         %{
           state
-          | tree: %{state.tree | entries: [], initiative_id: nil, initiative_name: nil, cursor: 0}
+          | tree: %{
+              state.tree
+              | entries: [],
+                all_files: [],
+                initiative_id: nil,
+                initiative_name: nil,
+                cursor: 0
+            }
         }
     end
   end
@@ -2798,11 +2940,16 @@ defmodule Codrift.TUI do
     case state.tree.initiative_id && Store.get(state.tree.initiative_id) do
       {:ok, initiative} ->
         entries = Tree.build_visible(initiative, state.tree.expanded)
-        max_cursor = max(length(entries) - 1, 0)
+        visible = SidebarFilter.apply_tree(state.tree.filter, state.tree.all_files, entries)
+        max_cursor = max(length(visible) - 1, 0)
 
         %{
           state
-          | tree: %{state.tree | entries: entries, cursor: min(state.tree.cursor, max_cursor)}
+          | tree: %{
+              state.tree
+              | entries: entries,
+                cursor: min(state.tree.cursor, max_cursor)
+            }
         }
 
       _ ->
@@ -2811,13 +2958,14 @@ defmodule Codrift.TUI do
   end
 
   defp move_tree_cursor(state, delta) do
-    max_idx = max(length(state.tree.entries) - 1, 0)
+    visible = filtered_tree_entries(state)
+    max_idx = max(length(visible) - 1, 0)
     new_cursor = min(max(state.tree.cursor + delta, 0), max_idx)
     %{state | tree: %{state.tree | cursor: new_cursor}, main_scroll: 0}
   end
 
   defp tree_toggle_at_cursor(state) do
-    case Enum.at(state.tree.entries, state.tree.cursor) do
+    case tree_entry_at_cursor(state) do
       {:tree_dir, path, _depth, _expanded?} ->
         new_expanded = Tree.toggle_expand(state.tree.expanded, path)
         rebuild_tree(%{state | tree: %{state.tree | expanded: new_expanded}})
@@ -2828,7 +2976,7 @@ defmodule Codrift.TUI do
   end
 
   defp tree_expand_at_cursor(state) do
-    case Enum.at(state.tree.entries, state.tree.cursor) do
+    case tree_entry_at_cursor(state) do
       {:tree_dir, path, _depth, false} ->
         new_expanded = MapSet.put(state.tree.expanded, path)
         rebuild_tree(%{state | tree: %{state.tree | expanded: new_expanded}})
@@ -2839,7 +2987,7 @@ defmodule Codrift.TUI do
   end
 
   defp tree_collapse_at_cursor(state) do
-    case Enum.at(state.tree.entries, state.tree.cursor) do
+    case tree_entry_at_cursor(state) do
       {:tree_dir, path, _depth, true} ->
         new_expanded = MapSet.delete(state.tree.expanded, path)
         rebuild_tree(%{state | tree: %{state.tree | expanded: new_expanded}})
@@ -2860,7 +3008,7 @@ defmodule Codrift.TUI do
   end
 
   defp open_tree_file_editor(state) do
-    case Enum.at(state.tree.entries, state.tree.cursor) do
+    case tree_entry_at_cursor(state) do
       {:tree_file, path, _depth} -> open_in_editor(state, path)
       _ -> flash_status(state, "Select a file to open")
     end
@@ -2883,7 +3031,7 @@ defmodule Codrift.TUI do
   end
 
   defp tree_cursor_parent_path(state) do
-    case Enum.at(state.tree.entries, state.tree.cursor) do
+    case tree_entry_at_cursor(state) do
       {:tree_dir, path, _depth, _expanded?} -> path
       {:tree_file, path, _depth} -> Path.dirname(path)
       nil -> nil
@@ -2891,7 +3039,7 @@ defmodule Codrift.TUI do
   end
 
   defp open_tree_delete_confirm(state) do
-    case Enum.at(state.tree.entries, state.tree.cursor) do
+    case tree_entry_at_cursor(state) do
       {:tree_dir, path, _depth, _expanded?} ->
         %{
           state
@@ -3493,17 +3641,14 @@ defmodule Codrift.TUI do
   end
 
   # Returns the subset of FileDiff structs to display based on the diff
-  # sidebar cursor position.
-  defp diff_files_for_cursor(%{diff: %{sidebar_entries: [], files: dir_diffs}}) do
-    Enum.flat_map(dir_diffs, fn {_, files} -> files end)
-  end
+  # sidebar cursor position, respecting any active filter.
+  defp diff_files_for_cursor(%{diff: %{files: []}}), do: []
 
-  defp diff_files_for_cursor(%{
-         diff: %{sidebar_entries: entries, sidebar_cursor: cursor, files: dir_diffs}
-       }) do
+  defp diff_files_for_cursor(%{diff: %{files: dir_diffs}} = state) do
+    entries = visible_diff_entries(state)
     all_files = Enum.flat_map(dir_diffs, fn {_, files} -> files end)
 
-    case Enum.at(entries, cursor) do
+    case Enum.at(entries, state.diff.sidebar_cursor) do
       {:diff_all, _, _} ->
         all_files
 
@@ -3522,7 +3667,7 @@ defmodule Codrift.TUI do
 
   # Builds the title string for the diff content pane from the active sidebar entry.
   defp diff_content_title(state) do
-    entry = Enum.at(state.diff.sidebar_entries, state.diff.sidebar_cursor)
+    entry = Enum.at(visible_diff_entries(state), state.diff.sidebar_cursor)
     mode_hint = " v:#{next_view_mode(state.diff.view_mode)} *:all "
 
     case entry do
@@ -3536,13 +3681,83 @@ defmodule Codrift.TUI do
   defp next_view_mode(:unified), do: "split"
   defp next_view_mode(:split), do: "unified"
 
+  defp build_sidebar_widgets(%{active_tab: :diff} = state, sidebar_rect) do
+    filter = state.diff.filter
+    filtered = visible_diff_entries(state)
+    cursor = min(state.diff.sidebar_cursor, max(length(filtered) - 1, 0))
+    list = Sidebar.render_diff(filtered, cursor, state.focus, state.theme)
+    with_filter_widget(filter, list, sidebar_rect, state)
+  end
+
+  defp build_sidebar_widgets(%{active_tab: :tree} = state, sidebar_rect) do
+    filter = state.tree.filter
+    filtered = filtered_tree_entries(state)
+    cursor = min(state.tree.cursor, max(length(filtered) - 1, 0))
+    list = render_tree_sidebar(state, filtered, cursor)
+    with_filter_widget(filter, list, sidebar_rect, state)
+  end
+
+  defp build_sidebar_widgets(state, sidebar_rect) do
+    widget =
+      Sidebar.render(
+        state.sidebar.entries,
+        state.sidebar.cursor,
+        state.focus,
+        state.theme,
+        state.sidebar.collapsed_ids
+      )
+
+    [{widget, sidebar_rect}]
+  end
+
+  defp with_filter_widget(filter, list, sidebar_rect, state) do
+    if SidebarFilter.visible?(filter) do
+      [fr, lr] = Layout.split(sidebar_rect, :vertical, [{:length, 3}, {:min, 0}])
+      [{render_sidebar_filter(filter, state.focus, state.theme), fr}, {list, lr}]
+    else
+      [{list, sidebar_rect}]
+    end
+  end
+
   # ── Tree sidebar and content pane ─────────────────────────────────────────────
 
-  defp render_tree_sidebar(state) do
+  defp render_sidebar_filter(filter, focus, theme) do
+    cursor = if filter.active, do: "|", else: ""
+
+    {prefix, hint} =
+      case SidebarFilter.mode(filter) do
+        :fuzzy -> {"/ ", "fuzzy"}
+        :glob -> {"", "glob  e.g. *.test.ts"}
+        :regex -> {"", "regex  e.g. /\\.ex$/"}
+        :tag -> {"", "tag  #test #config #doc #schema #router"}
+      end
+
+    label = if filter.query == "", do: "#{prefix}#{cursor}", else: "#{filter.query}#{cursor}"
+
+    %Paragraph{
+      text: %ExRatatui.Text{
+        lines: [
+          %Line{
+            spans: [
+              %Span{content: label, style: %Style{fg: :yellow}},
+              %Span{content: "  #{hint}", style: %Style{fg: :dark_gray}}
+            ]
+          }
+        ]
+      },
+      block: %Block{
+        borders: [:all],
+        border_type: :rounded,
+        border_style: Styles.pane_border(focus, :sidebar, theme)
+      }
+    }
+  end
+
+  defp render_tree_sidebar(state, entries, cursor) do
     border = Styles.pane_border(state.focus, :sidebar, state.theme)
     title = tree_view_title(state)
 
-    if state.tree.entries == [] do
+    if entries == [] do
       %Paragraph{
         text: %ExRatatui.Text{
           lines: [
@@ -3564,9 +3779,14 @@ defmodule Codrift.TUI do
         }
       }
     else
+      item_fn =
+        if SidebarFilter.filtering?(state.tree.filter),
+          do: &tree_filter_item/1,
+          else: &tree_item/1
+
       %WidgetList{
-        items: Enum.map(state.tree.entries, &tree_item/1),
-        selected: state.tree.cursor,
+        items: Enum.map(entries, item_fn),
+        selected: cursor,
         block: %Block{
           title: title,
           borders: [:all],
@@ -3583,7 +3803,7 @@ defmodule Codrift.TUI do
     border = Styles.pane_border(state.focus, :main, state.theme)
 
     widget =
-      case Enum.at(state.tree.entries, state.tree.cursor) do
+      case Enum.at(filtered_tree_entries(state), state.tree.cursor) do
         {:tree_file, path, _depth} ->
           content =
             case File.read(path) do
@@ -3647,26 +3867,59 @@ defmodule Codrift.TUI do
   @ext_to_language %{
     ".ex" => "elixir",
     ".exs" => "elixir",
+    ".erl" => "erlang",
+    ".hrl" => "erlang",
     ".js" => "javascript",
     ".jsx" => "javascript",
-    ".ts" => "typescript",
-    ".tsx" => "typescript",
+    ".ts" => "javascript",
+    ".tsx" => "javascript",
     ".py" => "python",
     ".rb" => "ruby",
     ".rs" => "rust",
     ".go" => "go",
+    ".java" => "java",
+    ".kt" => "java",
+    ".kts" => "java",
+    ".scala" => "scala",
+    ".cs" => "c#",
+    ".lua" => "lua",
+    ".hs" => "haskell",
+    ".ml" => "ocaml",
+    ".mli" => "ocaml",
+    ".el" => "lisp",
+    ".lisp" => "lisp",
+    ".php" => "php",
+    ".pl" => "perl",
+    ".pm" => "perl",
+    ".r" => "r",
+    ".R" => "r",
+    ".tcl" => "tcl",
+    ".groovy" => "groovy",
+    ".swift" => "javascript",
     ".c" => "c",
     ".h" => "c",
-    ".cpp" => "cpp",
+    ".cpp" => "c++",
+    ".cc" => "c++",
+    ".cxx" => "c++",
+    ".hpp" => "c++",
+    ".m" => "objective-c",
+    ".d" => "d",
     ".json" => "json",
     ".yaml" => "yaml",
     ".yml" => "yaml",
     ".toml" => "toml",
-    ".md" => "md",
-    ".sh" => "bash",
+    ".xml" => "xml",
     ".html" => "html",
     ".css" => "css",
-    ".sql" => "sql"
+    ".scss" => "css",
+    ".md" => "markdown",
+    ".sh" => "bash",
+    ".bash" => "bash",
+    ".zsh" => "bash",
+    ".fish" => "bash",
+    ".sql" => "sql",
+    ".diff" => "diff",
+    ".patch" => "diff"
   }
 
   defp path_to_language(path) do
@@ -3698,6 +3951,20 @@ defmodule Codrift.TUI do
       spans: [
         %Span{content: "#{indent}  – ", style: %Style{fg: :dark_gray}},
         %Span{content: Path.basename(path), style: %Style{fg: :white}}
+      ]
+    }
+  end
+
+  # In filter mode show the relative path (last depth+1 components, capped at 4)
+  # so the user can distinguish files with the same basename.
+  defp tree_filter_item({:tree_file, path, depth}) do
+    n = min(depth + 1, 4)
+    rel = path |> Path.split() |> Enum.take(-n) |> Path.join()
+
+    %Line{
+      spans: [
+        %Span{content: "  – ", style: %Style{fg: :dark_gray}},
+        %Span{content: rel, style: %Style{fg: :white}}
       ]
     }
   end
@@ -4261,7 +4528,10 @@ defmodule Codrift.TUI do
         label: "Edit Context File",
         hint: Keybindings.format(kb.edit_context)
       },
+      # Sidebar filter
+      %{id: :filter_files, label: "Filter Files (Diff / Tree)", hint: "/"},
       # Other
+      %{id: :shortcuts, label: "Keyboard Shortcuts", hint: "?"},
       %{id: :integrations, label: "Integrations (connect services)", hint: ""},
       %{id: :refresh, label: "Refresh", hint: Keybindings.format(kb.refresh)},
       %{id: :theme_picker, label: "Choose Theme", hint: ""},

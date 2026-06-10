@@ -41,6 +41,8 @@ All bindings are configurable in `~/.codrift/keybindings.json`. The `Ctrl+P` com
 
 | Key | Action |
 |-----|--------|
+| `/` | Activate fuzzy file filter |
+| `Esc` | Clear filter (when filter is visible) |
 | `v` | Toggle unified ↔ split diff layout |
 | `r` | Refresh diff |
 | `*` | Reset to show all files |
@@ -52,6 +54,8 @@ All bindings are configurable in `~/.codrift/keybindings.json`. The `Ctrl+P` com
 | `Enter` / `Space` | Expand / collapse directory node |
 | `→` | Expand directory node |
 | `←` | Collapse directory node |
+| `/` | Activate fuzzy file filter |
+| `Esc` | Clear filter (when filter is visible) |
 | `e` | Open file at cursor in `$EDITOR` (embedded PTY) |
 | `n` | Create new file or directory (trailing `/` → directory) |
 | `d` | Delete file or directory (confirmation prompt) |
