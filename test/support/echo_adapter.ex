@@ -21,6 +21,9 @@ defmodule Codrift.Test.EchoAdapter do
   def session_persistable?, do: false
 
   @impl true
+  def tui?, do: false
+
+  @impl true
   def parse_status(output) do
     if String.contains?(output, "READY"), do: :awaiting_input, else: nil
   end

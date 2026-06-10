@@ -23,7 +23,7 @@ All bindings are configurable in `~/.codrift/keybindings.json`. The `Ctrl+P` com
 |-----|--------|
 | `n` | New initiative |
 | `a` | Add directory to current initiative |
-| `s` | Start agent picker (Claude / Aider / Terminal) |
+| `s` | Start agent picker (Claude / Codex / Opencode / Gemini / Copilot / Terminal) |
 | `d` | Delete initiative / stop agent (context-sensitive) |
 | `[` | Cycle initiative status backward (`archived → done → ongoing → planning`) |
 | `]` | Cycle initiative status forward (`planning → ongoing → done → archived`) |

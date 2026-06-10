@@ -16,7 +16,7 @@ Codrift (Application)
       ├── Codrift.AgentSupervisor
       │     DynamicSupervisor — one child per running agent
       │       └── Codrift.AgentProcess
-      │             GenServer + erlexec PTY → external CLI (Claude, Aider, shell)
+      │             GenServer + erlexec PTY → external CLI (Claude, Codex, Opencode, Gemini, Copilot, shell)
       ├── {Task.Supervisor, name: Codrift.TaskSupervisor}
       │     Async agent start tasks and OAuth device-flow polling
       └── Codrift (Francis / Bandit)
@@ -48,7 +48,7 @@ Codrift (Application)
 | `Codrift.Worktree` | Git worktree lifecycle: ensure, remove, branch naming |
 | `Codrift.Memory` | Per-initiative FTS5 knowledge base (SQLite, opens own connection per call) |
 | `Codrift.Diff` | Git diff generation + parser |
-| `Codrift.Agent` | Behaviour for CLI adapters |
+| `Codrift.Agent` | Behaviour for CLI adapters; `available_adapters/0` detects installed CLIs; `tui?/0` callback for Ink/Bubble Tea adapters |
 | `Codrift.Integration` | Behaviour for external service adapters |
 | `Codrift.Integration.HTTP` | `:httpc` wrapper — GET/POST with JSON, no extra deps |
 | `Codrift.Integration.Sync` | Re-fetch item and rewrite `integration.md` |
@@ -57,6 +57,7 @@ Codrift (Application)
 | `Codrift.MCP.Handler` | JSON-RPC 2.0 dispatch |
 | `Codrift.Config.Keybindings` | Loads `~/.codrift/keybindings.json`, merges over defaults |
 | `Codrift.Config.Theme` | Loads `~/.codrift/theme.json`, resolves named themes |
+| `Codrift.Config.Settings` | Reads/writes `~/.codrift/settings.json`; tracks per-adapter start counts for agent picker sort order |
 | `Codrift.TUI.VT100` | Pure Elixir VT100/ANSI terminal emulator |
 | `Codrift.TUI.Sidebar` | Sidebar entry builder + renderer (context and diff modes) |
 | `Codrift.TUI.Modals` | Modal overlay renderer |
@@ -73,7 +74,7 @@ User keystroke
     → handle_event/2
       → Codrift.AgentSupervisor.start_agent/4
         → Codrift.AgentProcess (GenServer)
-          → erlexec PTY → claude / aider / $SHELL
+          → erlexec PTY → claude / codex / opencode / gemini / $SHELL
             → {:agent_output, id, data}
               → TUI subscriber (live update)
               → MCP SSE subscribers (connected agents)

@@ -10,8 +10,12 @@ defmodule Codrift.Agent.Adapters.Claude do
 
   @behaviour Codrift.Agent
 
+  @executable "claude"
+
+  def available?, do: not is_nil(System.find_executable(@executable))
+
   @impl true
-  def cmd, do: System.find_executable("claude") || raise("claude CLI not found in PATH")
+  def cmd, do: System.find_executable(@executable) || raise("claude CLI not found in PATH")
 
   @impl true
   def mode, do: :pty
@@ -55,6 +59,9 @@ defmodule Codrift.Agent.Adapters.Claude do
 
   @impl true
   def session_persistable?, do: true
+
+  @impl true
+  def tui?, do: true
 
   @impl true
   def parse_status(output) do

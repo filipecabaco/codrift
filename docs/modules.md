@@ -46,9 +46,9 @@ API: `search/2`, `add/4`, `delete/2`, `recent/2`, `list/2`, `stats/1`, `valid_ty
 
 ## Codrift.SessionStore
 
-GenServer. SQLite-backed (via Exqlite, at `~/.codrift/codrift.db`). Persists Claude Code session UUIDs per `(initiative_id, dir)` pair so agents can resume via `claude --resume <uuid>` across TUI restarts.
+GenServer. SQLite-backed (Exqlite, `~/.codrift/codrift.db`). Persists session UUIDs per agent across TUI restarts. Rows include adapter name; `adapter` column added via non-destructive `ALTER TABLE` migration.
 
-API: `save/3`, `get/2`, `list_all/0`
+API: `save/5` (agent_id, initiative_id, dir, session_id, adapter_name), `get_by_agent/1`, `list_all/0` → `[{agent_id, initiative_id, dir, session_id, adapter}]`, `list_by_dir/2`, `delete_by_agent/1`, `prune_deleted_initiatives/1`
 
 ## Codrift.AgentProcess
 
@@ -72,15 +72,20 @@ API: `start_agent/4`, `stop_agent/2`, `list_agents/1`, `find_agent/2`, `list_age
 
 ## Codrift.Agent (behaviour)
 
-Callbacks: `cmd/0`, `mode/0`, `args/2`, `args_continue/1`, `env/1`, `parse_status/1`
+Callbacks: `cmd/0`, `mode/0`, `args/2`, `args_continue/1`, `env/1`, `parse_status/1`, `session_persistable?/0`, `tui?/0`
 
 **Adapters:**
 
 | Adapter | Mode | Notes |
 |---------|------|-------|
-| `Codrift.Agent.Adapters.Claude` | `:pty` | Passes `--resume <uuid>` or `--continue` from SessionStore; `--add-dir` for context folder |
-| `Codrift.Agent.Adapters.Terminal` | `:pty` | Opens `$SHELL` (fallback: `bash`); any output → `:awaiting_input` |
-| `Codrift.Agent.Adapters.Aider` | `:interactive` | Plain pipes |
+| `Codrift.Agent.Adapters.Claude` | `:pty` | Session persistence via `--resume`/`--session-id`; `--add-dir` for context folder |
+| `Codrift.Agent.Adapters.Codex` | `:pty` | OpenAI Codex CLI interactive REPL |
+| `Codrift.Agent.Adapters.Opencode` | `:pty` | Bubble Tea TUI; `\e[2J` signals ready |
+| `Codrift.Agent.Adapters.Gemini` | `:pty` | Google Gemini CLI; Ink TUI |
+| `Codrift.Agent.Adapters.Copilot` | `:interactive` | `gh copilot suggest` |
+| `Codrift.Agent.Adapters.Terminal` | `:pty` | Opens `$SHELL`; any output → `:awaiting_input` |
+
+`tui?/0` — returns `true` for Ink/Bubble Tea adapters (Claude, Codex, Opencode, Gemini); drives `chunks_from_last_clear` replay, two-step PTY resize, and re-subscription nudge. `parse_status/1` detects `\e[2J` as universal TUI-ready signal.
 
 **Modes:**
 - `:pty` — erlexec PTY, full terminal emulation
@@ -150,6 +155,14 @@ Pure module. Loads `~/.codrift/theme.json` at TUI start; resolves to a `%Theme{}
 Fields: `border`, `sidebar_highlight`, `diff_border`, `syntax_theme`
 
 Named themes: `default`, `dracula`, `nord`, `solarized`, `tokyo_night`. Unknown names and missing files fall back to `default`.
+
+## Codrift.Config.Settings
+
+Pure module. Reads/writes `~/.codrift/settings.json` (Elixir 1.18+ JSON module).
+
+Tracks per-adapter start counts for sorting the agent picker modal (most-used first).
+
+API: `adapter_start_counts/0`, `increment_adapter_start/1`
 
 ## Codrift.Integration (behaviour)
 

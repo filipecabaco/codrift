@@ -9,7 +9,7 @@ defmodule Codrift.AgentProcess do
     Code requires this to avoid switching to `--print` mode.
 
   - `:interactive` — long-running Port with plain pipes (no PTY). Suitable
-    for CLIs like Aider that work without a TTY.
+    for CLIs that work without a TTY.
 
   - `:once` — spawns a fresh Port per message with the text as a trailing
     CLI argument. Uses `args_continue/1` for subsequent turns.
@@ -118,11 +118,8 @@ defmodule Codrift.AgentProcess do
     # never need to scan the filesystem after startup to discover which UUID
     # was created.
     session_id =
-      if adapter.session_persistable?() do
-        ensure_session_id(id, initiative_id, dir)
-      else
-        nil
-      end
+      if adapter.session_persistable?(),
+        do: ensure_session_id(id, initiative_id, dir, adapter)
 
     context_opts = [session_id: session_id] ++ initiative_context_opts(initiative_id)
 
@@ -374,14 +371,22 @@ defmodule Codrift.AgentProcess do
   # Returns the stored session UUID for this agent, or generates and stores a
   # new one. Called before the process launches so the UUID is always known
   # upfront and can be passed directly as --session-id or --resume.
-  defp ensure_session_id(agent_id, initiative_id, dir) do
+  defp ensure_session_id(agent_id, initiative_id, dir, adapter) do
     case Codrift.SessionStore.get_by_agent(agent_id) do
       {:ok, uuid} ->
         uuid
 
       {:error, :not_found} ->
         uuid = generate_uuid()
-        Codrift.SessionStore.save(agent_id, initiative_id, dir, uuid)
+
+        Codrift.SessionStore.save(
+          agent_id,
+          initiative_id,
+          dir,
+          uuid,
+          Codrift.Agent.adapter_name(adapter)
+        )
+
         uuid
     end
   end
@@ -400,7 +405,7 @@ defmodule Codrift.AgentProcess do
   # opts for adapters:
   #
   #   context_dir:   the context folder path (for --add-dir in Claude adapter)
-  #   context_files: list of absolute file paths (for --read in Aider, etc.)
+  #   context_files: list of absolute file paths passed to adapters that support them
   defp initiative_context_opts(initiative_id) do
     ctx_dir = Store.context_path(initiative_id)
 

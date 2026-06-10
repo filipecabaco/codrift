@@ -6,6 +6,7 @@ defmodule Codrift.TUI.Modals do
   main layout. Delegates layout math to `Codrift.TUI.Layout`.
   """
 
+  alias Codrift.Agent
   alias Codrift.Config.Theme
   alias Codrift.OAuth.Config, as: OAuthConfig
   alias Codrift.TUI.Layout
@@ -50,6 +51,8 @@ defmodule Codrift.TUI.Modals do
 
   def render(%{modal: %{type: :promote_name}} = state, frame),
     do: promote_name(state, frame)
+
+  def render(%{modal: %{type: :agent_picker}} = state, frame), do: agent_picker(state, frame)
 
   @doc """
   Filters `actions` whose label contains `query` (case-insensitive).
@@ -253,6 +256,27 @@ defmodule Codrift.TUI.Modals do
       {input(state.modal.input, "e.g. README.md  plan.md  context.txt"),
        %{inner | y: inner.y + 3, height: 1}},
       {hint("Enter: create  Esc: cancel"), %{inner | y: inner.y + 5, height: 1}}
+    ]
+  end
+
+  defp agent_picker(state, frame) do
+    adapters = state.modal.context
+    height = min(length(adapters) + 4, 15)
+    rect = Layout.center_rect(frame, 40, height)
+    inner = Layout.inset(rect, 1)
+
+    items = Enum.map(adapters, &Agent.adapter_name/1)
+
+    [
+      {%Clear{}, rect},
+      {bordered(rect, " Start Agent ", :green), rect},
+      {%WidgetList{
+         items: items,
+         selected: state.modal.agent_picker.cursor,
+         highlight_style: %Style{fg: :black, bg: :cyan, modifiers: [:bold]},
+         highlight_symbol: "▶ "
+       }, %{inner | height: max(inner.height - 1, 1)}},
+      {hint("Enter: start  Esc: cancel"), %{inner | y: inner.y + inner.height - 1, height: 1}}
     ]
   end
 

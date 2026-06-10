@@ -41,7 +41,7 @@ defmodule Codrift.TUI do
   | `Ctrl+V` | Toggle paste mode — Enter inserts `\n` instead of submitting |
   | `n` | New initiative |
   | `a` | Add directory (context-sensitive) |
-  | `s` | Start Claude agent (context-sensitive) |
+  | `s` | Start agent (context-sensitive; picker when multiple CLIs detected) |
   | `d` | Delete / remove / stop (context-sensitive with confirmation) |
   | `Ctrl+P` | Command palette |
   | `Ctrl+B` | Toggle sidebar (collapse / expand) |
@@ -76,9 +76,10 @@ defmodule Codrift.TUI do
   alias ExRatatui.Widgets.List, as: WidgetList
   alias ExRatatui.Widgets.Paragraph
 
-  alias Codrift.Agent.Adapters.{Aider, Claude, Terminal}
+  alias Codrift.Agent
+  alias Codrift.Agent.Adapters.{Claude, Terminal}
   alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative, Paths}
-  alias Codrift.Config.{Keybindings, Theme}
+  alias Codrift.Config.{Keybindings, Settings, Theme}
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.OAuth.Config, as: OAuthConfig
   alias Codrift.Worktree
@@ -112,6 +113,7 @@ defmodule Codrift.TUI do
           | :service_auth_url
           | :service_device_flow
           | :service_setup
+          | :agent_picker
   @type tab :: :context | :diff | :tree
 
   defstruct [
@@ -531,6 +533,22 @@ defmodule Codrift.TUI do
        | modal: %{state.modal | theme_picker: %{state.modal.theme_picker | cursor: cursor}},
          theme: theme
      }}
+  end
+
+  def handle_event(%Key{code: "up", kind: "press"}, %{modal: %{type: :agent_picker}} = state) do
+    cursor = max(state.modal.agent_picker.cursor - 1, 0)
+    {:noreply, %{state | modal: %{state.modal | agent_picker: %{cursor: cursor}}}}
+  end
+
+  def handle_event(%Key{code: "down", kind: "press"}, %{modal: %{type: :agent_picker}} = state) do
+    max_idx = length(state.modal.context) - 1
+    cursor = min(state.modal.agent_picker.cursor + 1, max_idx)
+    {:noreply, %{state | modal: %{state.modal | agent_picker: %{cursor: cursor}}}}
+  end
+
+  def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :agent_picker}} = state) do
+    adapter = Enum.at(state.modal.context, state.modal.agent_picker.cursor)
+    {:noreply, start_agent_at_cursor(%{state | modal: %{state.modal | type: :none}}, adapter)}
   end
 
   # Text-input key routing — ADDING A MODAL CHECKLIST
@@ -994,12 +1012,13 @@ defmodule Codrift.TUI do
   defp dispatch_char(action, _code, _focus, %{active_tab: :tree} = state),
     do: dispatch_sidebar_action(action, state)
 
-  # Sidebar structural actions work regardless of which pane has focus.
-  defp dispatch_char(:toggle_collapse, _code, _focus, state),
-    do: {:noreply, toggle_collapse_at_cursor(state)}
-
+  # PTY forward takes priority over all sidebar actions when main is focused.
   defp dispatch_char(_action, code, true, %{selection: %{agent_mode: :pty}} = state),
     do: {:noreply, forward_raw(state, code)}
+
+  # Sidebar structural actions — only when sidebar has focus (main PTY handled above).
+  defp dispatch_char(:toggle_collapse, _code, _focus, state),
+    do: {:noreply, toggle_collapse_at_cursor(state)}
 
   defp dispatch_char(:edit_context, code, true, state) do
     case state.cursor_info do
@@ -1067,7 +1086,7 @@ defmodule Codrift.TUI do
     do: {:noreply, open_add_dir_modal(state)}
 
   defp dispatch_sidebar_action(:start_agent, state),
-    do: {:noreply, start_agent_at_cursor(state, Claude)}
+    do: {:noreply, maybe_open_agent_picker(state)}
 
   defp dispatch_sidebar_action(:start_terminal, state),
     do: {:noreply, start_agent_at_cursor(state, Terminal)}
@@ -1369,21 +1388,23 @@ defmodule Codrift.TUI do
     # Group by slot, keep one agent ID per slot, delete the rest.
     {to_start, to_delete} =
       sessions
-      |> Enum.group_by(fn {_agent_id, initiative_id, dir, _uuid} -> {initiative_id, dir} end)
+      |> Enum.group_by(fn {_agent_id, initiative_id, dir, _uuid, _adapter} ->
+        {initiative_id, dir}
+      end)
       |> Enum.reduce({[], []}, fn {_slot, entries}, {keep, drop} ->
         [head | tail] = entries
         {[head | keep], tail ++ drop}
       end)
 
-    Enum.each(to_delete, fn {agent_id, _initiative_id, _dir, _uuid} ->
+    Enum.each(to_delete, fn {agent_id, _initiative_id, _dir, _uuid, _adapter} ->
       Codrift.SessionStore.delete_by_agent(agent_id)
     end)
 
     new_state =
-      Enum.reduce(to_start, state, fn {agent_id, initiative_id, dir, _uuid}, acc ->
-        case Store.get(initiative_id) do
-          {:ok, _initiative} ->
-            do_start_agent(acc, initiative_id, dir, Claude, agent_id)
+      Enum.reduce(to_start, state, fn {agent_id, initiative_id, dir, _uuid, adapter_name}, acc ->
+        case {Store.get(initiative_id), Agent.module_from_name(adapter_name)} do
+          {{:ok, _initiative}, adapter} when not is_nil(adapter) ->
+            do_start_agent(acc, initiative_id, dir, adapter, agent_id)
 
           _ ->
             acc
@@ -1423,11 +1444,15 @@ defmodule Codrift.TUI do
       try do
         with {:ok, pid} <- AgentSupervisor.find_agent(agent_id),
              status = AgentProcess.status(pid),
-             # Only persist Claude sessions — Terminal and other adapters don't
-             # use --resume and should never be auto-restarted on next launch.
-             true <- status.adapter == Claude,
+             true <- status.adapter.session_persistable?(),
              uuid when not is_nil(uuid) <- AgentProcess.session_uuid(pid) do
-          Codrift.SessionStore.save(agent_id, status.initiative_id, status.dir, uuid)
+          Codrift.SessionStore.save(
+            agent_id,
+            status.initiative_id,
+            status.dir,
+            uuid,
+            Agent.adapter_name(status.adapter)
+          )
         end
       catch
         :exit, _ -> :ok
@@ -2096,14 +2121,11 @@ defmodule Codrift.TUI do
   defp do_palette_action(:delete_current, state),
     do: open_delete_confirm(%{state | modal: %{state.modal | type: :none}})
 
-  defp do_palette_action(:start_claude, state),
-    do: start_agent_at_cursor(%{state | modal: %{state.modal | type: :none}}, Claude)
+  defp do_palette_action(:start_agent, state),
+    do: {:noreply, maybe_open_agent_picker(%{state | modal: %{state.modal | type: :none}})}
 
   defp do_palette_action(:start_terminal, state),
     do: start_agent_at_cursor(%{state | modal: %{state.modal | type: :none}}, Terminal)
-
-  defp do_palette_action(:start_aider, state),
-    do: start_agent_at_cursor(%{state | modal: %{state.modal | type: :none}}, Aider)
 
   defp do_palette_action(:new_context_file, state),
     do: open_new_context_file_modal(%{state | modal: %{state.modal | type: :none}})
@@ -2446,10 +2468,12 @@ defmodule Codrift.TUI do
           {w, h} = state.pane_size
           existing = pid |> AgentProcess.recent_output(200) |> Enum.reverse()
 
-          # Claude Code (Ink): only replay from last \e[2J anchor — IL/DL need scroll-region context.
+          # Ink/Bubble Tea TUIs: only replay from last \e[2J anchor — IL/DL need scroll-region context.
           # Terminal/shell: replay all output — shells never send \e[2J to draw their prompt.
           replay =
-            if status.adapter == Claude, do: chunks_from_last_clear(existing), else: existing
+            if status.adapter.tui?(),
+              do: chunks_from_last_clear(existing),
+              else: existing
 
           new_refs = setup_agent_refs(state, pid, agent_id, replay, status.adapter, {w, h})
 
@@ -2481,30 +2505,33 @@ defmodule Codrift.TUI do
     end
   end
 
-  # Claude Code (Ink renderer): two-step resize forces a full \e[2J repaint.
+  # TUI adapters (tui?/0 = true): two-step resize forces a full \e[2J repaint.
   # A nudge fires at 600 ms only when there's no existing output (slow-starting agents).
   # Cancel stale timers from any previous subscription first.
-  # Terminal/shell agents: a single resize suffices — two-step causes extra shell prompts.
-  defp setup_agent_refs(state, pid, agent_id, replay, Claude, {w, h}) do
-    if state.refs.nudge, do: Process.cancel_timer(state.refs.nudge)
-    if state.refs.restore, do: Process.cancel_timer(state.refs.restore)
-    AgentProcess.resize(pid, max(w - 1, 1), h)
-    restore_ref = Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
+  # Terminal/shell adapters: a single resize suffices — two-step causes extra shell prompts.
+  defp setup_agent_refs(state, pid, agent_id, replay, adapter, {w, h}) do
+    if adapter.tui?() do
+      if state.refs.nudge, do: Process.cancel_timer(state.refs.nudge)
+      if state.refs.restore, do: Process.cancel_timer(state.refs.restore)
+      AgentProcess.resize(pid, max(w - 1, 1), h)
+      restore_ref = Process.send_after(self(), {:restore_agent_size, agent_id, w, h}, 150)
 
-    nudge_ref =
-      if Enum.empty?(replay), do: Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
+      nudge_ref =
+        if Enum.empty?(replay),
+          do: Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 600)
 
-    %{state.refs | nudge: nudge_ref, restore: restore_ref}
+      %{state.refs | nudge: nudge_ref, restore: restore_ref}
+    else
+      AgentProcess.resize(pid, w, h)
+      state.refs
+    end
   end
 
-  defp setup_agent_refs(state, pid, _agent_id, _replay, _adapter, {w, h}) do
-    AgentProcess.resize(pid, w, h)
-    state.refs
+  # TUI adapters: content starts at row 0 — no leading blank lines.
+  # Terminal/shell adapters: zsh/starship emit \n before each prompt, so skip to first content.
+  defp agent_initial_scroll(adapter, screen) do
+    if adapter.tui?(), do: 0, else: VT100.first_content_row(screen)
   end
-
-  # For Terminal agents, zsh/starship emit \n before each prompt, leaving row 0 blank on replay.
-  defp agent_initial_scroll(Claude, _screen), do: 0
-  defp agent_initial_scroll(_adapter, screen), do: VT100.first_content_row(screen)
 
   defp start_agent_at_cursor(state, adapter) do
     case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
@@ -2536,7 +2563,29 @@ defmodule Codrift.TUI do
     end
   end
 
+  defp maybe_open_agent_picker(state) do
+    case Agent.available_adapters() do
+      [single] ->
+        start_agent_at_cursor(state, single)
+
+      adapters ->
+        counts = Settings.adapter_start_counts()
+        sorted = Enum.sort_by(adapters, &Map.get(counts, Agent.adapter_name(&1), 0), :desc)
+
+        %{
+          state
+          | modal: %{
+              state.modal
+              | type: :agent_picker,
+                context: sorted,
+                agent_picker: %{cursor: 0}
+            }
+        }
+    end
+  end
+
   defp do_start_agent(state, initiative_id, dir, adapter, agent_id \\ nil) do
+    Settings.increment_adapter_start(adapter)
     tui = self()
     {cols, rows} = state.pane_size
     opts = if agent_id, do: [id: agent_id], else: []
@@ -3698,11 +3747,17 @@ defmodule Codrift.TUI do
   defp forward_raw(state, data) do
     screen = Map.get(state.agents.screens, state.selection.agent_id)
 
-    # Claude Code sends \e[?25l (hide cursor) while repainting and \e[?25h when
-    # done. Forwarding keystrokes mid-repaint lands them at cursor_row=0 (the
-    # \e[H from the clear), not at the input line. Drop input until the cursor
-    # is visible again — repaints complete in < 200 ms so no keys are lost.
-    if screen == nil or screen.cursor_visible do
+    # Claude Code hides the cursor (\e[?25l) during Ink repaints and shows it
+    # (\e[?25h) when done. Forwarding mid-repaint lands keystrokes at the wrong
+    # row. Drop input for Claude only until the cursor is visible again —
+    # repaints complete in < 200 ms so no keys are lost.
+    # Other TUI adapters (Gemini, Codex, Opencode) hide the cursor as part of
+    # normal UI (dialogs, auth prompts) and must always receive input.
+    adapter = lookup_adapter(state, state.selection.agent_id)
+
+    claude_repaint_guard = adapter == Claude and screen != nil and not screen.cursor_visible
+
+    unless claude_repaint_guard do
       with id when not is_nil(id) <- state.selection.agent_id,
            {:ok, pid} <- AgentSupervisor.find_agent(id) do
         AgentProcess.send_raw(pid, data)
@@ -3710,6 +3765,15 @@ defmodule Codrift.TUI do
     end
 
     state
+  end
+
+  defp lookup_adapter(_state, nil), do: nil
+
+  defp lookup_adapter(_state, agent_id) do
+    case AgentSupervisor.find_agent(agent_id) do
+      {:ok, pid} -> AgentProcess.status(pid).adapter
+      _ -> nil
+    end
   end
 
   defp send_agent_input(state) do
@@ -3743,7 +3807,7 @@ defmodule Codrift.TUI do
 
         n  — New initiative (blank or imported from a service)
         a  — Add a directory to the selected initiative
-        s  — Start a Claude agent in the selected directory
+        s  — Start an agent in the selected directory
 
       An initiative groups one or more directories under a shared context.
       Create one, add a directory, then start an agent to begin.
@@ -3954,7 +4018,7 @@ defmodule Codrift.TUI do
       {:ok, pid} ->
         agent_status = AgentProcess.status(pid)
 
-        if agent_status.adapter == Claude do
+        if agent_status.adapter.tui?() do
           {w, h} = state.pane_size
           Process.send_after(self(), {:nudge_agent, agent_id, w, h}, 80)
         end
@@ -4180,13 +4244,12 @@ defmodule Codrift.TUI do
       %{id: :toggle_dir_worktree, label: "Toggle Worktree for Directory", hint: "W"},
       %{id: :delete_current, label: "Delete / Stop Current", hint: Keybindings.format(kb.delete)},
       # Agents
-      %{id: :start_claude, label: "Start Claude Agent", hint: Keybindings.format(kb.start_agent)},
+      %{id: :start_agent, label: "Start Agent", hint: Keybindings.format(kb.start_agent)},
       %{
         id: :start_terminal,
         label: "Open Terminal Here",
         hint: Keybindings.format(kb.start_terminal)
       },
-      %{id: :start_aider, label: "Start Aider Agent", hint: ""},
       # Context files
       %{
         id: :new_context_file,

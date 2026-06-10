@@ -3,17 +3,19 @@ defmodule Codrift.CLI.MCP do
   CLI implementation for MCP server registration.
 
   The Mix task (`mix codrift.mcp.install`) delegates to this module, and the
-  release command (`codrift mcp install`) calls it via `eval`.  There is a
-  single source of logic in one place.
+  release command (`codrift mcp install`) calls it via `eval`.
 
   ## Usage
 
-      codrift mcp install
-      codrift mcp install --port=7437
+      codrift mcp install [--port=7437]
 
-  Attempts to run `claude mcp add` to register the Codrift SSE endpoint.
-  Falls back to printing the manual install command when the Claude CLI is not
-  found or the command fails.
+  Registers the Codrift SSE endpoint with every detected AI CLI:
+
+    - **Claude Code** — `claude mcp add --transport sse`
+    - **Gemini CLI** — merges `mcpServers` into `~/.gemini/settings.json`
+    - **Opencode** — merges `mcp` block into `~/.config/opencode/opencode.jsonc`
+    - **Codex** — prints manual instructions (no MCP config file support yet)
+    - **Copilot** — prints manual instructions (gh copilot has no MCP config)
   """
 
   @server_name "codrift"
@@ -28,8 +30,7 @@ defmodule Codrift.CLI.MCP do
     Usage:
       codrift mcp install [--port=<port>]
 
-    Registers the Codrift MCP server with Claude Code (or prints the manual
-    install command if the Claude CLI is not found).
+    Registers the Codrift MCP server with all detected AI CLIs.
     """)
   end
 
@@ -38,41 +39,179 @@ defmodule Codrift.CLI.MCP do
   defp install(args) do
     port = parse_port(args)
     sse_url = "http://localhost:#{port}/mcp/sse"
-    install_cmd = "claude mcp add #{@server_name} --transport sse #{sse_url}"
 
+    results = [
+      install_claude(sse_url),
+      install_gemini(port, sse_url),
+      install_opencode(port, sse_url),
+      install_codex(sse_url),
+      install_copilot(sse_url)
+    ]
+
+    if Enum.all?(results, &(&1 == :skip)) do
+      IO.puts("""
+      No supported AI CLIs found in PATH.
+
+      Point any MCP-compatible client at the SSE endpoint:
+
+          #{sse_url}
+      """)
+    end
+  end
+
+  # ── Per-client installers ────────────────────────────────────────────────────
+
+  defp install_claude(sse_url) do
     case System.find_executable("claude") do
       nil ->
-        IO.puts("""
-        Claude CLI not found in PATH. Add the MCP server manually:
+        :skip
 
-            #{install_cmd}
-
-        Or for other MCP clients, point them at the SSE endpoint:
-
-            #{sse_url}
-        """)
-
-      _claude ->
-        IO.puts("Registering Codrift MCP server with Claude Code...")
+      _bin ->
+        IO.puts("Claude Code: registering via `claude mcp add`...")
 
         case System.cmd("claude", ["mcp", "add", @server_name, "--transport", "sse", sse_url],
                stderr_to_stdout: true
              ) do
           {output, 0} ->
-            IO.puts("Done. #{String.trim(output)}")
-            IO.puts("\nVerify with: claude mcp list")
+            IO.puts("  ✓ #{String.trim(output)}")
+            :ok
 
           {output, code} ->
-            IO.puts(:stderr, "claude mcp add exited #{code}: #{String.trim(output)}")
-            IO.puts("\nManual install:\n\n    #{install_cmd}\n")
+            IO.puts("  ✗ claude mcp add exited #{code}: #{String.trim(output)}")
+            IO.puts("    Manual: claude mcp add #{@server_name} --transport sse #{sse_url}")
+            :error
         end
     end
   end
+
+  defp install_gemini(_port, sse_url) do
+    case System.find_executable("gemini") do
+      nil ->
+        :skip
+
+      _bin ->
+        path = Path.expand("~/.gemini/settings.json")
+        IO.puts("Gemini CLI: updating #{path}...")
+
+        current =
+          case File.read(path) do
+            {:ok, content} -> JSON.decode!(content)
+            {:error, _} -> %{}
+          end
+
+        mcp_entry = %{
+          "type" => "sse",
+          "url" => sse_url
+        }
+
+        updated =
+          Map.update(current, "mcpServers", %{@server_name => mcp_entry}, fn servers ->
+            Map.put(servers, @server_name, mcp_entry)
+          end)
+
+        path |> Path.dirname() |> File.mkdir_p!()
+
+        case File.write(path, JSON.encode!(updated)) do
+          :ok ->
+            IO.puts("  ✓ Added #{@server_name} to mcpServers")
+            :ok
+
+          {:error, reason} ->
+            IO.puts("  ✗ Could not write #{path}: #{reason}")
+            :error
+        end
+    end
+  end
+
+  defp install_opencode(_port, sse_url) do
+    case System.find_executable("opencode") do
+      nil ->
+        :skip
+
+      _bin ->
+        path = Path.expand("~/.config/opencode/opencode.jsonc")
+        IO.puts("Opencode: updating #{path}...")
+
+        current =
+          case File.read(path) do
+            {:ok, content} ->
+              content |> strip_jsonc_comments() |> JSON.decode!()
+
+            {:error, _} ->
+              %{"$schema" => "https://opencode.ai/config.json"}
+          end
+
+        mcp_entry = %{
+          "type" => "sse",
+          "url" => sse_url
+        }
+
+        updated =
+          Map.update(current, "mcp", %{@server_name => mcp_entry}, fn servers ->
+            Map.put(servers, @server_name, mcp_entry)
+          end)
+
+        path |> Path.dirname() |> File.mkdir_p!()
+
+        case File.write(path, JSON.encode!(updated)) do
+          :ok ->
+            IO.puts("  ✓ Added #{@server_name} to mcp servers")
+            :ok
+
+          {:error, reason} ->
+            IO.puts("  ✗ Could not write #{path}: #{reason}")
+            :error
+        end
+    end
+  end
+
+  defp install_codex(sse_url) do
+    case System.find_executable("codex") do
+      nil ->
+        :skip
+
+      _bin ->
+        IO.puts("""
+        Codex CLI: no config-file MCP support detected.
+          Point it at the SSE endpoint manually when prompted:
+
+              #{sse_url}
+        """)
+
+        :ok
+    end
+  end
+
+  defp install_copilot(sse_url) do
+    case System.find_executable("gh") do
+      nil ->
+        :skip
+
+      _bin ->
+        IO.puts("""
+        GitHub Copilot (gh): no MCP config file support.
+          Point it at the SSE endpoint manually:
+
+              #{sse_url}
+        """)
+
+        :ok
+    end
+  end
+
+  # ── Helpers ──────────────────────────────────────────────────────────────────
 
   defp parse_port(args) do
     case Enum.find(args, &String.starts_with?(&1, "--port=")) do
       nil -> @default_port
       flag -> flag |> String.slice(7..-1//1) |> String.to_integer()
     end
+  end
+
+  # Strip `//` line comments so JSONC files can be parsed as plain JSON.
+  defp strip_jsonc_comments(content) do
+    content
+    |> String.split("\n")
+    |> Enum.map_join("\n", &Regex.replace(~r|//.*$|, &1, ""))
   end
 end

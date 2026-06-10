@@ -11,7 +11,7 @@ defmodule Codrift.Agent do
     all work. Required for Claude Code which detects TTY presence.
 
   - `:interactive` — long-running process with plain pipes (no PTY). Text
-    is sent to stdin. Suitable for CLIs that work without a TTY (Aider).
+    is sent to stdin. Suitable for CLIs that work without a TTY.
 
   - `:once` — a fresh process per message; text is a trailing CLI argument.
     Suitable for `claude --print --continue`.
@@ -56,8 +56,8 @@ defmodule Codrift.Agent do
   - `context_files: [path]` — list of absolute paths to context files
   - `session_id: uuid`    — Claude Code session UUID for `--resume`
 
-  Adapters that understand initiative context (Claude, Aider) should use these to
-  inject context at startup via their native mechanism (`--add-dir`, `--read`, etc.).
+  Adapters that understand initiative context should use these to inject context
+  at startup via their native mechanism.
   """
   @callback args(dir :: String.t(), opts :: keyword()) :: [String.t()]
 
@@ -87,6 +87,29 @@ defmodule Codrift.Agent do
   """
   @callback session_persistable?() :: boolean()
 
-  @doc ~S[Returns the human-readable adapter name (e.g. "claude", "aider", "terminal").]
+  @doc """
+  Returns `true` for full-screen TUI adapters (Ink, Bubble Tea) that require
+  `chunks_from_last_clear` replay and a two-step PTY resize to force a repaint.
+  Returns `false` for plain interactive CLIs and shell adapters.
+  """
+  @callback tui?() :: boolean()
+
+  @doc ~S[Returns the human-readable adapter name (e.g. "claude", "codex", "terminal").]
   def adapter_name(module), do: module |> Module.split() |> List.last() |> String.downcase()
+
+  @all_adapters [
+    Codrift.Agent.Adapters.Claude,
+    Codrift.Agent.Adapters.Codex,
+    Codrift.Agent.Adapters.Opencode,
+    Codrift.Agent.Adapters.Gemini,
+    Codrift.Agent.Adapters.Copilot
+  ]
+
+  @doc "Returns all adapter modules whose CLI executable is present in PATH."
+  def available_adapters, do: Enum.filter(@all_adapters, & &1.available?())
+
+  @doc "Resolves an adapter name string back to its module. Returns `nil` if unknown."
+  def module_from_name(name) do
+    Enum.find(@all_adapters, fn mod -> adapter_name(mod) == name end)
+  end
 end

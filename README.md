@@ -2,7 +2,7 @@
 
 > Drive multiple AI coding agents across your projects from a single keyboard-driven terminal.
 
-Codrift is a TUI for running Claude Code, Aider, and shell agents side-by-side. You group directories into **initiatives**, launch agents against each one, watch their output live, review diffs, and let them share knowledge through a built-in memory store — all without leaving the terminal.
+Codrift is a TUI for running Claude Code, Codex, Opencode, Gemini, Copilot, and shell agents side-by-side. You group directories into **initiatives**, launch agents against each one, watch their output live, review diffs, and let them share knowledge through a built-in memory store — all without leaving the terminal.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -24,7 +24,7 @@ Codrift is a TUI for running Claude Code, Aider, and shell agents side-by-side. 
 ## Features
 
 - **Full terminal UI** — sidebar + agent panes, keyboard-driven, mouse support, no browser needed
-- **Multiple agents per directory** — Claude Code, Aider, and a raw terminal shell, all running simultaneously
+- **Multiple agents per directory** — Claude Code, Codex, Opencode, Gemini, Copilot, and a raw terminal shell, all running simultaneously
 - **Git worktrees** — each directory gets an isolated branch; agents never touch your main checkout
 - **Live diff view** — colour-coded split/unified diff per initiative, updated as agents work
 - **Tree view** — mode `3` shows a file-tree browser with syntax-highlighted previews; `e` opens any file in your `$EDITOR` inside the TUI
@@ -127,7 +127,7 @@ While the TUI is running, an MCP server listens at `http://localhost:7437/mcp/ss
 |-----|--------|
 | `n` | New initiative (or new file/dir in tree mode) |
 | `a` | Add directory to initiative |
-| `s` | Start agent (Claude / Aider / Terminal) |
+| `s` | Start agent (Claude / Codex / Opencode / Gemini / Copilot / Terminal) |
 | `d` | Delete or stop (context-sensitive) |
 | `W` | Toggle git worktree for current directory |
 | `[` / `]` | Cycle initiative status |
@@ -227,7 +227,7 @@ Codrift (Application)
       ├── Codrift.SessionStore                — GenServer, SQLite session UUIDs
       ├── Codrift.OAuth.StateStore            — GenServer, in-memory PKCE state
       ├── Codrift.AgentSupervisor             — DynamicSupervisor, one child per agent
-      │   └── Codrift.AgentProcess            — GenServer + erlexec PTY → Claude / Aider / shell
+      │   └── Codrift.AgentProcess            — GenServer + erlexec PTY → Claude / Codex / Opencode / Gemini / shell
       ├── {Task.Supervisor, Codrift.TaskSupervisor}
       └── Codrift (Francis / Bandit)          — HTTP + SSE on port 7437
 ```

@@ -35,8 +35,6 @@ defmodule Codrift.MCP.Handler do
     - `sync_initiative_context` — re-fetch and overwrite the integration context file
   """
 
-  alias Codrift.Agent.Adapters.Aider
-  alias Codrift.Agent.Adapters.Claude
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.OAuth.Config, as: OAuthConfig
 
@@ -346,9 +344,9 @@ defmodule Codrift.MCP.Handler do
     end
   end
 
-  defp adapter_module("claude"), do: Claude
-  defp adapter_module("aider"), do: Aider
-  defp adapter_module(name), do: raise("unknown adapter: #{name}")
+  defp adapter_module(name) do
+    Codrift.Agent.module_from_name(name) || raise("unknown adapter: #{name}")
+  end
 
   # Clamps memory_recent limit to 1..100.  Accepts integers only; any other
   # type (float, nil) falls back to the default of 20.
@@ -445,7 +443,10 @@ defmodule Codrift.MCP.Handler do
           "properties" => %{
             "initiative_id" => %{"type" => "string"},
             "dir" => %{"type" => "string"},
-            "adapter" => %{"type" => "string", "enum" => ["claude", "aider"]}
+            "adapter" => %{
+              "type" => "string",
+              "enum" => ["claude", "codex", "opencode", "gemini", "copilot"]
+            }
           },
           "required" => ["initiative_id", "dir", "adapter"]
         }

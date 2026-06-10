@@ -1,20 +1,20 @@
 defmodule Codrift.SessionStore do
   @moduledoc """
-  Persists Claude Code session IDs to SQLite so sessions can be resumed
-  across TUI restarts via `claude --resume <session-id>`.
+  Persists agent session IDs to SQLite so sessions can be resumed across TUI
+  restarts for adapters that support it (Claude via `--resume`, opencode via `-s`).
 
   Table schema:
     claude_sessions (agent_id TEXT PRIMARY KEY, initiative_id TEXT, dir TEXT,
-                     session_id TEXT, updated_at TEXT)
+                     session_id TEXT, adapter TEXT, updated_at TEXT)
 
-  Each agent gets its own row, allowing multiple Claude agents in the same
-  directory to all resume independently on the next TUI launch.
+  Each agent gets its own row, allowing multiple agents in the same directory
+  to all resume independently on the next TUI launch.
 
   ## Migration
 
-  If the database contains the old schema (keyed by `(initiative_id, dir)`
-  with no `agent_id` column), the table is dropped and recreated on startup.
-  Sessions are considered ephemeral enough that a one-time loss is acceptable.
+  The `adapter` column is added via `ALTER TABLE` on first boot if absent (the
+  column defaults to `"claude"` so existing rows are preserved). The older schema
+  migration (no `agent_id` column) drops and recreates the table.
   """
 
   use GenServer
@@ -25,9 +25,9 @@ defmodule Codrift.SessionStore do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc "Upserts a session ID keyed by agent ID."
-  def save(agent_id, initiative_id, dir, session_id, server \\ __MODULE__) do
-    GenServer.call(server, {:save, agent_id, initiative_id, dir, session_id})
+  @doc "Upserts a session record keyed by agent ID."
+  def save(agent_id, initiative_id, dir, session_id, adapter_name, server \\ __MODULE__) do
+    GenServer.call(server, {:save, agent_id, initiative_id, dir, session_id, adapter_name})
   end
 
   @doc "Looks up a saved session ID by agent ID. Returns `{:ok, session_id}` or `{:error, :not_found}`."
@@ -35,7 +35,7 @@ defmodule Codrift.SessionStore do
     GenServer.call(server, {:get_by_agent, agent_id})
   end
 
-  @doc "Returns all saved sessions as `[{agent_id, initiative_id, dir, session_id}]`."
+  @doc "Returns all saved sessions as `[{agent_id, initiative_id, dir, session_id, adapter}]`."
   def list_all(server \\ __MODULE__) do
     GenServer.call(server, :list_all)
   end
@@ -71,15 +71,22 @@ defmodule Codrift.SessionStore do
   end
 
   @impl true
-  def handle_call({:save, agent_id, initiative_id, dir, session_id}, _from, %{db: db} = state) do
+  def handle_call(
+        {:save, agent_id, initiative_id, dir, session_id, adapter_name},
+        _from,
+        %{db: db} = state
+      ) do
     {:ok, stmt} =
       Exqlite.Sqlite3.prepare(db, """
-      INSERT OR REPLACE INTO claude_sessions (agent_id, initiative_id, dir, session_id, updated_at)
-      VALUES (?1, ?2, ?3, ?4, ?5)
+      INSERT OR REPLACE INTO claude_sessions (agent_id, initiative_id, dir, session_id, adapter, updated_at)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6)
       """)
 
     now = DateTime.utc_now() |> DateTime.to_iso8601()
-    :ok = Exqlite.Sqlite3.bind(stmt, [agent_id, initiative_id, dir, session_id, now])
+
+    :ok =
+      Exqlite.Sqlite3.bind(stmt, [agent_id, initiative_id, dir, session_id, adapter_name, now])
+
     :done = Exqlite.Sqlite3.step(db, stmt)
     :ok = Exqlite.Sqlite3.release(db, stmt)
 
@@ -109,7 +116,7 @@ defmodule Codrift.SessionStore do
     {:ok, stmt} =
       Exqlite.Sqlite3.prepare(
         db,
-        "SELECT agent_id, initiative_id, dir, session_id FROM claude_sessions"
+        "SELECT agent_id, initiative_id, dir, session_id, COALESCE(adapter, 'claude') FROM claude_sessions"
       )
 
     rows = collect_rows(db, stmt, [])
@@ -175,8 +182,8 @@ defmodule Codrift.SessionStore do
 
   defp collect_rows(db, stmt, acc) do
     case Exqlite.Sqlite3.step(db, stmt) do
-      {:row, [agent_id, initiative_id, dir, session_id]} ->
-        collect_rows(db, stmt, [{agent_id, initiative_id, dir, session_id} | acc])
+      {:row, [agent_id, initiative_id, dir, session_id, adapter]} ->
+        collect_rows(db, stmt, [{agent_id, initiative_id, dir, session_id, adapter} | acc])
 
       :done ->
         Enum.reverse(acc)
@@ -207,15 +214,26 @@ defmodule Codrift.SessionStore do
       :ok = Exqlite.Sqlite3.execute(db, "DROP TABLE IF EXISTS claude_sessions")
     end
 
-    Exqlite.Sqlite3.execute(db, """
-    CREATE TABLE IF NOT EXISTS claude_sessions (
-      agent_id      TEXT PRIMARY KEY,
-      initiative_id TEXT NOT NULL,
-      dir           TEXT NOT NULL,
-      session_id    TEXT NOT NULL,
-      updated_at    TEXT NOT NULL
-    )
-    """)
+    :ok =
+      Exqlite.Sqlite3.execute(db, """
+      CREATE TABLE IF NOT EXISTS claude_sessions (
+        agent_id      TEXT PRIMARY KEY,
+        initiative_id TEXT NOT NULL,
+        dir           TEXT NOT NULL,
+        session_id    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+      )
+      """)
+
+    if needs_adapter_migration?(db) do
+      :ok =
+        Exqlite.Sqlite3.execute(
+          db,
+          "ALTER TABLE claude_sessions ADD COLUMN adapter TEXT DEFAULT 'claude'"
+        )
+    end
+
+    :ok
   end
 
   defp needs_migration?(db) do
@@ -226,6 +244,13 @@ defmodule Codrift.SessionStore do
 
     # Old schema has no agent_id column; new schema requires it.
     columns != [] and "agent_id" not in columns
+  end
+
+  defp needs_adapter_migration?(db) do
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, "PRAGMA table_info(claude_sessions)")
+    columns = collect_column_names(db, stmt, [])
+    :ok = Exqlite.Sqlite3.release(db, stmt)
+    columns != [] and "adapter" not in columns
   end
 
   defp collect_column_names(db, stmt, acc) do

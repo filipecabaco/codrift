@@ -934,8 +934,12 @@ defmodule Codrift.TUI.VT100 do
   # parameter byte.  The `?` variants are the most common (DEC private modes);
   # `<` and `>` appear in the Kitty keyboard protocol and XTVERSION queries.
   # We parse them all the same way and route them to `apply_private_csi/3`.
+  # Use split_csi (captures 0x20..0x3F) rather than split_csi_numeric so that
+  # intermediate bytes like `$` (0x24, used in DECRQM `\e[?N$p`) are included
+  # in the captured span and `p` is correctly identified as the final byte.
+  # parse_csi_params already filters to 0x30..0x3F, so `$` is dropped from params.
   defp parse_csi(<<prefix::8, rest::binary>>) when prefix in [??, ?<, ?=, ?>] do
-    {param_bytes, after_params} = split_csi_numeric(rest, [])
+    {param_bytes, after_params} = split_csi(rest, [])
 
     case after_params do
       <<final::8, tail::binary>> when final in 0x40..0x7E ->
@@ -957,13 +961,6 @@ defmodule Codrift.TUI.VT100 do
         {[], 0, rest}
     end
   end
-
-  # Captures 0x30–0x3B: digits 0–9 and semicolon (excludes ? and other private chars)
-  defp split_csi_numeric(<<byte::8, rest::binary>>, acc) when byte in 0x30..0x3B do
-    split_csi_numeric(rest, [byte | acc])
-  end
-
-  defp split_csi_numeric(rest, acc), do: {Enum.reverse(acc), rest}
 
   # Captures param bytes (0x30–0x3F) and intermediate bytes (0x20–0x2F)
   defp split_csi(<<byte::8, rest::binary>>, acc) when byte in 0x20..0x3F do
