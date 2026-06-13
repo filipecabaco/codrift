@@ -401,6 +401,21 @@ defmodule Codrift.Initiative.Store do
     File.read(orchestration_md_path(id))
   end
 
+  @doc """
+  Overwrites `orchestration.md` for an initiative with `content`.
+
+  Unlike `write_orchestration_md/2` (private), this always writes — it is
+  intended for the MCP `update_orchestration_md` tool and TUI editor flows
+  where the user explicitly wants to replace the file.
+
+  Returns `:ok` or `{:error, reason}`.
+  """
+  def update_orchestration_md(id, content) do
+    path = orchestration_md_path(id)
+    path |> Path.dirname() |> File.mkdir_p!()
+    File.write(path, content)
+  end
+
   # Creates initiative.md on first run. If the file already exists (pre-seeded
   # context folder) the user-editable sections are untouched; only the managed
   # dirs block is refreshed.

@@ -39,6 +39,7 @@ defmodule Codrift.Config.Keybindings do
   | `toggle_sidebar` | `ctrl+b` | Collapse/expand sidebar |
   | `palette` | `ctrl+p` | Open command palette |
   | `toggle_collapse` | `o` | Toggle expand/collapse for the selected initiative, context, or directory |
+  | `start_orchestration` | `Shift+O` | Start orchestration for the selected initiative |
 
   ## Key spec format
 
@@ -67,7 +68,8 @@ defmodule Codrift.Config.Keybindings do
     quit: "ctrl+q",
     toggle_sidebar: "ctrl+b",
     palette: "ctrl+p",
-    toggle_collapse: "o"
+    toggle_collapse: "o",
+    start_orchestration: "shift+o"
   }
 
   @type action ::
@@ -92,6 +94,7 @@ defmodule Codrift.Config.Keybindings do
           | :toggle_sidebar
           | :palette
           | :toggle_collapse
+          | :start_orchestration
 
   @type key_spec :: String.t()
   @type t :: %{required(action()) => key_spec()}
@@ -195,6 +198,7 @@ defmodule Codrift.Config.Keybindings do
   defp string_to_action("toggle_sidebar"), do: :toggle_sidebar
   defp string_to_action("palette"), do: :palette
   defp string_to_action("toggle_collapse"), do: :toggle_collapse
+  defp string_to_action("start_orchestration"), do: :start_orchestration
   defp string_to_action(_), do: nil
 
   defp parse_binding({k, v}) do

@@ -35,6 +35,12 @@ defmodule Codrift.MCP.Handler do
     - `list_integration_items` — list issues/tasks from a connected external service
     - `import_from_integration` — create an initiative from an external item
     - `sync_initiative_context` — re-fetch and overwrite the integration context file
+    - `start_conductor` — start fan-out mode: one agent per directory
+    - `start_orchestration` — start orchestration mode: one orchestrator agent plans and directs sub-agents
+    - `get_conductor_status` — get the status of all agents under a conductor
+    - `get_conductor_results` — get aggregated output from all conductor agents
+    - `read_orchestration_md` — read the orchestration.md intent file for an initiative
+    - `update_orchestration_md` — overwrite the orchestration.md intent file for an initiative
   """
 
   alias Codrift.Initiative.{DirEntry, Store}
@@ -348,6 +354,90 @@ defmodule Codrift.MCP.Handler do
     case Codrift.Integration.sync_initiative(id) do
       {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
+  defp call_tool("start_conductor", %{"initiative_id" => id} = args) do
+    case Store.get(id) do
+      {:ok, initiative} ->
+        adapter = args |> Map.get("adapter", "claude") |> adapter_module()
+
+        case Codrift.ConductorSupervisor.start_conductor(initiative, adapter) do
+          {:ok, pid} -> {:ok, %{"started" => true, "initiative_id" => id, "pid" => inspect(pid)}}
+          {:error, {:already_started, _}} -> {:ok, %{"started" => false, "reason" => "already running"}}
+          {:error, reason} -> {:error, inspect(reason)}
+        end
+
+      {:error, :not_found} ->
+        {:error, "initiative not found: #{id}"}
+    end
+  end
+
+  defp call_tool("start_orchestration", %{"initiative_id" => id, "task" => task} = args) do
+    case Store.get(id) do
+      {:ok, initiative} ->
+        adapter = args |> Map.get("adapter", "claude") |> adapter_module()
+        extra = if dir = args["context_dir"], do: [context_dir: dir], else: []
+
+        case Codrift.ConductorSupervisor.start_orchestration(initiative, adapter, task, extra) do
+          {:ok, pid} -> {:ok, %{"started" => true, "initiative_id" => id, "pid" => inspect(pid)}}
+          {:error, {:already_started, _}} -> {:ok, %{"started" => false, "reason" => "already running"}}
+          {:error, reason} -> {:error, inspect(reason)}
+        end
+
+      {:error, :not_found} ->
+        {:error, "initiative not found: #{id}"}
+    end
+  end
+
+  defp call_tool("get_conductor_status", %{"initiative_id" => id}) do
+    case Codrift.ConductorSupervisor.find_conductor(id) do
+      {:ok, pid} ->
+        statuses =
+          pid
+          |> Codrift.Conductor.agent_status()
+          |> Map.new(fn {agent_id, info} ->
+            {agent_id,
+             %{
+               dir: info.dir,
+               status: Atom.to_string(info.status),
+               role: Atom.to_string(info.role)
+             }}
+          end)
+
+        {:ok, %{"initiative_id" => id, "agents" => statuses}}
+
+      {:error, :not_found} ->
+        {:error, "no conductor running for initiative: #{id}"}
+    end
+  end
+
+  defp call_tool("get_conductor_results", %{"initiative_id" => id}) do
+    case Codrift.ConductorSupervisor.find_conductor(id) do
+      {:ok, pid} ->
+        results =
+          pid
+          |> Codrift.Conductor.results()
+          |> Map.new(fn {agent_id, chunks} -> {agent_id, Enum.join(chunks)} end)
+
+        {:ok, %{"initiative_id" => id, "results" => results}}
+
+      {:error, :not_found} ->
+        {:error, "no conductor running for initiative: #{id}"}
+    end
+  end
+
+  defp call_tool("read_orchestration_md", %{"initiative_id" => id}) do
+    case Store.read_orchestration_md(id) do
+      {:ok, content} -> {:ok, %{"initiative_id" => id, "content" => content}}
+      {:error, reason} -> {:error, "could not read orchestration.md: #{inspect(reason)}"}
+    end
+  end
+
+  defp call_tool("update_orchestration_md", %{"initiative_id" => id, "content" => content}) do
+    case Store.update_orchestration_md(id, content) do
+      :ok -> {:ok, %{"updated" => true, "initiative_id" => id}}
+      {:error, reason} -> {:error, "could not write orchestration.md: #{inspect(reason)}"}
     end
   end
 
@@ -712,6 +802,99 @@ defmodule Codrift.MCP.Handler do
             "initiative_id" => %{"type" => "string"}
           },
           "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "start_conductor",
+        "description" =>
+          "Start fan-out mode for an initiative: automatically spawns one agent per working directory. " <>
+            "All agents start immediately without a planning step.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "adapter" => %{
+              "type" => "string",
+              "enum" => ["claude", "codex", "opencode", "gemini", "copilot"],
+              "description" => "AI agent adapter to use (default: claude)"
+            }
+          },
+          "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "start_orchestration",
+        "description" =>
+          "Start orchestration mode for an initiative: one orchestrator agent reads orchestration.md " <>
+            "and uses Codrift MCP tools to plan, spawn, and coordinate sub-agents across directories.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "task" => %{
+              "type" => "string",
+              "description" => "High-level task description passed to the orchestrator agent"
+            },
+            "adapter" => %{
+              "type" => "string",
+              "enum" => ["claude", "codex", "opencode", "gemini", "copilot"],
+              "description" => "AI agent adapter to use (default: claude)"
+            },
+            "context_dir" => %{
+              "type" => "string",
+              "description" => "Override the context directory (default: ~/.codrift/initiatives/{id}/)"
+            }
+          },
+          "required" => ["initiative_id", "task"]
+        }
+      },
+      %{
+        "name" => "get_conductor_status",
+        "description" =>
+          "Get the status of all agents managed by a conductor for an initiative. " <>
+            "Returns agent IDs, their working directories, current status, and role (orchestrator/worker).",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{"initiative_id" => %{"type" => "string"}},
+          "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "get_conductor_results",
+        "description" =>
+          "Get aggregated output from all agents managed by a conductor, keyed by agent ID.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{"initiative_id" => %{"type" => "string"}},
+          "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "read_orchestration_md",
+        "description" =>
+          "Read the orchestration.md intent file for an initiative. " <>
+            "This file defines the orchestrator's goal, strategy, and success criteria.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{"initiative_id" => %{"type" => "string"}},
+          "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "update_orchestration_md",
+        "description" =>
+          "Overwrite the orchestration.md intent file for an initiative. " <>
+            "Use this to set the goal, strategy, and instructions before starting orchestration.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "content" => %{
+              "type" => "string",
+              "description" => "New Markdown content for orchestration.md"
+            }
+          },
+          "required" => ["initiative_id", "content"]
         }
       }
     ]

@@ -78,7 +78,7 @@ defmodule Codrift.TUI do
 
   alias Codrift.Agent
   alias Codrift.Agent.Adapters.{Claude, Terminal}
-  alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative, Paths}
+  alias Codrift.{AgentProcess, AgentSupervisor, Conductor, ConductorSupervisor, Diff, Initiative, Paths}
   alias Codrift.Config.{Keybindings, Settings, Theme}
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.OAuth.Config, as: OAuthConfig
@@ -116,6 +116,7 @@ defmodule Codrift.TUI do
           | :service_setup
           | :agent_picker
           | :shortcuts
+          | :orchestration_task
   @type tab :: :context | :diff | :tree
 
   defstruct [
@@ -551,6 +552,12 @@ defmodule Codrift.TUI do
     {:noreply, start_agent_at_cursor(%{state | modal: %{state.modal | type: :none}}, adapter)}
   end
 
+  def handle_event(
+        %Key{code: "enter", kind: "press"},
+        %{modal: %{type: :orchestration_task}} = state
+      ),
+      do: {:noreply, confirm_orchestration_task(state)}
+
   # Text-input key routing — ADDING A MODAL CHECKLIST
   #
   # If your new modal renders a TextInput widget, add its type atom to BOTH
@@ -570,7 +577,8 @@ defmodule Codrift.TUI do
              :new_tree_item,
              :integration_item_id,
              :service_guided_token,
-             :promote_name
+             :promote_name,
+             :orchestration_task
            ] and byte_size(code) == 1 do
     ExRatatui.text_input_handle_key(state.modal.input, code)
     {:noreply, sync_modal(state, modal)}
@@ -585,7 +593,8 @@ defmodule Codrift.TUI do
              :new_tree_item,
              :integration_item_id,
              :service_guided_token,
-             :promote_name
+             :promote_name,
+             :orchestration_task
            ] and code in ["backspace", "delete", "left", "right", "home", "end"] do
     ExRatatui.text_input_handle_key(state.modal.input, code)
     {:noreply, sync_modal(state, modal)}
@@ -1197,6 +1206,9 @@ defmodule Codrift.TUI do
   defp dispatch_sidebar_action(:new_initiative, state) do
     {:noreply, open_source_picker(state)}
   end
+
+  defp dispatch_sidebar_action(:start_orchestration, state),
+    do: {:noreply, open_orchestration_task_modal(state)}
 
   defp dispatch_sidebar_action(:toggle_sidebar, state),
     do: {:noreply, toggle_sidebar(state)}
@@ -2247,6 +2259,9 @@ defmodule Codrift.TUI do
   defp do_palette_action(:refresh, state),
     do: refresh_current(%{state | modal: %{state.modal | type: :none}})
 
+  defp do_palette_action(:start_orchestration, state),
+    do: open_orchestration_task_modal(%{state | modal: %{state.modal | type: :none}})
+
   defp do_palette_action(:toggle_collapse, state),
     do: toggle_collapse_at_cursor(%{state | modal: %{state.modal | type: :none}})
 
@@ -2885,6 +2900,55 @@ defmodule Codrift.TUI do
   end
 
   defp confirm_context_file(state),
+    do: %{state | modal: %{state.modal | type: :none, context: nil}}
+
+  defp open_orchestration_task_modal(state) do
+    case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
+      {:initiative, id, _, _, _, _} ->
+        ExRatatui.text_input_set_value(state.modal.input, "")
+
+        %{
+          state
+          | modal: %{state.modal | type: :orchestration_task, context: id},
+            status: "Enter task description — Enter: start  Esc: cancel"
+        }
+
+      _ ->
+        flash_status(state, "Navigate to an initiative first")
+    end
+  end
+
+  defp confirm_orchestration_task(%{modal: %{context: initiative_id}} = state) do
+    task = state.modal.input |> ExRatatui.text_input_get_value() |> String.trim()
+    base = %{state | modal: %{state.modal | type: :none, context: nil}}
+
+    if task == "" do
+      flash_status(base, "Task cannot be empty")
+    else
+      case Store.get(initiative_id) do
+        {:ok, initiative} ->
+          adapter = List.first(Agent.available_adapters()) || Claude
+
+          case Codrift.ConductorSupervisor.start_orchestration(initiative, adapter, task) do
+            {:ok, _pid} ->
+              base
+              |> reload_sidebar()
+              |> flash_status("Orchestration started for '#{initiative.name}'")
+
+            {:error, {:already_started, _}} ->
+              flash_status(base, "Conductor already running for this initiative")
+
+            {:error, reason} ->
+              flash_status(base, "Failed to start orchestration: #{inspect(reason)}")
+          end
+
+        {:error, :not_found} ->
+          flash_status(base, "Initiative not found")
+      end
+    end
+  end
+
+  defp confirm_orchestration_task(state),
     do: %{state | modal: %{state.modal | type: :none, context: nil}}
 
   defp refresh_current(%{active_tab: :diff} = state), do: refresh_diff(state)
@@ -4461,6 +4525,7 @@ defmodule Codrift.TUI do
     "#{f.(kb.navigate_down)}/#{f.(kb.navigate_up)}:navigate  " <>
       "#{f.(kb.new_initiative)}:new  " <>
       "#{f.(kb.start_agent)}:start  " <>
+      "#{f.(kb.start_orchestration)}:orchestrate  " <>
       "#{f.(kb.delete)}:delete  " <>
       "#{f.(kb.start_terminal)}:terminal  " <>
       "Tab:agent pane  " <>
@@ -4516,6 +4581,11 @@ defmodule Codrift.TUI do
         id: :start_terminal,
         label: "Open Terminal Here",
         hint: Keybindings.format(kb.start_terminal)
+      },
+      %{
+        id: :start_orchestration,
+        label: "Start Orchestration",
+        hint: Keybindings.format(kb.start_orchestration)
       },
       # Context files
       %{

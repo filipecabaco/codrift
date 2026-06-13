@@ -57,6 +57,9 @@ defmodule Codrift.TUI.Modals do
   def render(%{modal: %{type: :agent_picker}} = state, frame), do: agent_picker(state, frame)
   def render(%{modal: %{type: :shortcuts}} = state, frame), do: shortcuts(state, frame)
 
+  def render(%{modal: %{type: :orchestration_task}} = state, frame),
+    do: orchestration_task(state, frame)
+
   @doc """
   Filters `actions` whose label contains `query` (case-insensitive).
   An empty query returns the full list unchanged.
@@ -595,6 +598,7 @@ defmodule Codrift.TUI.Modals do
             row(kb.new_initiative, "new initiative") ++
             row(kb.add_dir, "add directory") ++
             row(kb.start_agent, "start agent") ++
+            row(kb.start_orchestration, "start orchestration") ++
             row(kb.delete, "delete / stop") ++
             row("#{kb.status_prev}/#{kb.status_next}", "cycle status") ++
             row(kb.new_context, "new context file") ++
@@ -628,6 +632,32 @@ defmodule Codrift.TUI.Modals do
             row("?", "show this pane")
       }
     }
+  end
+
+  defp orchestration_task(state, frame) do
+    rect = Layout.center_rect(frame, 60, 10)
+    inner = Layout.inset(rect, 1)
+
+    initiative_id = state.modal.context || ""
+
+    [
+      {%Clear{}, rect},
+      {bordered(rect, " Start Orchestration ", :magenta), rect},
+      {%Paragraph{
+         text: "Initiative: #{initiative_id}",
+         style: %Style{fg: :dark_gray}
+       }, %{inner | height: 1}},
+      {%Paragraph{text: "Task:", style: %Style{fg: :white}},
+       %{inner | y: inner.y + 2, height: 1}},
+      {input(state.modal.input, "e.g. Implement the auth feature across all repos"),
+       %{inner | y: inner.y + 3, height: 1}},
+      {%Paragraph{
+         text: "The orchestrator agent will read orchestration.md and plan the work.",
+         style: %Style{fg: :dark_gray},
+         wrap: true
+       }, %{inner | y: inner.y + 5, height: 2}},
+      {hint("Enter: start  Esc: cancel"), %{inner | y: inner.y + 8, height: 1}}
+    ]
   end
 
   defp section(title) do
