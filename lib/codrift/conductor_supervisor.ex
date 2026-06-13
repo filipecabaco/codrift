@@ -31,11 +31,8 @@ defmodule Codrift.ConductorSupervisor do
   def start_conductor(initiative, adapter, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     dirs = resolve_dirs(initiative)
-
-    spec = {Codrift.Conductor,
-      [initiative_id: initiative.id, dirs: dirs, adapter: adapter]}
-
-    DynamicSupervisor.start_child(server, spec)
+    child_opts = [initiative_id: initiative.id, dirs: dirs, adapter: adapter] ++ passthrough(opts)
+    DynamicSupervisor.start_child(server, {Codrift.Conductor, child_opts})
   end
 
   @doc """
@@ -49,11 +46,8 @@ defmodule Codrift.ConductorSupervisor do
   def start_orchestration(initiative, adapter, task, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     dirs = resolve_dirs(initiative)
-
-    spec = {Codrift.Conductor,
-      [initiative_id: initiative.id, dirs: dirs, adapter: adapter, task: task]}
-
-    DynamicSupervisor.start_child(server, spec)
+    child_opts = [initiative_id: initiative.id, dirs: dirs, adapter: adapter, task: task] ++ passthrough(opts)
+    DynamicSupervisor.start_child(server, {Codrift.Conductor, child_opts})
   end
 
   @doc """
@@ -91,5 +85,17 @@ defmodule Codrift.ConductorSupervisor do
     initiative.dirs
     |> Enum.map(&DirEntry.effective_path/1)
     |> Enum.filter(&File.dir?/1)
+  end
+
+  # Keys forwarded from opts to Conductor child opts.
+  @passthrough_keys [:agent_supervisor, :conductor_registry, :context_dir]
+
+  defp passthrough(opts) do
+    Enum.flat_map(@passthrough_keys, fn key ->
+      case Keyword.fetch(opts, key) do
+        {:ok, val} -> [{key, val}]
+        :error -> []
+      end
+    end)
   end
 end

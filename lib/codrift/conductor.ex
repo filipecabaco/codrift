@@ -40,6 +40,9 @@ defmodule Codrift.Conductor do
     :initiative_id,
     :adapter,
     :orchestrator_id,
+    :context_dir,
+    :agent_supervisor,
+    :conductor_registry,
     agents: %{},
     results: %{},
     subscribers: %{}
@@ -54,7 +57,15 @@ defmodule Codrift.Conductor do
     }
   end
 
-  @doc "Starts a Conductor. Required opts: `:initiative_id`, `:dirs`, `:adapter`. Optional: `:task`."
+  @doc """
+  Starts a Conductor.
+
+  Required opts: `:initiative_id`, `:dirs`, `:adapter`.
+  Optional:
+  - `:task` — activates orchestrator mode
+  - `:context_dir` — overrides `Store.context_path/1` (useful in tests)
+  - `:agent_supervisor` — overrides `AgentSupervisor` server (useful in tests)
+  """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @doc "Sends `text` to every running sub-agent."
@@ -80,12 +91,21 @@ defmodule Codrift.Conductor do
     dirs = Keyword.fetch!(opts, :dirs)
     adapter = Keyword.fetch!(opts, :adapter)
     task = Keyword.get(opts, :task)
+    context_dir = Keyword.get(opts, :context_dir)
+    agent_supervisor = Keyword.get(opts, :agent_supervisor, Codrift.AgentSupervisor)
+    conductor_registry = Keyword.get(opts, :conductor_registry, Codrift.ConductorRegistry)
 
-    if Process.whereis(Codrift.ConductorRegistry) do
-      Registry.register(Codrift.ConductorRegistry, initiative_id, %{})
+    if Process.whereis(conductor_registry) do
+      Registry.register(conductor_registry, initiative_id, %{})
     end
 
-    state = %__MODULE__{initiative_id: initiative_id, adapter: adapter}
+    state = %__MODULE__{
+      initiative_id: initiative_id,
+      adapter: adapter,
+      context_dir: context_dir,
+      agent_supervisor: agent_supervisor,
+      conductor_registry: conductor_registry
+    }
 
     continue =
       if task,
@@ -98,16 +118,18 @@ defmodule Codrift.Conductor do
   # Fan-out mode: one agent per directory, started immediately.
   @impl true
   def handle_continue({:start_agents, dirs}, state) do
-    agents = start_agents_for_dirs(state.initiative_id, state.adapter, dirs)
+    agents = start_agents_for_dirs(state.initiative_id, state.adapter, dirs, state.agent_supervisor)
     {:noreply, %{state | agents: agents}}
   end
 
-  # Orchestrator mode: start one Claude agent in the context dir and give it
-  # a planning prompt. It will use MCP tools to start and direct sub-agents.
+  # Orchestrator mode: start one agent in the context dir and give it a
+  # planning prompt. It will use MCP tools to start and direct sub-agents.
   def handle_continue({:start_orchestrator, dirs, task}, state) do
-    ctx_dir = Store.context_path(state.initiative_id)
+    ctx_dir = state.context_dir || Store.context_path(state.initiative_id)
 
-    case AgentSupervisor.start_agent(state.initiative_id, ctx_dir, state.adapter) do
+    case AgentSupervisor.start_agent(state.initiative_id, ctx_dir, state.adapter,
+           server: state.agent_supervisor
+         ) do
       {:ok, pid} ->
         AgentProcess.subscribe(pid)
         %{id: id} = AgentProcess.status(pid)
@@ -206,9 +228,9 @@ defmodule Codrift.Conductor do
 
   # ── Helpers ──────────────────────────────────────────────────────────────────
 
-  defp start_agents_for_dirs(initiative_id, adapter, dirs) do
+  defp start_agents_for_dirs(initiative_id, adapter, dirs, agent_supervisor) do
     Enum.reduce(dirs, %{}, fn dir, acc ->
-      case AgentSupervisor.start_agent(initiative_id, dir, adapter) do
+      case AgentSupervisor.start_agent(initiative_id, dir, adapter, server: agent_supervisor) do
         {:ok, pid} ->
           AgentProcess.subscribe(pid)
           %{id: id} = AgentProcess.status(pid)
