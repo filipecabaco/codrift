@@ -16,9 +16,11 @@ defmodule Codrift.MCP.Handler do
     - `list_initiatives` — list all initiatives
     - `get_diff` — git diff for an initiative
     - `list_agents` — running agents
+    - `get_initiative_agents` — running agents filtered by initiative, with status
     - `start_agent` — spawn an agent in a directory
     - `send_to_agent` — send input to a running agent
     - `get_agent_output` — fetch recent output from an agent
+    - `broadcast_to_initiative` — send the same prompt to all agents in an initiative
     - `create_initiative` — create a new initiative
     - `add_dir` — add a directory to an initiative
     - `delete_initiative` — delete an initiative
@@ -114,6 +116,31 @@ defmodule Codrift.MCP.Handler do
       end)
 
     {:ok, agents}
+  end
+
+  defp call_tool("get_initiative_agents", %{"initiative_id" => initiative_id}) do
+    agents =
+      initiative_id
+      |> Codrift.AgentSupervisor.list_agents_for_initiative()
+      |> Enum.map(fn pid ->
+        pid
+        |> Codrift.AgentProcess.status()
+        |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
+        |> Map.update!(:status, &Atom.to_string/1)
+      end)
+
+    {:ok, agents}
+  end
+
+  defp call_tool("broadcast_to_initiative", %{"initiative_id" => initiative_id, "input" => input}) do
+    pids = Codrift.AgentSupervisor.list_agents_for_initiative(initiative_id)
+
+    if pids == [] do
+      {:error, "no running agents for initiative: #{initiative_id}"}
+    else
+      Enum.each(pids, &Codrift.AgentProcess.send_input(&1, input))
+      {:ok, %{"sent_to" => length(pids)}}
+    end
   end
 
   defp call_tool(
@@ -434,6 +461,31 @@ defmodule Codrift.MCP.Handler do
         "name" => "list_agents",
         "description" => "List all running AI coding agents",
         "inputSchema" => %{"type" => "object", "properties" => %{}}
+      },
+      %{
+        "name" => "get_initiative_agents",
+        "description" =>
+          "List all running agents for a specific initiative with their status and directory. " <>
+            "Use this to check which agents are still working and which are idle or stopped.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{"initiative_id" => %{"type" => "string"}},
+          "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "broadcast_to_initiative",
+        "description" =>
+          "Send the same prompt to every running agent in an initiative at once. " <>
+            "Useful when all agents need the same instruction (e.g. 'run tests and report results').",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "input" => %{"type" => "string", "description" => "Prompt to send to all agents"}
+          },
+          "required" => ["initiative_id", "input"]
+        }
       },
       %{
         "name" => "start_agent",

@@ -21,24 +21,37 @@ defmodule Codrift.ConductorSupervisor do
   def init(_), do: DynamicSupervisor.init(strategy: :one_for_one)
 
   @doc """
-  Starts a Conductor for `initiative` using `adapter`.
-
-  Resolves effective paths (worktree or original) for all dirs and filters out
-  any that do not exist on disk. Returns `{:ok, pid}` or `{:error, reason}`.
+  Starts a Conductor in fan-out mode: one agent per directory, all started
+  immediately. Useful for broadcast-style work where every dir gets the same
+  prompt.
 
   Accepts an optional `server:` keyword to target a specific supervisor
   instance (useful in tests).
   """
   def start_conductor(initiative, adapter, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
-
-    dirs =
-      initiative.dirs
-      |> Enum.map(&DirEntry.effective_path/1)
-      |> Enum.filter(&File.dir?/1)
+    dirs = resolve_dirs(initiative)
 
     spec = {Codrift.Conductor,
       [initiative_id: initiative.id, dirs: dirs, adapter: adapter]}
+
+    DynamicSupervisor.start_child(server, spec)
+  end
+
+  @doc """
+  Starts a Conductor in orchestrator mode: launches one Claude agent in the
+  initiative's context directory and gives it `task` as a planning prompt.
+  That agent uses the Codrift MCP tools to start and direct sub-agents itself.
+
+  Accepts an optional `server:` keyword to target a specific supervisor
+  instance (useful in tests).
+  """
+  def start_orchestration(initiative, adapter, task, opts \\ []) do
+    server = Keyword.get(opts, :server, __MODULE__)
+    dirs = resolve_dirs(initiative)
+
+    spec = {Codrift.Conductor,
+      [initiative_id: initiative.id, dirs: dirs, adapter: adapter, task: task]}
 
     DynamicSupervisor.start_child(server, spec)
   end
@@ -72,5 +85,11 @@ defmodule Codrift.ConductorSupervisor do
     |> DynamicSupervisor.which_children()
     |> Enum.map(fn {_, pid, _, _} -> pid end)
     |> Enum.filter(&is_pid/1)
+  end
+
+  defp resolve_dirs(initiative) do
+    initiative.dirs
+    |> Enum.map(&DirEntry.effective_path/1)
+    |> Enum.filter(&File.dir?/1)
   end
 end

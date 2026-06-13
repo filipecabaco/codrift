@@ -2,23 +2,24 @@ defmodule Codrift.Conductor do
   @moduledoc """
   Orchestrates multiple AgentProcess instances under a single initiative.
 
-  One Conductor per initiative. It auto-starts one agent per directory when
-  launched, subscribes to every sub-agent's output stream, and re-broadcasts
-  those events to any interested subscriber (TUI, SSE handler, tests).
+  ## Two modes
 
-  ## Lifecycle
+  ### Fan-out mode (direct)
+  Started via `ConductorSupervisor.start_conductor/3`. Auto-starts one agent
+  per directory, subscribers receive output from all of them.
 
       {:ok, pid} = ConductorSupervisor.start_conductor(initiative, adapter)
-
-      # Send a prompt to every sub-agent
       Conductor.broadcast(pid, "run the test suite and report failures")
-
-      # Send a prompt to one sub-agent
-      Conductor.send_to(pid, agent_id, "focus on lib/auth only")
-
-      # Collect what all agents have produced
       Conductor.results(pid)
-      # => %{"<agent_id>" => ["chunk", ...], ...}
+
+  ### Orchestrator mode
+  Started via `ConductorSupervisor.start_orchestration/3`. Starts ONE Claude
+  agent in the initiative's context directory and hands it a planning prompt.
+  That agent uses the Codrift MCP tools (`start_agent`, `send_to_agent`,
+  `get_agent_output`, `broadcast_to_initiative`, `memory_*`) to reason about,
+  start, and direct sub-agents itself — no Elixir-level reasoning loop needed.
+
+      {:ok, pid} = ConductorSupervisor.start_orchestration(initiative, adapter, task)
 
   ## Messages delivered to subscribers
 
@@ -31,13 +32,14 @@ defmodule Codrift.Conductor do
   require Logger
 
   alias Codrift.{AgentProcess, AgentSupervisor}
-  alias Codrift.Initiative.DirEntry
+  alias Codrift.Initiative.{DirEntry, Store}
 
   @max_chunks 500
 
   defstruct [
     :initiative_id,
     :adapter,
+    :orchestrator_id,
     agents: %{},
     results: %{},
     subscribers: %{}
@@ -52,11 +54,7 @@ defmodule Codrift.Conductor do
     }
   end
 
-  @doc """
-  Starts a Conductor.
-
-  Required opts: `:initiative_id`, `:dirs` (list of absolute paths), `:adapter`.
-  """
+  @doc "Starts a Conductor. Required opts: `:initiative_id`, `:dirs`, `:adapter`. Optional: `:task`."
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @doc "Sends `text` to every running sub-agent."
@@ -81,6 +79,7 @@ defmodule Codrift.Conductor do
     initiative_id = Keyword.fetch!(opts, :initiative_id)
     dirs = Keyword.fetch!(opts, :dirs)
     adapter = Keyword.fetch!(opts, :adapter)
+    task = Keyword.get(opts, :task)
 
     if Process.whereis(Codrift.ConductorRegistry) do
       Registry.register(Codrift.ConductorRegistry, initiative_id, %{})
@@ -88,26 +87,42 @@ defmodule Codrift.Conductor do
 
     state = %__MODULE__{initiative_id: initiative_id, adapter: adapter}
 
-    {:ok, state, {:continue, {:start_agents, dirs}}}
+    continue =
+      if task,
+        do: {:start_orchestrator, dirs, task},
+        else: {:start_agents, dirs}
+
+    {:ok, state, {:continue, continue}}
   end
 
+  # Fan-out mode: one agent per directory, started immediately.
   @impl true
   def handle_continue({:start_agents, dirs}, state) do
-    agents =
-      Enum.reduce(dirs, %{}, fn dir, acc ->
-        case AgentSupervisor.start_agent(state.initiative_id, dir, state.adapter) do
-          {:ok, pid} ->
-            AgentProcess.subscribe(pid)
-            %{id: id} = AgentProcess.status(pid)
-            Map.put(acc, id, %{pid: pid, dir: dir, status: :starting})
-
-          {:error, reason} ->
-            Logger.error("[Conductor #{state.initiative_id}] failed to start agent for #{dir}: #{inspect(reason)}")
-            acc
-        end
-      end)
-
+    agents = start_agents_for_dirs(state.initiative_id, state.adapter, dirs)
     {:noreply, %{state | agents: agents}}
+  end
+
+  # Orchestrator mode: start one Claude agent in the context dir and give it
+  # a planning prompt. It will use MCP tools to start and direct sub-agents.
+  def handle_continue({:start_orchestrator, dirs, task}, state) do
+    ctx_dir = Store.context_path(state.initiative_id)
+
+    case AgentSupervisor.start_agent(state.initiative_id, ctx_dir, state.adapter) do
+      {:ok, pid} ->
+        AgentProcess.subscribe(pid)
+        %{id: id} = AgentProcess.status(pid)
+
+        agents = %{id => %{pid: pid, dir: ctx_dir, status: :starting, role: :orchestrator}}
+
+        prompt = orchestrator_prompt(state.initiative_id, dirs, task)
+        AgentProcess.send_input(pid, prompt)
+
+        {:noreply, %{state | agents: agents, orchestrator_id: id}}
+
+      {:error, reason} ->
+        Logger.error("[Conductor #{state.initiative_id}] failed to start orchestrator: #{inspect(reason)}")
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -135,7 +150,11 @@ defmodule Codrift.Conductor do
   end
 
   def handle_call(:agent_status, _from, state) do
-    summary = Map.new(state.agents, fn {id, info} -> {id, %{dir: info.dir, status: info.status}} end)
+    summary =
+      Map.new(state.agents, fn {id, info} ->
+        {id, %{dir: info.dir, status: info.status, role: Map.get(info, :role, :worker)}}
+      end)
+
     {:reply, summary, state}
   end
 
@@ -184,7 +203,52 @@ defmodule Codrift.Conductor do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
+  # ── Helpers ──────────────────────────────────────────────────────────────────
+
+  defp start_agents_for_dirs(initiative_id, adapter, dirs) do
+    Enum.reduce(dirs, %{}, fn dir, acc ->
+      case AgentSupervisor.start_agent(initiative_id, dir, adapter) do
+        {:ok, pid} ->
+          AgentProcess.subscribe(pid)
+          %{id: id} = AgentProcess.status(pid)
+          Map.put(acc, id, %{pid: pid, dir: dir, status: :starting, role: :worker})
+
+        {:error, reason} ->
+          Logger.error("[Conductor #{initiative_id}] failed to start agent for #{dir}: #{inspect(reason)}")
+          acc
+      end
+    end)
+  end
+
   defp notify(%{subscribers: subs}, msg) do
     for {pid, _} <- subs, do: send(pid, msg)
+  end
+
+  defp orchestrator_prompt(initiative_id, dirs, task) do
+    dir_list = Enum.map_join(dirs, "\n", &"  - #{&1}")
+
+    """
+    You are the orchestrator for initiative `#{initiative_id}`.
+
+    ## Task
+    #{task}
+
+    ## Working directories
+    #{dir_list}
+
+    ## Your job
+    Use the Codrift MCP tools to coordinate this work across the directories above:
+
+    1. **Plan** — decide what each directory's agent should do based on the task and the initiative context in this folder.
+    2. **Start agents** — call `start_agent` for each directory (adapter: claude).
+    3. **Assign work** — call `send_to_agent` with a focused, specific prompt for each agent. Each agent only knows about its own directory; give it clear instructions.
+    4. **Monitor** — poll `get_agent_output` to track progress. Use `get_initiative_agents` to see which agents are still running.
+    5. **Coordinate** — use `memory_search` before dispatching to avoid duplicating decisions already made. Use `memory_add` (type: decision) to record choices that affect multiple agents.
+    6. **Synthesise** — once all agents are idle or stopped, read their output, reconcile any conflicts, and write a `summary` to `memory_add` describing what was accomplished.
+
+    Call `broadcast_to_initiative` when all agents need the same message (e.g. "run tests and report results").
+
+    Begin now.
+    """
   end
 end
