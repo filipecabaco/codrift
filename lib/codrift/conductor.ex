@@ -137,7 +137,8 @@ defmodule Codrift.Conductor do
         agents = %{id => %{pid: pid, dir: ctx_dir, status: :starting, role: :orchestrator}}
 
         adapter_name = Codrift.Agent.adapter_name(state.adapter)
-        prompt = orchestrator_prompt(state.initiative_id, dirs, task, adapter_name)
+        orchestration = read_orchestration(state.initiative_id, ctx_dir)
+        prompt = orchestrator_prompt(state.initiative_id, dirs, task, adapter_name, orchestration)
         AgentProcess.send_input(pid, prompt)
 
         {:noreply, %{state | agents: agents, orchestrator_id: id}}
@@ -247,29 +248,49 @@ defmodule Codrift.Conductor do
     for {pid, _} <- subs, do: send(pid, msg)
   end
 
-  defp orchestrator_prompt(initiative_id, dirs, task, adapter_name) do
+  defp read_orchestration(initiative_id, ctx_dir) do
+    path = Path.join(ctx_dir, "orchestration.md")
+
+    case File.read(path) do
+      {:ok, content} ->
+        content
+
+      {:error, _} ->
+        case Store.read_orchestration_md(initiative_id) do
+          {:ok, content} -> content
+          {:error, _} -> ""
+        end
+    end
+  end
+
+  defp orchestrator_prompt(initiative_id, dirs, task, adapter_name, orchestration) do
     dir_list = Enum.map_join(dirs, "\n", &"  - #{&1}")
 
-    """
-    You are the orchestrator for initiative `#{initiative_id}`.
+    orchestration_section =
+      if String.trim(orchestration) != "",
+        do: "## Orchestration context\n\n#{String.trim(orchestration)}\n\n",
+        else: ""
 
-    ## Task
+    """
+    You are the orchestrator agent for initiative `#{initiative_id}`.
+
+    #{orchestration_section}## Task
     #{task}
 
     ## Working directories
     #{dir_list}
 
-    ## Your job
+    ## Instructions
     Use the Codrift MCP tools to coordinate this work across the directories above:
 
-    1. **Plan** — decide what each directory's agent should do based on the task and the initiative context in this folder.
+    1. **Plan** — read the orchestration context and task above, then decide what each directory's agent should do.
     2. **Start agents** — call `start_agent` for each directory with adapter `#{adapter_name}`.
-    3. **Assign work** — call `send_to_agent` with a focused, specific prompt for each agent. Each agent only knows about its own directory; give it clear instructions.
-    4. **Monitor** — poll `get_agent_output` to track progress. Use `get_initiative_agents` to see which agents are still running.
-    5. **Coordinate** — use `memory_search` before dispatching to avoid duplicating decisions already made. Use `memory_add` (type: decision) to record choices that affect multiple agents.
-    6. **Synthesise** — once all agents are idle or stopped, read their output, reconcile any conflicts, and write a `summary` to `memory_add` describing what was accomplished.
+    3. **Assign work** — call `send_to_agent` with a focused prompt per agent. Each agent only knows its own directory; be specific.
+    4. **Monitor** — poll `get_agent_output` and `get_initiative_agents` to track progress.
+    5. **Coordinate** — use `memory_search` before dispatching to avoid duplicating decisions. Use `memory_add` (type: decision) to record choices that affect multiple agents.
+    6. **Synthesise** — once all agents are idle or stopped, reconcile their output and write a `summary` via `memory_add`.
 
-    Call `broadcast_to_initiative` when all agents need the same message (e.g. "run tests and report results").
+    Call `broadcast_to_initiative` when all agents need the same message.
 
     Begin now.
     """

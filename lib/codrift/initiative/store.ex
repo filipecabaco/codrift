@@ -130,6 +130,7 @@ defmodule Codrift.Initiative.Store do
       File.mkdir_p!(ctx)
       ensure_git_repo(ctx)
       ensure_claude_md_symlink(ctx)
+      write_orchestration_md(ctx, initiative)
     end)
 
     clean_orphaned_context_dirs(initiatives, ctx_base)
@@ -283,6 +284,7 @@ defmodule Codrift.Initiative.Store do
     File.mkdir_p!(ctx)
     ensure_git_repo(ctx)
     write_initiative_md(ctx, initiative)
+    write_orchestration_md(ctx, initiative)
     {:noreply, state}
   end
 
@@ -380,6 +382,23 @@ defmodule Codrift.Initiative.Store do
     # the GenServer (both have a .git repo for diff tracking).
     ensure_git_repo(ctx_path)
     write_initiative_md(ctx_path, initiative)
+    write_orchestration_md(ctx_path, initiative)
+  end
+
+  @doc """
+  Returns the path to `orchestration.md` for an initiative.
+
+  Pure function — no GenServer call.
+  """
+  def orchestration_md_path(id), do: Path.expand("~/.codrift/initiatives/#{id}/orchestration.md")
+
+  @doc """
+  Reads `orchestration.md` for an initiative.
+
+  Returns `{:ok, content}` when the file exists, or `{:error, reason}` otherwise.
+  """
+  def read_orchestration_md(id) do
+    File.read(orchestration_md_path(id))
   end
 
   # Creates initiative.md on first run. If the file already exists (pre-seeded
@@ -398,6 +417,42 @@ defmodule Codrift.Initiative.Store do
     end
 
     ensure_claude_md_symlink(ctx_path)
+  end
+
+  # Writes orchestration.md only on first creation — never overwrites so users
+  # can freely edit it to customise the orchestrator's behaviour.
+  defp write_orchestration_md(ctx_path, initiative) do
+    path = Path.join(ctx_path, "orchestration.md")
+    unless File.exists?(path), do: File.write!(path, default_orchestration_md(initiative))
+  end
+
+  defp default_orchestration_md(initiative) do
+    """
+    # Orchestration: #{initiative.name}
+
+    This file is read by the orchestrator agent when it starts. Edit it to
+    customise how work is planned, distributed, and tracked for this initiative.
+
+    ## Goal
+
+    <!-- What should this initiative achieve? Be as specific as possible.
+         The orchestrator will use this to plan and assign work to agents. -->
+
+    ## Strategy
+
+    <!-- How should work be split across the project directories?
+         Leave blank to let the orchestrator decide based on the codebase. -->
+
+    ## Success Criteria
+
+    <!-- How do you know when the work is done?
+         Examples: all tests pass, feature ships, PR merged, report generated. -->
+
+    ## Notes
+
+    <!-- Any constraints, preferences, or special instructions.
+         Examples: don't touch the auth module, keep PRs small, use TypeScript. -->
+    """
   end
 
   # Creates CLAUDE.md as a symlink to initiative.md in `ctx_path` if absent.

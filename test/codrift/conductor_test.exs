@@ -229,6 +229,36 @@ defmodule Codrift.ConductorTest do
       combined = pid |> collect_chunks("init-prompt-adapter", 20, 200) |> Enum.join()
       assert String.contains?(combined, "echo")
     end
+
+    test "planning prompt includes orchestration.md content when present", %{agent_sup: sup, dir: ctx} do
+      File.write!(Path.join(ctx, "orchestration.md"), "## Goal\n\nShip the rocket.")
+
+      pid =
+        start_conductor("init-orch-md", [ctx],
+          agent_sup: sup,
+          task: "launch",
+          context_dir: ctx
+        )
+
+      :ok = Conductor.subscribe(pid)
+
+      combined = pid |> collect_chunks("init-orch-md", 20, 200) |> Enum.join()
+      assert String.contains?(combined, "Ship the rocket.")
+    end
+
+    test "planning prompt works without orchestration.md", %{agent_sup: sup, dir: ctx} do
+      pid =
+        start_conductor("init-no-orch-md", [ctx],
+          agent_sup: sup,
+          task: "run without file",
+          context_dir: ctx
+        )
+
+      :ok = Conductor.subscribe(pid)
+
+      combined = pid |> collect_chunks("init-no-orch-md", 20, 200) |> Enum.join()
+      assert String.contains?(combined, "run without file")
+    end
   end
 
   # Drains up to `max` conductor_output chunks for `initiative_id` with `timeout` ms each.
