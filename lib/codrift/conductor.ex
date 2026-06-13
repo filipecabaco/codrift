@@ -114,7 +114,8 @@ defmodule Codrift.Conductor do
 
         agents = %{id => %{pid: pid, dir: ctx_dir, status: :starting, role: :orchestrator}}
 
-        prompt = orchestrator_prompt(state.initiative_id, dirs, task)
+        adapter_name = Codrift.Agent.adapter_name(state.adapter)
+        prompt = orchestrator_prompt(state.initiative_id, dirs, task, adapter_name)
         AgentProcess.send_input(pid, prompt)
 
         {:noreply, %{state | agents: agents, orchestrator_id: id}}
@@ -224,7 +225,7 @@ defmodule Codrift.Conductor do
     for {pid, _} <- subs, do: send(pid, msg)
   end
 
-  defp orchestrator_prompt(initiative_id, dirs, task) do
+  defp orchestrator_prompt(initiative_id, dirs, task, adapter_name) do
     dir_list = Enum.map_join(dirs, "\n", &"  - #{&1}")
 
     """
@@ -240,7 +241,7 @@ defmodule Codrift.Conductor do
     Use the Codrift MCP tools to coordinate this work across the directories above:
 
     1. **Plan** — decide what each directory's agent should do based on the task and the initiative context in this folder.
-    2. **Start agents** — call `start_agent` for each directory (adapter: claude).
+    2. **Start agents** — call `start_agent` for each directory with adapter `#{adapter_name}`.
     3. **Assign work** — call `send_to_agent` with a focused, specific prompt for each agent. Each agent only knows about its own directory; give it clear instructions.
     4. **Monitor** — poll `get_agent_output` to track progress. Use `get_initiative_agents` to see which agents are still running.
     5. **Coordinate** — use `memory_search` before dispatching to avoid duplicating decisions already made. Use `memory_add` (type: decision) to record choices that affect multiple agents.
