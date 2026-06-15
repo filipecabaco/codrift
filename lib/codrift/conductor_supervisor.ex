@@ -46,7 +46,11 @@ defmodule Codrift.ConductorSupervisor do
   def start_orchestration(initiative, adapter, task, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     dirs = resolve_dirs(initiative)
-    child_opts = [initiative_id: initiative.id, dirs: dirs, adapter: adapter, task: task] ++ passthrough(opts)
+
+    child_opts =
+      [initiative_id: initiative.id, dirs: dirs, adapter: adapter, task: task] ++
+        passthrough(opts)
+
     DynamicSupervisor.start_child(server, {Codrift.Conductor, child_opts})
   end
 

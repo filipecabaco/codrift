@@ -32,6 +32,6 @@
   }
 
   .feature-cell {
-    @apply p-8 border-r border-b border-border transition-colors hover:bg-raised;
+    @apply p-8 bg-bg transition-colors hover:bg-raised;
   }
 }

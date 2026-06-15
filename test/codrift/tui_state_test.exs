@@ -135,7 +135,14 @@ defmodule Codrift.TUIStateTest do
       },
       diff:
         Map.merge(
-          %{files: [], scroll: 0, view_mode: :unified, sidebar_entries: [], sidebar_cursor: 0},
+          %{
+            files: [],
+            scroll: 0,
+            view_mode: :unified,
+            sidebar_entries: [],
+            sidebar_cursor: 0,
+            filter: %{query: "", active: false}
+          },
           diff_mapped
         ),
       refs:

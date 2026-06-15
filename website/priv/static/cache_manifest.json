@@ -1,0 +1,16 @@
+{
+  "files": {
+    "tw.css": {
+      "size": 23801,
+      "mtime": "2026-06-15T21:40:04",
+      "digest": "19fb33492fb2",
+      "digested_path": "tw-19fb33492fb2.css",
+      "gzipped": {
+        "size": 4726,
+        "path": "tw-19fb33492fb2.css.gz"
+      }
+    }
+  },
+  "generated_at": "2026-06-15T21:40:04.505399Z",
+  "version": 1
+}

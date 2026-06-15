@@ -45,8 +45,9 @@
           One terminal.<br /><span class="text-amber">Every agent.</span>
         </h1>
         <p class="mb-10 max-w-[46ch] text-lg leading-relaxed text-muted">
-          Drive Claude, Codex, Opencode, Gemini, and Copilot side by side.
-          Keyboard-driven, worktree-isolated, no browser needed.
+          Drive Claude, Codex, Opencode, Gemini, and Copilot side by side —
+          or let one conduct the rest. Keyboard-driven, worktree-isolated,
+          no browser needed.
         </p>
         <div class="flex flex-wrap items-center gap-3">
           <div class="install-row" id="hero-cmd" onclick="copyText('hero-cmd-text', 'hero-toast')">
@@ -72,27 +73,45 @@
       <!-- TERMINAL PREVIEW -->
       <div class="relative">
         <div class="pointer-events-none absolute inset-0 -m-10 rounded-full bg-amber/5 blur-3xl"></div>
-        <div class="relative overflow-hidden rounded-xl border border-border bg-terminal font-mono text-[0.68rem] leading-relaxed">
+        <div class="relative overflow-hidden rounded-xl border border-border bg-terminal font-mono text-[0.72rem] leading-relaxed">
           <div class="flex items-center gap-2 border-b border-border bg-raised px-4 py-2.5">
             <span class="h-2.5 w-2.5 rounded-full bg-[oklch(62%_0.2_25)]"></span>
             <span class="h-2.5 w-2.5 rounded-full bg-[oklch(78%_0.17_75)]"></span>
             <span class="h-2.5 w-2.5 rounded-full bg-[oklch(70%_0.2_145)]"></span>
             <span class="flex-1 text-center text-[0.65rem] text-faint tracking-wide">codrift</span>
           </div>
-          <div class="overflow-x-auto px-5 py-4">
-            <pre class="text-[oklch(88%_0.008_265)]"><span class="text-[oklch(42%_0.01_265)]">┌──────────────────────────────────────────────────────────────┐</span>
-<span class="text-[oklch(42%_0.01_265)]">│ </span><span class="text-amber">● 1: Context</span>  <span class="text-faint">○ 2: Diff  ○ 3: Tree</span>                          <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">├─────────────────┬────────────────────────────────────────────┤</span>
-<span class="text-[oklch(42%_0.01_265)]">│ </span><span class="text-faint">Initiatives</span>     <span class="text-[oklch(42%_0.01_265)]">│</span>                                            <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">│  </span><span class="text-amber">● my-app</span>       <span class="text-[oklch(42%_0.01_265)]">│</span>  <span class="text-[oklch(78%_0.008_265)]">Initiative / dir / agent output</span>           <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">│   </span><span class="text-amber">◈ context</span>    <span class="text-[oklch(42%_0.01_265)]">│</span>  <span class="text-[oklch(78%_0.008_265)]">(updates as cursor moves)</span>                 <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">│   </span><span class="text-[oklch(65%_0.14_235)]">▸ ~/repo [wt]</span> <span class="text-[oklch(42%_0.01_265)]">│</span>                                            <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">│     </span><span class="text-amber">◦ claude</span>   <span class="text-[oklch(42%_0.01_265)]">│</span>  <span class="text-[oklch(78%_0.008_265)]">Exploring codebase architecture</span>           <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">│     </span><span class="text-faint">◦ codex</span>    <span class="text-[oklch(42%_0.01_265)]">│</span>  <span class="text-[oklch(78%_0.008_265)]">and refactoring auth module</span><span class="bg-amber text-bg px-0.5"> </span>             <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">│     </span><span class="text-faint">◦ terminal</span> <span class="text-[oklch(42%_0.01_265)]">│</span>                                            <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">├─────────────────┴────────────────────────────────────────────┤</span>
-<span class="text-[oklch(42%_0.01_265)]">│ </span><span class="text-[oklch(78%_0.008_265)]">j/k</span><span class="text-faint">:navigate  </span><span class="text-[oklch(78%_0.008_265)]">s</span><span class="text-faint">:start  </span><span class="text-[oklch(78%_0.008_265)]">a</span><span class="text-faint">:add-dir  </span><span class="text-[oklch(78%_0.008_265)]">d</span><span class="text-faint">:delete  </span><span class="text-[oklch(78%_0.008_265)]">Ctrl+P</span><span class="text-faint">:palette</span>  <span class="text-[oklch(42%_0.01_265)]">│</span>
-<span class="text-[oklch(42%_0.01_265)]">└──────────────────────────────────────────────────────────────┘</span></pre>
+
+          <!-- tab row -->
+          <div class="flex items-center gap-5 border-b border-border px-5 py-2.5 text-[oklch(88%_0.008_265)]">
+            <span class="text-amber">● 1: Context</span>
+            <span class="text-faint">○ 2: Diff</span>
+            <span class="text-faint">○ 3: Tree</span>
+          </div>
+
+          <!-- body: sidebar + main pane -->
+          <div class="flex">
+            <div class="w-44 shrink-0 border-r border-border px-4 py-3.5">
+              <div class="mb-1.5 text-faint">Initiatives</div>
+              <div class="space-y-1 whitespace-nowrap">
+                <div class="text-amber">● my-app</div>
+                <div class="pl-3 text-amber">◈ context</div>
+                <div class="pl-3 text-[oklch(65%_0.14_235)]">▸ ~/repo <span class="text-faint">[wt]</span></div>
+                <div class="pl-6 text-amber">◦ claude</div>
+                <div class="pl-6 text-faint">◦ codex</div>
+                <div class="pl-6 text-faint">◦ terminal</div>
+              </div>
+            </div>
+            <div class="flex-1 px-4 py-3.5 text-[oklch(78%_0.008_265)]">
+              <div>Initiative / dir / agent output</div>
+              <div class="text-faint">(updates as cursor moves)</div>
+              <div class="mt-4">Exploring codebase architecture</div>
+              <div>and refactoring auth module<span class="ml-0.5 inline-block h-[1em] w-[0.5em] -mb-[0.15em] animate-pulse bg-amber"></span></div>
+            </div>
+          </div>
+
+          <!-- keybar -->
+          <div class="border-t border-border px-5 py-2.5">
+            <span class="text-[oklch(88%_0.008_265)]">j/k</span><span class="text-faint">:navigate&nbsp;&nbsp;</span><span class="text-[oklch(88%_0.008_265)]">s</span><span class="text-faint">:start&nbsp;&nbsp;</span><span class="text-[oklch(88%_0.008_265)]">a</span><span class="text-faint">:add-dir&nbsp;&nbsp;</span><span class="text-[oklch(88%_0.008_265)]">d</span><span class="text-faint">:delete&nbsp;&nbsp;</span><span class="text-[oklch(88%_0.008_265)]">Ctrl+P</span><span class="text-faint">:palette</span>
           </div>
         </div>
       </div>
@@ -107,36 +126,36 @@
         No tab-switching, no lost context.
       </p>
       <div class="overflow-hidden rounded-lg border border-border">
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-          <div class="feature-cell lg:[&:nth-child(3n)]:border-r-0 [&:nth-child(2n)]:sm:border-r-0 lg:[&:nth-child(2n)]:border-r">
+        <div class="grid grid-cols-1 gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
+          <div class="feature-cell">
             <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">01</div>
-            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Full terminal UI</h3>
-            <p class="text-sm leading-relaxed text-muted">Sidebar, agent panes, keyboard-driven, mouse support. Everything visible at once.</p>
+            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Conductor</h3>
+            <p class="text-sm leading-relaxed text-muted">Hand one agent a goal and let it plan, launch, and direct sub-agents across the whole initiative — over MCP, no glue code.</p>
           </div>
-          <div class="feature-cell sm:border-r-0 lg:border-r">
+          <div class="feature-cell">
             <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">02</div>
             <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Multiple agents per dir</h3>
             <p class="text-sm leading-relaxed text-muted">Claude Code, Codex, Opencode, Gemini, Copilot, and a raw shell all running simultaneously.</p>
           </div>
-          <div class="feature-cell lg:border-r-0">
+          <div class="feature-cell">
             <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">03</div>
             <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Git worktrees</h3>
             <p class="text-sm leading-relaxed text-muted">Each directory gets an isolated branch. Agents never touch your main checkout.</p>
           </div>
-          <div class="feature-cell border-b-0 lg:[&:nth-child(4)]:border-b-0">
+          <div class="feature-cell">
             <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">04</div>
-            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Live diff view</h3>
-            <p class="text-sm leading-relaxed text-muted">Colour-coded split or unified diff per initiative, updated as agents work.</p>
+            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Diff &amp; tree view</h3>
+            <p class="text-sm leading-relaxed text-muted">Colour-coded split or unified diffs, a syntax-highlighted file tree, and fuzzy / glob / regex filtering — updated as agents work.</p>
           </div>
-          <div class="feature-cell border-b-0 sm:border-r-0 lg:border-r">
+          <div class="feature-cell">
             <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">05</div>
             <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Shared memory</h3>
             <p class="text-sm leading-relaxed text-muted">FTS5 knowledge base per initiative. Agents search it before starting, write to it when done.</p>
           </div>
-          <div class="feature-cell border-b-0 lg:border-r-0">
+          <div class="feature-cell">
             <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">06</div>
             <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">MCP server + integrations</h3>
-            <p class="text-sm leading-relaxed text-muted">Claude Code connects over SSE. Pull context from GitHub, Linear, GitLab, Jira, and Notion.</p>
+            <p class="text-sm leading-relaxed text-muted">Agents connect over SSE and call Codrift's tools. Pull context from GitHub, Linear, GitLab, Jira, and Notion.</p>
           </div>
         </div>
       </div>

@@ -1255,35 +1255,13 @@ defmodule Codrift.TUI do
 
     selected = agent_id == state.selection.agent_id
 
-    new_scroll =
-      cond do
-        # User has scrolled away from default view (main_scroll > 0) — preserve so
-        # they can read while output streams.
-        selected and state.main_scroll > 0 -> state.main_scroll
-        # At default view (main_scroll == 0): stay there so live output is visible.
-        selected -> 0
-        true -> state.main_scroll
-      end
-
-    new_refs =
-      if selected and is_nil(Map.get(state.refs, :output_render)) do
-        ref = Process.send_after(self(), :render_output, 16)
-        Map.put(state.refs, :output_render, ref)
-      else
-        state.refs
-      end
-
     cursor_hidden_at =
-      cond do
-        screen.cursor_visible and not updated.cursor_visible ->
-          Map.put(state.agents.cursor_hidden_at, agent_id, :erlang.monotonic_time(:millisecond))
-
-        not screen.cursor_visible and updated.cursor_visible ->
-          Map.delete(state.agents.cursor_hidden_at, agent_id)
-
-        true ->
-          state.agents.cursor_hidden_at
-      end
+      track_cursor_hidden(
+        state.agents.cursor_hidden_at,
+        agent_id,
+        screen.cursor_visible,
+        updated.cursor_visible
+      )
 
     new_state = %{
       state
@@ -1293,8 +1271,8 @@ defmodule Codrift.TUI do
             outputs: outputs,
             cursor_hidden_at: cursor_hidden_at
         },
-        main_scroll: new_scroll,
-        refs: new_refs
+        main_scroll: scroll_for_output(selected, state.main_scroll),
+        refs: schedule_output_render(state, selected)
     }
 
     {:noreply, new_state, [render?: false]}
@@ -1554,6 +1532,32 @@ defmodule Codrift.TUI do
   end
 
   def handle_info(_, state), do: {:noreply, state}
+
+  # Keeps the live view pinned at the default position while output streams, but
+  # preserves the user's position if they've scrolled away (main_scroll > 0).
+  defp scroll_for_output(true, main_scroll) when main_scroll > 0, do: main_scroll
+  defp scroll_for_output(true, _main_scroll), do: 0
+  defp scroll_for_output(false, main_scroll), do: main_scroll
+
+  # Schedules a coalesced render for the selected agent unless one is already pending.
+  defp schedule_output_render(state, false), do: state.refs
+
+  defp schedule_output_render(state, true) do
+    if is_nil(Map.get(state.refs, :output_render)) do
+      ref = Process.send_after(self(), :render_output, 16)
+      Map.put(state.refs, :output_render, ref)
+    else
+      state.refs
+    end
+  end
+
+  # Records when the cursor became hidden (for blink/idle handling), clearing the
+  # timestamp when it reappears.
+  defp track_cursor_hidden(map, agent_id, true, false),
+    do: Map.put(map, agent_id, :erlang.monotonic_time(:millisecond))
+
+  defp track_cursor_hidden(map, agent_id, false, true), do: Map.delete(map, agent_id)
+  defp track_cursor_hidden(map, _agent_id, _was, _now), do: map
 
   defp save_all_sessions(state) do
     for agent_id <- MapSet.to_list(state.agents.subscribed) do
@@ -2963,28 +2967,29 @@ defmodule Codrift.TUI do
       flash_status(base, "Task cannot be empty")
     else
       case Store.get(initiative_id) do
-        {:ok, initiative} ->
-          case ConductorSupervisor.start_orchestration(initiative, adapter, task) do
-            {:ok, _pid} ->
-              base
-              |> reload_sidebar()
-              |> flash_status("Orchestration started for '#{initiative.name}'")
-
-            {:error, {:already_started, _}} ->
-              flash_status(base, "Conductor already running for this initiative")
-
-            {:error, reason} ->
-              flash_status(base, "Failed to start orchestration: #{inspect(reason)}")
-          end
-
-        {:error, :not_found} ->
-          flash_status(base, "Initiative not found")
+        {:ok, initiative} -> do_start_orchestration(base, initiative, adapter, task)
+        {:error, :not_found} -> flash_status(base, "Initiative not found")
       end
     end
   end
 
   defp confirm_orchestration_task(state),
     do: %{state | modal: %{state.modal | type: :none, context: nil}}
+
+  defp do_start_orchestration(base, initiative, adapter, task) do
+    case ConductorSupervisor.start_orchestration(initiative, adapter, task) do
+      {:ok, _pid} ->
+        base
+        |> reload_sidebar()
+        |> flash_status("Orchestration started for '#{initiative.name}'")
+
+      {:error, {:already_started, _}} ->
+        flash_status(base, "Conductor already running for this initiative")
+
+      {:error, reason} ->
+        flash_status(base, "Failed to start orchestration: #{inspect(reason)}")
+    end
+  end
 
   defp refresh_current(%{active_tab: :diff} = state), do: refresh_diff(state)
   defp refresh_current(%{active_tab: :tree} = state), do: rebuild_tree(state)
