@@ -2,8 +2,8 @@ defmodule Codrift do
   @moduledoc """
   Application entry point and HTTP router.
 
-  Starts the supervision tree (Registry, Initiative.Store, AgentSupervisor, Bandit)
-  and declares all HTTP/SSE routes.
+  Starts the supervision tree (Registry, Initiative.Store, AgentSupervisor,
+  ConductorSupervisor, Bandit) and declares all HTTP/SSE routes.
 
   ## MCP server
 
@@ -12,6 +12,17 @@ defmodule Codrift do
     - `GET  /mcp/sse` – SSE stream for server-initiated notifications
 
   Run `mix codrift.mcp.install` to register the server with Claude Code.
+
+  ## SSE initiative stream
+
+  `GET /events/initiative/:id` streams events for a single initiative:
+
+    - `connected`               – emitted on join with agent count
+    - `output`                  – raw agent output chunk
+    - `stopped`                 – agent exited with a code
+    - `conductor_output`        – output chunk from a conductor-managed agent
+    - `conductor_agent_ready`   – conductor agent became idle
+    - `conductor_agent_stopped` – conductor agent exited
   """
 
   use Francis
@@ -25,9 +36,11 @@ defmodule Codrift do
   def start(_type, _args) do
     children = [
       {Registry, keys: :unique, name: Codrift.AgentRegistry},
+      {Registry, keys: :unique, name: Codrift.ConductorRegistry},
       Codrift.SessionStore,
       Store,
       Codrift.AgentSupervisor,
+      Codrift.ConductorSupervisor,
       {Task.Supervisor, name: Codrift.TaskSupervisor},
       Codrift.OAuth.StateStore,
       Codrift.Scheduler,
@@ -89,6 +102,11 @@ defmodule Codrift do
       agents = Codrift.AgentSupervisor.list_agents_for_initiative(initiative_id)
       Enum.each(agents, &Codrift.AgentProcess.subscribe(&1, self()))
 
+      case Codrift.ConductorSupervisor.find_conductor(initiative_id) do
+        {:ok, conductor_pid} -> Codrift.Conductor.subscribe(conductor_pid, self())
+        {:error, :not_found} -> :ok
+      end
+
       {:reply,
        %{event: "connected", data: %{initiative_id: initiative_id, agent_count: length(agents)}}}
 
@@ -97,6 +115,27 @@ defmodule Codrift do
 
     {:received, {:agent_stopped, agent_id, code}}, _socket ->
       {:reply, %{event: "stopped", data: %{agent_id: agent_id, exit_code: code}}}
+
+    {:received, {:conductor_output, initiative_id, agent_id, data}}, _socket ->
+      {:reply,
+       %{
+         event: "conductor_output",
+         data: %{initiative_id: initiative_id, agent_id: agent_id, content: data}
+       }}
+
+    {:received, {:conductor_agent_ready, initiative_id, agent_id}}, _socket ->
+      {:reply,
+       %{
+         event: "conductor_agent_ready",
+         data: %{initiative_id: initiative_id, agent_id: agent_id}
+       }}
+
+    {:received, {:conductor_agent_stopped, initiative_id, agent_id, code}}, _socket ->
+      {:reply,
+       %{
+         event: "conductor_agent_stopped",
+         data: %{initiative_id: initiative_id, agent_id: agent_id, exit_code: code}
+       }}
 
     {:received, _}, _socket ->
       :noreply
