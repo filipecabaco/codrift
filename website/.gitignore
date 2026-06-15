@@ -1,0 +1,9 @@
+_build/
+cover/
+deps/
+doc/
+/.fetch
+erl_crash.dump
+/tmp/
+/priv/plts/*.plt
+/priv/plts/*.plt.hash

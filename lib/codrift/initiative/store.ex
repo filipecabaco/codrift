@@ -130,6 +130,7 @@ defmodule Codrift.Initiative.Store do
       File.mkdir_p!(ctx)
       ensure_git_repo(ctx)
       ensure_claude_md_symlink(ctx)
+      write_orchestration_md(ctx, initiative)
     end)
 
     clean_orphaned_context_dirs(initiatives, ctx_base)
@@ -283,6 +284,7 @@ defmodule Codrift.Initiative.Store do
     File.mkdir_p!(ctx)
     ensure_git_repo(ctx)
     write_initiative_md(ctx, initiative)
+    write_orchestration_md(ctx, initiative)
     {:noreply, state}
   end
 
@@ -380,6 +382,38 @@ defmodule Codrift.Initiative.Store do
     # the GenServer (both have a .git repo for diff tracking).
     ensure_git_repo(ctx_path)
     write_initiative_md(ctx_path, initiative)
+    write_orchestration_md(ctx_path, initiative)
+  end
+
+  @doc """
+  Returns the path to `orchestration.md` for an initiative.
+
+  Pure function — no GenServer call.
+  """
+  def orchestration_md_path(id), do: Path.expand("~/.codrift/initiatives/#{id}/orchestration.md")
+
+  @doc """
+  Reads `orchestration.md` for an initiative.
+
+  Returns `{:ok, content}` when the file exists, or `{:error, reason}` otherwise.
+  """
+  def read_orchestration_md(id) do
+    File.read(orchestration_md_path(id))
+  end
+
+  @doc """
+  Overwrites `orchestration.md` for an initiative with `content`.
+
+  Unlike `write_orchestration_md/2` (private), this always writes — it is
+  intended for the MCP `update_orchestration_md` tool and TUI editor flows
+  where the user explicitly wants to replace the file.
+
+  Returns `:ok` or `{:error, reason}`.
+  """
+  def update_orchestration_md(id, content) do
+    path = orchestration_md_path(id)
+    path |> Path.dirname() |> File.mkdir_p!()
+    File.write(path, content)
   end
 
   # Creates initiative.md on first run. If the file already exists (pre-seeded
@@ -398,6 +432,80 @@ defmodule Codrift.Initiative.Store do
     end
 
     ensure_claude_md_symlink(ctx_path)
+  end
+
+  # Writes orchestration.md only on first creation — never overwrites so users
+  # can freely edit it to customise the orchestrator's behaviour.
+  defp write_orchestration_md(ctx_path, initiative) do
+    path = Path.join(ctx_path, "orchestration.md")
+    unless File.exists?(path), do: File.write!(path, default_orchestration_md(initiative))
+  end
+
+  defp default_orchestration_md(initiative) do
+    """
+    # Orchestration: #{initiative.name}
+
+    This file is read by the orchestrator agent at startup. Edit any section to
+    shape how work is planned and coordinated. The orchestrator acts on whatever
+    is written here, so replace placeholder text with specifics when you have them.
+
+    ## Roles
+
+    **Orchestrator** — you. A single agent running in the initiative context
+    directory. You do not edit code directly. Your job is to plan, delegate,
+    monitor, and synthesise. You communicate with agents through MCP tools only.
+
+    **Agents** — worker agents started by you via `start_agent`, one per working
+    directory. Each agent is isolated: it only sees its own directory and receives
+    exactly the prompt you send it via `send_to_agent`. Agents do the actual
+    file-editing work. They do not communicate with each other or with you
+    directly — you poll their output with `get_agent_output`.
+
+    ## Goal
+
+    Not yet specified. Derive the goal from the task description provided at
+    startup and the contents of the working directories.
+
+    ## Workflow
+
+    Follow this loop unless the Goal or Constraints say otherwise:
+
+    1. **Explore** — call `get_diff` on the initiative to understand recent
+       changes. Read key files in each directory before writing any agent prompts.
+    2. **Plan** — decide what each working directory needs independently. Write
+       a short, self-contained prompt for each directory's agent before starting
+       any of them.
+    3. **Delegate** — call `start_agent` for each directory, then `send_to_agent`
+       with the prepared prompt. Start agents in parallel where the work is
+       independent; sequence them when one directory's output affects another.
+    4. **Monitor** — poll `get_initiative_agents` to check agent status. Use
+       `get_agent_output` to read progress and detect blockers. An agent with
+       status `idle` or `awaiting_input` is ready for its next instruction.
+    5. **Coordinate** — call `memory_search` before making any cross-directory
+       architectural decision. Record decisions with `memory_add`
+       (chunk_type: `decision`) so agents do not duplicate or contradict work.
+    6. **Synthesise** — once all agents are idle or stopped, reconcile their
+       output and write a `summary` via `memory_add` covering what changed,
+       what was decided, and anything left outstanding.
+
+    ## Constraints
+
+    None specified. Apply sensible defaults:
+    - Do not run destructive or irreversible commands without explicit instruction.
+    - Prefer small, reviewable changes over large rewrites.
+    - If a directory has existing tests, verify they still pass before marking
+      that agent's work complete.
+
+    ## Success Criteria
+
+    The task is complete when:
+    - All agents are idle or stopped with no unresolved errors.
+    - A `summary` memory entry has been written for the initiative.
+
+    Replace these with measurable outcomes specific to the task (e.g. "all tests
+    pass in every directory", "a PR is open per repo", "report written to
+    output.md").
+    """
   end
 
   # Creates CLAUDE.md as a symlink to initiative.md in `ctx_path` if absent.

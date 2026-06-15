@@ -78,7 +78,7 @@ defmodule Codrift.TUI do
 
   alias Codrift.Agent
   alias Codrift.Agent.Adapters.{Claude, Terminal}
-  alias Codrift.{AgentProcess, AgentSupervisor, Diff, Initiative, Paths}
+  alias Codrift.{AgentProcess, AgentSupervisor, ConductorSupervisor, Diff, Initiative, Paths}
   alias Codrift.Config.{Keybindings, Settings, Theme}
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.OAuth.Config, as: OAuthConfig
@@ -116,6 +116,7 @@ defmodule Codrift.TUI do
           | :service_setup
           | :agent_picker
           | :shortcuts
+          | :orchestration_task
   @type tab :: :context | :diff | :tree
 
   defstruct [
@@ -537,19 +538,38 @@ defmodule Codrift.TUI do
 
   def handle_event(%Key{code: "up", kind: "press"}, %{modal: %{type: :agent_picker}} = state) do
     cursor = max(state.modal.agent_picker.cursor - 1, 0)
-    {:noreply, %{state | modal: %{state.modal | agent_picker: %{cursor: cursor}}}}
+
+    {:noreply,
+     %{state | modal: %{state.modal | agent_picker: %{state.modal.agent_picker | cursor: cursor}}}}
   end
 
   def handle_event(%Key{code: "down", kind: "press"}, %{modal: %{type: :agent_picker}} = state) do
     max_idx = length(state.modal.context) - 1
     cursor = min(state.modal.agent_picker.cursor + 1, max_idx)
-    {:noreply, %{state | modal: %{state.modal | agent_picker: %{cursor: cursor}}}}
+
+    {:noreply,
+     %{state | modal: %{state.modal | agent_picker: %{state.modal.agent_picker | cursor: cursor}}}}
   end
 
   def handle_event(%Key{code: "enter", kind: "press"}, %{modal: %{type: :agent_picker}} = state) do
     adapter = Enum.at(state.modal.context, state.modal.agent_picker.cursor)
-    {:noreply, start_agent_at_cursor(%{state | modal: %{state.modal | type: :none}}, adapter)}
+    base = %{state | modal: %{state.modal | type: :none}}
+
+    case state.modal.agent_picker[:intent] do
+      :start_orchestration ->
+        {:noreply,
+         open_orchestration_task_modal_with(base, state.modal.agent_picker.initiative_id, adapter)}
+
+      _ ->
+        {:noreply, start_agent_at_cursor(base, adapter)}
+    end
   end
+
+  def handle_event(
+        %Key{code: "enter", kind: "press"},
+        %{modal: %{type: :orchestration_task}} = state
+      ),
+      do: {:noreply, confirm_orchestration_task(state)}
 
   # Text-input key routing — ADDING A MODAL CHECKLIST
   #
@@ -570,7 +590,8 @@ defmodule Codrift.TUI do
              :new_tree_item,
              :integration_item_id,
              :service_guided_token,
-             :promote_name
+             :promote_name,
+             :orchestration_task
            ] and byte_size(code) == 1 do
     ExRatatui.text_input_handle_key(state.modal.input, code)
     {:noreply, sync_modal(state, modal)}
@@ -585,7 +606,8 @@ defmodule Codrift.TUI do
              :new_tree_item,
              :integration_item_id,
              :service_guided_token,
-             :promote_name
+             :promote_name,
+             :orchestration_task
            ] and code in ["backspace", "delete", "left", "right", "home", "end"] do
     ExRatatui.text_input_handle_key(state.modal.input, code)
     {:noreply, sync_modal(state, modal)}
@@ -1097,10 +1119,6 @@ defmodule Codrift.TUI do
   defp dispatch_char(_action, code, true, %{selection: %{agent_mode: :pty}} = state),
     do: {:noreply, forward_raw(state, code)}
 
-  # Sidebar structural actions — only when sidebar has focus (main PTY handled above).
-  defp dispatch_char(:toggle_collapse, _code, _focus, state),
-    do: {:noreply, toggle_collapse_at_cursor(state)}
-
   defp dispatch_char(:edit_context, code, true, state) do
     case state.cursor_info do
       %{type: :context_file, path: path} -> {:noreply, open_in_editor(state, path)}
@@ -1122,9 +1140,6 @@ defmodule Codrift.TUI do
 
   defp dispatch_sidebar_action(:navigate_up, state),
     do: {:noreply, move_sidebar_cursor(state, -1)}
-
-  defp dispatch_sidebar_action(:toggle_collapse, state),
-    do: {:noreply, toggle_collapse_at_cursor(state)}
 
   defp dispatch_sidebar_action(:context_mode, state) do
     {:noreply, %{state | active_tab: :context, main_scroll: 0} |> update_context_from_cursor()}
@@ -1198,6 +1213,9 @@ defmodule Codrift.TUI do
     {:noreply, open_source_picker(state)}
   end
 
+  defp dispatch_sidebar_action(:start_orchestration, state),
+    do: {:noreply, open_orchestration_task_modal(state)}
+
   defp dispatch_sidebar_action(:toggle_sidebar, state),
     do: {:noreply, toggle_sidebar(state)}
 
@@ -1255,9 +1273,26 @@ defmodule Codrift.TUI do
         state.refs
       end
 
+    cursor_hidden_at =
+      cond do
+        screen.cursor_visible and not updated.cursor_visible ->
+          Map.put(state.agents.cursor_hidden_at, agent_id, :erlang.monotonic_time(:millisecond))
+
+        not screen.cursor_visible and updated.cursor_visible ->
+          Map.delete(state.agents.cursor_hidden_at, agent_id)
+
+        true ->
+          state.agents.cursor_hidden_at
+      end
+
     new_state = %{
       state
-      | agents: %{state.agents | screens: new_screens, outputs: outputs},
+      | agents: %{
+          state.agents
+          | screens: new_screens,
+            outputs: outputs,
+            cursor_hidden_at: cursor_hidden_at
+        },
         main_scroll: new_scroll,
         refs: new_refs
     }
@@ -2247,8 +2282,8 @@ defmodule Codrift.TUI do
   defp do_palette_action(:refresh, state),
     do: refresh_current(%{state | modal: %{state.modal | type: :none}})
 
-  defp do_palette_action(:toggle_collapse, state),
-    do: toggle_collapse_at_cursor(%{state | modal: %{state.modal | type: :none}})
+  defp do_palette_action(:start_orchestration, state),
+    do: open_orchestration_task_modal(%{state | modal: %{state.modal | type: :none}})
 
   defp do_palette_action(:shortcuts, state),
     do: %{state | modal: %{state.modal | type: :shortcuts}}
@@ -2347,32 +2382,6 @@ defmodule Codrift.TUI do
         %{state | sidebar: %{state.sidebar | cursor: new_cursor}, main_scroll: 0}
         |> update_context_from_cursor()
     end
-  end
-
-  defp toggle_collapse_at_cursor(state) do
-    new_collapsed_ids =
-      case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
-        {:initiative, id, _, _, _, _} ->
-          toggle_collapse_id(state.sidebar.collapsed_ids, {:initiative, id})
-
-        {:context_dir, _, path, _} ->
-          toggle_collapse_id(state.sidebar.collapsed_ids, {:context_dir, path})
-
-        {:dir, _, path, _, _} ->
-          toggle_collapse_id(state.sidebar.collapsed_ids, {:dir, path})
-
-        _ ->
-          state.sidebar.collapsed_ids
-      end
-
-    reload_sidebar(%{state | sidebar: %{state.sidebar | collapsed_ids: new_collapsed_ids}})
-    |> update_context_from_cursor()
-  end
-
-  defp toggle_collapse_id(collapsed_ids, key) do
-    if MapSet.member?(collapsed_ids, key),
-      do: MapSet.delete(collapsed_ids, key),
-      else: MapSet.put(collapsed_ids, key)
   end
 
   defp navigate(state, delta) do
@@ -2885,6 +2894,96 @@ defmodule Codrift.TUI do
   end
 
   defp confirm_context_file(state),
+    do: %{state | modal: %{state.modal | type: :none, context: nil}}
+
+  defp open_orchestration_task_modal(state) do
+    case Enum.at(state.sidebar.entries, state.sidebar.cursor) do
+      {:initiative, id, _, _, _, _} ->
+        case Agent.available_adapters() do
+          [] ->
+            flash_status(
+              state,
+              "No agents available — install claude, codex, or another supported CLI"
+            )
+
+          [single] ->
+            open_orchestration_task_modal_with(state, id, single)
+
+          adapters ->
+            counts = Settings.adapter_start_counts()
+            sorted = Enum.sort_by(adapters, &Map.get(counts, Agent.adapter_name(&1), 0), :desc)
+
+            %{
+              state
+              | modal: %{
+                  state.modal
+                  | type: :agent_picker,
+                    context: sorted,
+                    agent_picker: %{cursor: 0, intent: :start_orchestration, initiative_id: id}
+                }
+            }
+        end
+
+      _ ->
+        flash_status(state, "Navigate to an initiative first")
+    end
+  end
+
+  defp open_orchestration_task_modal_with(state, initiative_id, adapter) do
+    default_task =
+      initiative_id
+      |> Store.context_path()
+      |> Path.join("initiative.md")
+      |> File.read()
+      |> case do
+        {:ok, content} -> String.trim(content)
+        {:error, _} -> ""
+      end
+
+    ExRatatui.text_input_set_value(state.modal.input, default_task)
+
+    %{
+      state
+      | modal: %{
+          state.modal
+          | type: :orchestration_task,
+            context: %{initiative_id: initiative_id, adapter: adapter}
+        },
+        status: "Enter task description — Enter: start  Esc: cancel"
+    }
+  end
+
+  defp confirm_orchestration_task(
+         %{modal: %{context: %{initiative_id: initiative_id, adapter: adapter}}} = state
+       ) do
+    task = state.modal.input |> ExRatatui.text_input_get_value() |> String.trim()
+    base = %{state | modal: %{state.modal | type: :none, context: nil}}
+
+    if task == "" do
+      flash_status(base, "Task cannot be empty")
+    else
+      case Store.get(initiative_id) do
+        {:ok, initiative} ->
+          case ConductorSupervisor.start_orchestration(initiative, adapter, task) do
+            {:ok, _pid} ->
+              base
+              |> reload_sidebar()
+              |> flash_status("Orchestration started for '#{initiative.name}'")
+
+            {:error, {:already_started, _}} ->
+              flash_status(base, "Conductor already running for this initiative")
+
+            {:error, reason} ->
+              flash_status(base, "Failed to start orchestration: #{inspect(reason)}")
+          end
+
+        {:error, :not_found} ->
+          flash_status(base, "Initiative not found")
+      end
+    end
+  end
+
+  defp confirm_orchestration_task(state),
     do: %{state | modal: %{state.modal | type: :none, context: nil}}
 
   defp refresh_current(%{active_tab: :diff} = state), do: refresh_diff(state)
@@ -4016,13 +4115,19 @@ defmodule Codrift.TUI do
 
     # Claude Code hides the cursor (\e[?25l) during Ink repaints and shows it
     # (\e[?25h) when done. Forwarding mid-repaint lands keystrokes at the wrong
-    # row. Drop input for Claude only until the cursor is visible again —
-    # repaints complete in < 200 ms so no keys are lost.
-    # Other TUI adapters (Gemini, Codex, Opencode) hide the cursor as part of
-    # normal UI (dialogs, auth prompts) and must always receive input.
+    # row. Guard input for Claude only during the brief repaint window (< 250 ms
+    # after the cursor hides). Permission dialogs keep the cursor hidden for
+    # seconds and must receive input — only time-bounding the guard handles both.
     adapter = lookup_adapter(state, state.selection.agent_id)
 
-    claude_repaint_guard = adapter == Claude and screen != nil and not screen.cursor_visible
+    in_repaint_window =
+      case Map.get(state.agents.cursor_hidden_at, state.selection.agent_id) do
+        nil -> false
+        hidden_at -> :erlang.monotonic_time(:millisecond) - hidden_at < 250
+      end
+
+    claude_repaint_guard =
+      adapter == Claude and screen != nil and not screen.cursor_visible and in_repaint_window
 
     unless claude_repaint_guard do
       with id when not is_nil(id) <- state.selection.agent_id,
@@ -4461,6 +4566,7 @@ defmodule Codrift.TUI do
     "#{f.(kb.navigate_down)}/#{f.(kb.navigate_up)}:navigate  " <>
       "#{f.(kb.new_initiative)}:new  " <>
       "#{f.(kb.start_agent)}:start  " <>
+      "#{f.(kb.start_orchestration)}:orchestrate  " <>
       "#{f.(kb.delete)}:delete  " <>
       "#{f.(kb.start_terminal)}:terminal  " <>
       "Tab:agent pane  " <>
@@ -4517,6 +4623,11 @@ defmodule Codrift.TUI do
         label: "Open Terminal Here",
         hint: Keybindings.format(kb.start_terminal)
       },
+      %{
+        id: :start_orchestration,
+        label: "Start Orchestration",
+        hint: Keybindings.format(kb.start_orchestration)
+      },
       # Context files
       %{
         id: :new_context_file,
@@ -4534,12 +4645,7 @@ defmodule Codrift.TUI do
       %{id: :shortcuts, label: "Keyboard Shortcuts", hint: "?"},
       %{id: :integrations, label: "Integrations (connect services)", hint: ""},
       %{id: :refresh, label: "Refresh", hint: Keybindings.format(kb.refresh)},
-      %{id: :theme_picker, label: "Choose Theme", hint: ""},
-      %{
-        id: :toggle_collapse,
-        label: "Toggle Expand/Collapse",
-        hint: Keybindings.format(kb.toggle_collapse)
-      }
+      %{id: :theme_picker, label: "Choose Theme", hint: ""}
     ]
   end
 

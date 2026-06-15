@@ -365,6 +365,62 @@ defmodule Codrift.Initiative.StoreTest do
     end
   end
 
+  describe "orchestration.md" do
+    test "is created when an initiative is created", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %{id: id}} = Store.create("Orch Test", [], store)
+      # Sync: handle_continue runs before the next GenServer call processes
+      Store.get(id, store)
+
+      path = Path.join([tmp_dir, "ctx", id, "orchestration.md"])
+      assert File.exists?(path)
+    end
+
+    test "contains the initiative name", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %{id: id}} = Store.create("My Initiative", [], store)
+      Store.get(id, store)
+
+      content = File.read!(Path.join([tmp_dir, "ctx", id, "orchestration.md"]))
+      assert String.contains?(content, "My Initiative")
+    end
+
+    test "is not overwritten when it already exists (user edits preserved)", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %{id: id}} = Store.create("Editable", [], store)
+      # Sync before writing to the path to avoid a race with handle_continue
+      Store.get(id, store)
+
+      path = Path.join([tmp_dir, "ctx", id, "orchestration.md"])
+      File.write!(path, "custom user content")
+
+      # Trigger another write by restarting the store (which calls write_orchestration_md on init)
+      opts = store_opts(tmp_dir)
+      stop_supervised!(Codrift.Initiative.Store)
+      store2 = start_supervised!({Store, opts}, id: :s2)
+      _ = Store.list(store2)
+
+      assert File.read!(path) == "custom user content"
+    end
+
+    test "is backfilled on Store restart for pre-existing initiatives", %{tmp_dir: tmp_dir} do
+      opts = store_opts(tmp_dir)
+      store1 = start_supervised!({Store, opts}, id: :store1)
+      {:ok, %{id: id}} = Store.create("Backfill", [], store1)
+      # Sync before deleting to ensure handle_continue has created the file first
+      Store.get(id, store1)
+
+      path = Path.join([tmp_dir, "ctx", id, "orchestration.md"])
+      File.rm!(path)
+      refute File.exists?(path)
+
+      stop_supervised!(:store1)
+      start_supervised!({Store, opts}, id: :store2)
+
+      assert File.exists?(path)
+    end
+  end
+
   defp init_git_repo(path) do
     System.cmd("git", ["init"], cd: path, stderr_to_stdout: true)
     System.cmd("git", ["config", "user.email", "test@test.com"], cd: path, stderr_to_stdout: true)
