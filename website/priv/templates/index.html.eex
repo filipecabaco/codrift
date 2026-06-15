@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Drive multiple AI coding agents across your projects from a single keyboard-driven terminal." />
+    <title>Codrift — One terminal. Every agent.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="<%= tw_css %>" />
+  </head>
+  <body>
+
+    <!-- NAV -->
+    <nav class="sticky top-0 z-50 border-b border-border bg-bg/90 backdrop-blur-md">
+      <div class="mx-auto flex h-14 max-w-screen-xl items-center justify-between px-6 lg:px-10">
+        <a href="/" class="text-sm font-semibold tracking-tight text-ink no-underline">
+          co<span class="text-amber">drift</span>
+        </a>
+        <div class="flex items-center gap-6">
+          <a href="#features" class="nav-link hidden sm:block">Features</a>
+          <a href="#install" class="nav-link hidden sm:block">Install</a>
+          <a href="https://github.com/filipecabaco/codrift" class="nav-link hidden sm:flex items-center gap-1.5">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            GitHub
+          </a>
+          <a href="https://github.com/filipecabaco/codrift" class="rounded bg-amber px-3.5 py-1.5 text-sm font-semibold text-bg no-underline transition-colors hover:bg-amber-dim">
+            Get started
+          </a>
+        </div>
+      </div>
+    </nav>
+
+    <!-- HERO -->
+    <div class="mx-auto grid max-w-screen-xl grid-cols-1 items-center gap-12 px-6 py-20 lg:grid-cols-2 lg:gap-20 lg:px-10 lg:py-28">
+      <div>
+        <div class="mb-5 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-amber">
+          <span class="block h-px w-5 bg-amber"></span>
+          Terminal-native AI orchestration
+        </div>
+        <h1 class="mb-5 text-5xl font-bold leading-[1.08] tracking-tight lg:text-6xl">
+          One terminal.<br /><span class="text-amber">Every agent.</span>
+        </h1>
+        <p class="mb-10 max-w-[46ch] text-lg leading-relaxed text-muted">
+          Drive Claude, Codex, Opencode, Gemini, and Copilot side by side.
+          Keyboard-driven, worktree-isolated, no browser needed.
+        </p>
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="install-row" id="hero-cmd" onclick="copyText('hero-cmd-text', 'hero-toast')">
+            <span class="text-amber select-none">$</span>
+            <span id="hero-cmd-text">curl -fsSL https://codrift.sh/install.sh | sh</span>
+            <button class="ml-2 text-faint transition-colors hover:text-amber" aria-label="Copy install command">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="5" y="5" width="9" height="9" rx="1.5"/>
+                <path d="M3 11H2a1 1 0 01-1-1V2a1 1 0 011-1h8a1 1 0 011 1v1"/>
+              </svg>
+            </button>
+            <span class="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-amber px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-bg opacity-0 transition-opacity" id="hero-toast">Copied</span>
+          </div>
+          <a href="https://github.com/filipecabaco/codrift" class="nav-link flex items-center gap-1.5 text-sm">
+            View on GitHub
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M2 10L10 2M10 2H4M10 2v6"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+
+      <!-- TERMINAL PREVIEW -->
+      <div class="relative">
+        <div class="pointer-events-none absolute inset-0 -m-10 rounded-full bg-amber/5 blur-3xl"></div>
+        <div class="relative overflow-hidden rounded-xl border border-border bg-terminal font-mono text-[0.68rem] leading-relaxed">
+          <div class="flex items-center gap-2 border-b border-border bg-raised px-4 py-2.5">
+            <span class="h-2.5 w-2.5 rounded-full bg-[oklch(62%_0.2_25)]"></span>
+            <span class="h-2.5 w-2.5 rounded-full bg-[oklch(78%_0.17_75)]"></span>
+            <span class="h-2.5 w-2.5 rounded-full bg-[oklch(70%_0.2_145)]"></span>
+            <span class="flex-1 text-center text-[0.65rem] text-faint tracking-wide">codrift</span>
+          </div>
+          <div class="overflow-x-auto px-5 py-4">
+            <pre class="text-[oklch(88%_0.008_265)]"><span class="text-[oklch(42%_0.01_265)]">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="text-[oklch(42%_0.01_265)]">│ </span><span class="text-amber">● 1: Context</span>  <span class="text-faint">○ 2: Diff  ○ 3: Tree</span>                          <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">├─────────────────┬────────────────────────────────────────────┤</span>
+<span class="text-[oklch(42%_0.01_265)]">│ </span><span class="text-faint">Initiatives</span>     <span class="text-[oklch(42%_0.01_265)]">│</span>                                            <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">│  </span><span class="text-amber">● my-app</span>       <span class="text-[oklch(42%_0.01_265)]">│</span>  <span class="text-[oklch(78%_0.008_265)]">Initiative / dir / agent output</span>           <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">│   </span><span class="text-amber">◈ context</span>    <span class="text-[oklch(42%_0.01_265)]">│</span>  <span class="text-[oklch(78%_0.008_265)]">(updates as cursor moves)</span>                 <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">│   </span><span class="text-[oklch(65%_0.14_235)]">▸ ~/repo [wt]</span> <span class="text-[oklch(42%_0.01_265)]">│</span>                                            <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">│     </span><span class="text-amber">◦ claude</span>   <span class="text-[oklch(42%_0.01_265)]">│</span>  <span class="text-[oklch(78%_0.008_265)]">Exploring codebase architecture</span>           <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">│     </span><span class="text-faint">◦ codex</span>    <span class="text-[oklch(42%_0.01_265)]">│</span>  <span class="text-[oklch(78%_0.008_265)]">and refactoring auth module</span><span class="bg-amber text-bg px-0.5"> </span>             <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">│     </span><span class="text-faint">◦ terminal</span> <span class="text-[oklch(42%_0.01_265)]">│</span>                                            <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">├─────────────────┴────────────────────────────────────────────┤</span>
+<span class="text-[oklch(42%_0.01_265)]">│ </span><span class="text-[oklch(78%_0.008_265)]">j/k</span><span class="text-faint">:navigate  </span><span class="text-[oklch(78%_0.008_265)]">s</span><span class="text-faint">:start  </span><span class="text-[oklch(78%_0.008_265)]">a</span><span class="text-faint">:add-dir  </span><span class="text-[oklch(78%_0.008_265)]">d</span><span class="text-faint">:delete  </span><span class="text-[oklch(78%_0.008_265)]">Ctrl+P</span><span class="text-faint">:palette</span>  <span class="text-[oklch(42%_0.01_265)]">│</span>
+<span class="text-[oklch(42%_0.01_265)]">└──────────────────────────────────────────────────────────────┘</span></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FEATURES -->
+    <section id="features" class="mx-auto max-w-screen-xl px-6 pb-24 lg:px-10">
+      <div class="mb-3 text-xs font-semibold uppercase tracking-widest text-amber">Capabilities</div>
+      <h2 class="mb-4 text-4xl font-bold tracking-tight lg:text-5xl">Everything a multi-agent<br class="hidden lg:block" /> workflow needs</h2>
+      <p class="mb-12 max-w-[52ch] text-lg leading-relaxed text-muted">
+        From launching agents to reviewing diffs, every decision stays in the terminal.
+        No tab-switching, no lost context.
+      </p>
+      <div class="overflow-hidden rounded-lg border border-border">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+          <div class="feature-cell lg:[&:nth-child(3n)]:border-r-0 [&:nth-child(2n)]:sm:border-r-0 lg:[&:nth-child(2n)]:border-r">
+            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">01</div>
+            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Full terminal UI</h3>
+            <p class="text-sm leading-relaxed text-muted">Sidebar, agent panes, keyboard-driven, mouse support. Everything visible at once.</p>
+          </div>
+          <div class="feature-cell sm:border-r-0 lg:border-r">
+            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">02</div>
+            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Multiple agents per dir</h3>
+            <p class="text-sm leading-relaxed text-muted">Claude Code, Codex, Opencode, Gemini, Copilot, and a raw shell all running simultaneously.</p>
+          </div>
+          <div class="feature-cell lg:border-r-0">
+            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">03</div>
+            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Git worktrees</h3>
+            <p class="text-sm leading-relaxed text-muted">Each directory gets an isolated branch. Agents never touch your main checkout.</p>
+          </div>
+          <div class="feature-cell border-b-0 lg:[&:nth-child(4)]:border-b-0">
+            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">04</div>
+            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Live diff view</h3>
+            <p class="text-sm leading-relaxed text-muted">Colour-coded split or unified diff per initiative, updated as agents work.</p>
+          </div>
+          <div class="feature-cell border-b-0 sm:border-r-0 lg:border-r">
+            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">05</div>
+            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Shared memory</h3>
+            <p class="text-sm leading-relaxed text-muted">FTS5 knowledge base per initiative. Agents search it before starting, write to it when done.</p>
+          </div>
+          <div class="feature-cell border-b-0 lg:border-r-0">
+            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">06</div>
+            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">MCP server + integrations</h3>
+            <p class="text-sm leading-relaxed text-muted">Claude Code connects over SSE. Pull context from GitHub, Linear, GitLab, Jira, and Notion.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section class="border-t border-border">
+      <div class="mx-auto max-w-screen-xl px-6 py-24 lg:px-10">
+        <div class="mb-3 text-xs font-semibold uppercase tracking-widest text-amber">Workflow</div>
+        <h2 class="mb-14 text-4xl font-bold tracking-tight lg:text-5xl">How it fits your day</h2>
+        <div class="grid grid-cols-1 gap-10 lg:grid-cols-3 lg:gap-16">
+          <div>
+            <div class="mb-4 text-6xl font-bold leading-none tracking-tighter text-border lg:text-7xl">01</div>
+            <h3 class="mb-2 font-semibold text-ink">Create an initiative</h3>
+            <p class="text-sm leading-relaxed text-muted">Group related directories into one initiative. Each gets its own context folder at <code class="rounded border border-border bg-raised px-1 py-0.5 font-mono text-[0.75em] text-amber">~/.codrift/initiatives/{id}/</code>.</p>
+          </div>
+          <div>
+            <div class="mb-4 text-6xl font-bold leading-none tracking-tighter text-border lg:text-7xl">02</div>
+            <h3 class="mb-2 font-semibold text-ink">Launch agents</h3>
+            <p class="text-sm leading-relaxed text-muted">Press <code class="rounded border border-border bg-raised px-1 py-0.5 font-mono text-[0.75em] text-amber">s</code> to start any agent against any directory. Agents run in isolated worktrees so nothing collides.</p>
+          </div>
+          <div>
+            <div class="mb-4 text-6xl font-bold leading-none tracking-tighter text-border lg:text-7xl">03</div>
+            <h3 class="mb-2 font-semibold text-ink">Review and merge</h3>
+            <p class="text-sm leading-relaxed text-muted">Switch to Diff mode, inspect what changed, and merge the work you want. Discard the rest without touching main.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- INSTALL -->
+    <section id="install" class="border-t border-border">
+      <div class="mx-auto max-w-screen-xl px-6 py-24 lg:px-10">
+        <div class="mb-3 text-xs font-semibold uppercase tracking-widest text-amber">Quick start</div>
+        <h2 class="mb-10 text-4xl font-bold tracking-tight lg:text-5xl">Up in 30 seconds</h2>
+        <div class="grid grid-cols-1 items-center gap-8 rounded-lg border border-border bg-raised p-8 lg:grid-cols-2 lg:gap-16">
+          <div>
+            <h3 class="mb-2 text-lg font-semibold tracking-tight text-ink">macOS and Linux</h3>
+            <p class="text-sm leading-relaxed text-muted">One command to install, one to launch. No Node, no Ruby, no runtime prerequisites.</p>
+          </div>
+          <div class="flex flex-col gap-3">
+            <div class="install-row" onclick="copyText('install-cmd-1', 'install-toast-1')">
+              <span class="text-amber select-none">$</span>
+              <span id="install-cmd-1">curl -fsSL https://codrift.sh/install.sh | sh</span>
+              <button class="ml-auto text-faint transition-colors hover:text-amber" aria-label="Copy">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="5" y="5" width="9" height="9" rx="1.5"/>
+                  <path d="M3 11H2a1 1 0 01-1-1V2a1 1 0 011-1h8a1 1 0 011 1v1"/>
+                </svg>
+              </button>
+              <span class="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-amber px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-bg opacity-0 transition-opacity" id="install-toast-1">Copied</span>
+            </div>
+            <div class="install-row" onclick="copyText('install-cmd-2', 'install-toast-2')">
+              <span class="text-amber select-none">$</span>
+              <span id="install-cmd-2">codrift tui</span>
+              <button class="ml-auto text-faint transition-colors hover:text-amber" aria-label="Copy">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="5" y="5" width="9" height="9" rx="1.5"/>
+                  <path d="M3 11H2a1 1 0 01-1-1V2a1 1 0 011-1h8a1 1 0 011 1v1"/>
+                </svg>
+              </button>
+              <span class="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-amber px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-bg opacity-0 transition-opacity" id="install-toast-2">Copied</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="border-t border-border">
+      <div class="mx-auto flex max-w-screen-xl flex-wrap items-center justify-between gap-4 px-6 py-8 lg:px-10">
+        <a href="/" class="text-sm font-semibold text-muted no-underline">co<span class="text-amber">drift</span></a>
+        <ul class="flex list-none gap-6">
+          <li><a href="https://github.com/filipecabaco/codrift" class="text-xs text-faint transition-colors hover:text-muted no-underline">GitHub</a></li>
+          <li><a href="https://github.com/filipecabaco/codrift/blob/main/README.md" class="text-xs text-faint transition-colors hover:text-muted no-underline">Docs</a></li>
+          <li><a href="https://github.com/filipecabaco/codrift/issues" class="text-xs text-faint transition-colors hover:text-muted no-underline">Issues</a></li>
+        </ul>
+      </div>
+    </footer>
+
+    <script>
+      function copyText(srcId, toastId) {
+        const text = document.getElementById(srcId).textContent.trim();
+        navigator.clipboard.writeText(text).then(() => {
+          const toast = document.getElementById(toastId);
+          toast.style.opacity = '1';
+          setTimeout(() => { toast.style.opacity = '0'; }, 1500);
+        });
+      }
+    </script>
+  </body>
+</html>

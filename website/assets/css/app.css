@@ -1,0 +1,37 @@
+@import "tailwindcss";
+@source "../../priv/templates/index.html.eex";
+
+@theme {
+  --color-bg: oklch(11% 0.01 265);
+  --color-raised: oklch(15% 0.012 265);
+  --color-border: oklch(22% 0.012 265);
+  --color-ink: oklch(93% 0.008 265);
+  --color-muted: oklch(52% 0.01 265);
+  --color-faint: oklch(35% 0.008 265);
+  --color-amber: oklch(72% 0.18 65);
+  --color-amber-dim: oklch(62% 0.15 65);
+  --color-terminal: oklch(9% 0.008 265);
+  --font-sans: "Onest", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Fira Code", "Menlo", monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+  }
+}
+
+@layer components {
+  .nav-link {
+    @apply text-muted text-sm transition-colors hover:text-ink no-underline;
+  }
+
+  .install-row {
+    @apply flex items-center gap-3 bg-raised border border-border rounded-md px-4 py-2.5
+           font-mono text-sm cursor-pointer transition-colors hover:border-amber relative;
+  }
+
+  .feature-cell {
+    @apply p-8 border-r border-b border-border transition-colors hover:bg-raised;
+  }
+}

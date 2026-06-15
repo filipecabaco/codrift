@@ -3,6 +3,7 @@ cover/
 deps/
 doc/
 /.fetch
+*.ez
 erl_crash.dump
 /tmp/
 /priv/plts/*.plt
