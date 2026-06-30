@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: tauri: ws: wss:; img-src 'self' data: asset: tauri:; font-src 'self' data:"
+    },
+    "windows": [
+      {
+        "title": "Codrift",
+        "width": 800,
+        "fullscreen": false,
+        "height": 600,
+        "resizable": true
+      }
+    ]
+  },
+  "build": {
+    "devUrl": "http://localhost:7437/index.html",
+    "frontendDist": "http://localhost:7437/index.html"
+  },
+  "bundle": {
+    "active": true,
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
+    "externalBin": [
+      "../burrito_out/desktop"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "targets": "all"
+  },
+  "identifier": "you.app.codrift",
+  "productName": "Codrift",
+  "version": "0.1.0"
+}

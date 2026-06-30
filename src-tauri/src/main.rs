@@ -1,0 +1,263 @@
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+use tauri_plugin_shell::process::CommandEvent;
+use tauri_plugin_shell::ShellExt;
+use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+use std::sync::Mutex;
+use std::time::Duration;
+
+struct AppState {
+    sidecar_child: Mutex<Option<SidecarProcess>>,
+}
+
+struct SidecarProcess {
+    child: Option<tauri_plugin_shell::process::CommandChild>,
+    pid: Option<u32>,
+}
+
+impl Drop for SidecarProcess {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.take() {
+            let _ = child.kill();
+        }
+    }
+}
+
+fn kill_sidecar(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.sidecar_child.lock() {
+            if let Some(mut process) = guard.take() {
+                // Try graceful shutdown first with SIGTERM
+                if let Some(pid) = process.pid {
+                    println!("Attempting graceful shutdown of sidecar (PID: {})...", pid);
+
+                    // Send SIGTERM for graceful shutdown
+                    #[cfg(unix)]
+                    {
+                        use std::process::Command;
+                        let _ = Command::new("kill")
+                            .args(["-TERM", &pid.to_string()])
+                            .output();
+
+                        // Wait up to 2 seconds for graceful shutdown
+                        let timeout = Duration::from_millis(2000);
+                        let start = std::time::Instant::now();
+
+                        while start.elapsed() < timeout {
+                            // Check if process is still running
+                            let status = Command::new("kill")
+                                .args(["-0", &pid.to_string()])
+                                .output();
+
+                            if let Ok(output) = status {
+                                if !output.status.success() {
+                                    println!("Sidecar shut down gracefully");
+                                    return;
+                                }
+                            }
+
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+
+                        println!("Graceful shutdown timeout, forcing kill...");
+                    }
+
+                    #[cfg(windows)]
+                    {
+                        // On Windows, wait a bit for graceful shutdown
+                        std::thread::sleep(Duration::from_millis(2000));
+                    }
+                }
+
+                // Fallback to SIGKILL if graceful shutdown didn't work
+                if let Some(child) = process.child.take() {
+                    println!("Sending SIGKILL to sidecar...");
+                    let _ = child.kill();
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
+            // Focus the main window when a second instance is launched
+        }))
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
+        .manage(AppState {
+            sidecar_child: Mutex::new(None),
+        })
+        // Tauri v2 installs no default macOS menu, so Cmd+Q is unbound. The
+        // default menu's *predefined* Quit terminates natively and bypasses
+        // on_menu_event, leaving the sidecar orphaned — so use a CUSTOM Quit item
+        // (id "quit", Cmd+Q) that routes through on_menu_event -> kill_sidecar.
+        // Keep an Edit submenu so copy/paste/select-all work in the webview.
+        .menu(|handle| {
+            let quit = MenuItem::with_id(handle, "quit", "Quit Codrift", true, Some("CmdOrCtrl+Q"))?;
+            let app_menu = Submenu::with_items(handle, "Codrift", true, &[&quit])?;
+            let edit_menu = Submenu::with_items(
+                handle,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(handle, None)?,
+                    &PredefinedMenuItem::redo(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::cut(handle, None)?,
+                    &PredefinedMenuItem::copy(handle, None)?,
+                    &PredefinedMenuItem::paste(handle, None)?,
+                    &PredefinedMenuItem::select_all(handle, None)?,
+                ],
+            )?;
+            Menu::with_items(handle, &[&app_menu, &edit_menu])
+        })
+        .setup(|app| {
+            // Size the window to 60% of the current monitor and center it.
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(Some(monitor)) = window.current_monitor() {
+                    let screen = monitor.size();
+                    let width = (screen.width as f64 * 0.6).round() as u32;
+                    let height = (screen.height as f64 * 0.6).round() as u32;
+                    let _ = window.set_size(tauri::PhysicalSize::new(width, height));
+                    let _ = window.center();
+                }
+            }
+
+            start_server(app.handle());
+            check_server_started();
+            start_heartbeat();
+            Ok(())
+        })
+        // Intercept menu events (especially CMD+Q on macOS)
+        .on_menu_event(|app, event| {
+            println!("Menu event received: {:?}", event.id());
+            // On macOS, the default menu includes a "quit" item
+            // Intercept it to perform graceful shutdown
+            if event.id().as_ref() == "quit" || event.id().as_ref().contains("quit") {
+                println!("Quit menu item clicked (CMD+Q), shutting down gracefully...");
+                kill_sidecar(app);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                std::process::exit(0);
+            }
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Kill the sidecar when the window closes
+                kill_sidecar(&window.app_handle());
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                // Kill the sidecar when the app is exiting (fallback for non-menu exits)
+                println!("ExitRequested event received, shutting down...");
+                kill_sidecar(app_handle);
+                api.prevent_exit(); // Prevent exit until we've cleaned up
+                // Allow exit after cleanup
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    std::process::exit(0);
+                });
+            }
+        });
+}
+
+fn start_server(app: &tauri::AppHandle) {
+    let sidecar_command = app.shell().sidecar("desktop")
+        .expect("failed to setup `desktop` sidecar");
+
+    let (mut rx, child) = sidecar_command
+        .spawn()
+        .expect("Failed to spawn desktop sidecar");
+
+    // Get the PID for graceful shutdown
+    let pid = child.pid();
+    println!("Sidecar process started with PID: {}", pid);
+
+    // Store the child process handle so we can kill it on exit
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.sidecar_child.lock() {
+            *guard = Some(SidecarProcess {
+                child: Some(child),
+                pid: Some(pid),
+            });
+        }
+    }
+
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if let CommandEvent::Stdout(line_bytes) = event {
+                let line = String::from_utf8_lossy(&line_bytes);
+                println!("{}", line);
+            }
+        }
+    });
+}
+
+fn check_server_started() {
+    let sleep_interval = std::time::Duration::from_millis(200);
+    let host = "localhost".to_string();
+    let port = "7437".to_string();
+    let addr = format!("{}:{}", host, port);
+    println!(
+        "Waiting for your phoenix dev server to start on {}...",
+        addr
+    );
+    loop {
+        if std::net::TcpStream::connect(addr.clone()).is_ok() {
+           break;
+        }
+        std::thread::sleep(sleep_interval);
+    }
+}
+
+fn start_heartbeat() {
+    println!("Starting heartbeat to Phoenix sidecar...");
+
+    std::thread::spawn(|| {
+        use std::io::Write;
+
+        let socket_path = std::env::temp_dir().join("tauri_heartbeat_codrift.sock");
+        let interval = Duration::from_millis(100);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::net::UnixStream;
+
+            // Outer loop: (re)establish the connection. The sidecar's listener can
+            // come up late (slow boot) or be recreated (its manager restarting), so
+            // a dropped connection must reconnect rather than end the heartbeat —
+            // otherwise the backend would see the heartbeat stop and shut itself down.
+            loop {
+                let mut stream = loop {
+                    match UnixStream::connect(&socket_path) {
+                        Ok(s) => break s,
+                        Err(_) => std::thread::sleep(Duration::from_millis(100)),
+                    }
+                };
+
+                println!("Connected to heartbeat socket");
+
+                // Send heartbeats until the connection drops, then reconnect.
+                while stream.write_all(b"h").is_ok() {
+                    std::thread::sleep(interval);
+                }
+
+                println!("Heartbeat connection lost, reconnecting...");
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            // Windows: use named pipe or TCP fallback for heartbeat
+            // TODO: Implement Windows named pipe heartbeat
+            println!("Heartbeat not yet supported on Windows");
+        }
+    });
+}

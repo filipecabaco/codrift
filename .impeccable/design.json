@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-30T12-40-00Z",
+  "title": "Design System: Codrift",
+  "extensions": {
+    "colorMeta": {
+      "canvas": { "role": "neutral", "displayName": "Canvas", "canonical": "oklch(11% 0.01 265)", "tonalRamp": ["oklch(8% 0.008 265)", "oklch(11% 0.01 265)", "oklch(15% 0.012 265)", "oklch(22% 0.012 265)", "oklch(30% 0.011 265)", "oklch(40% 0.01 265)", "oklch(52% 0.01 265)", "oklch(70% 0.009 265)"] },
+      "surface": { "role": "neutral", "displayName": "Surface", "canonical": "oklch(15% 0.012 265)", "tonalRamp": ["oklch(8% 0.008 265)", "oklch(11% 0.01 265)", "oklch(15% 0.012 265)", "oklch(22% 0.012 265)", "oklch(30% 0.011 265)", "oklch(40% 0.01 265)", "oklch(52% 0.01 265)", "oklch(70% 0.009 265)"] },
+      "border": { "role": "neutral", "displayName": "Hairline Border", "canonical": "oklch(22% 0.012 265)", "tonalRamp": ["oklch(11% 0.01 265)", "oklch(15% 0.012 265)", "oklch(22% 0.012 265)", "oklch(30% 0.011 265)", "oklch(40% 0.01 265)", "oklch(52% 0.01 265)", "oklch(70% 0.009 265)", "oklch(85% 0.008 265)"] },
+      "muted": { "role": "neutral", "displayName": "Muted Text", "canonical": "oklch(52% 0.01 265)", "tonalRamp": ["oklch(30% 0.011 265)", "oklch(40% 0.01 265)", "oklch(52% 0.01 265)", "oklch(62% 0.01 265)", "oklch(70% 0.009 265)", "oklch(78% 0.009 265)", "oklch(85% 0.008 265)", "oklch(93% 0.008 265)"] },
+      "fg": { "role": "neutral", "displayName": "Foreground", "canonical": "oklch(93% 0.008 265)", "tonalRamp": ["oklch(52% 0.01 265)", "oklch(62% 0.01 265)", "oklch(70% 0.009 265)", "oklch(78% 0.009 265)", "oklch(85% 0.008 265)", "oklch(90% 0.008 265)", "oklch(93% 0.008 265)", "oklch(97% 0.006 265)"] },
+      "accent": { "role": "primary", "displayName": "Codrift Amber", "canonical": "oklch(72% 0.18 65)", "tonalRamp": ["oklch(30% 0.07 65)", "oklch(40% 0.1 65)", "oklch(50% 0.13 65)", "oklch(58% 0.16 65)", "oklch(65% 0.18 65)", "oklch(72% 0.18 65)", "oklch(80% 0.15 65)", "oklch(88% 0.1 65)"] },
+      "status-ok": { "role": "tertiary", "displayName": "OK Green", "canonical": "#22c55e", "tonalRamp": ["#052e16", "#064e2b", "#08763f", "#16a34a", "#22c55e", "#4ade80", "#86efac", "#bbf7d0"] },
+      "status-info": { "role": "tertiary", "displayName": "Info Sky", "canonical": "#0ea5e9", "tonalRamp": ["#082f49", "#0c4a6e", "#075985", "#0369a1", "#0284c7", "#0ea5e9", "#38bdf8", "#7dd3fc"] },
+      "status-done": { "role": "tertiary", "displayName": "Done Violet", "canonical": "#8b5cf6", "tonalRamp": ["#2e1065", "#4c1d95", "#5b21b6", "#6d28d9", "#7c3aed", "#8b5cf6", "#a78bfa", "#c4b5fd"] },
+      "status-danger": { "role": "tertiary", "displayName": "Danger Red", "canonical": "#f87171", "tonalRamp": ["#450a0a", "#7f1d1d", "#991b1b", "#b91c1c", "#dc2626", "#ef4444", "#f87171", "#fca5a5"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Top heading of a rendered context document (initiative.md # title)." },
+      "title": { "displayName": "Title", "purpose": "Markdown ## headings (in Codrift Amber) and sidebar initiative names." },
+      "body": { "displayName": "Body", "purpose": "Default reading size: markdown prose, terminal text, most UI. Cap prose at 65-75ch." },
+      "label": { "displayName": "Label", "purpose": "Secondary metadata: agent status, hints, counts, focus indicator." },
+      "badge": { "displayName": "Badge", "purpose": "Memory entry type chips, uppercase." }
+    },
+    "shadows": [
+      { "name": "overlay-lift", "value": "0 16px 48px -12px rgba(1, 4, 9, 0.85)", "purpose": "The only shadow in the system. Floating overlays (command palette, prompt, confirm) over a black/50 scrim. Nothing else casts a shadow." }
+    ],
+    "motion": [
+      { "name": "hover-tint", "value": "background-color 150ms ease-out, color 150ms ease-out", "purpose": "Subtle hover/active tint on rows, tabs, and buttons. The system is otherwise still; honor prefers-reduced-motion." }
+    ],
+    "breakpoints": [
+      { "name": "desktop", "value": "default", "purpose": "Desktop-first (Tauri window / web). Sidebar is 30% width, max 360px; main pane fills the rest." }
+    ]
+  },
+  "components": [
+    {
+      "name": "View Tab (active)",
+      "kind": "nav",
+      "refersTo": "tab-active",
+      "description": "The 1/2/3/4 view switcher in the header; active tab looks recessed into the surface bar.",
+      "html": "<button class=\"ds-tab ds-tab-active\">1 Context</button>",
+      "css": ".ds-tab { font-family: ui-monospace, monospace; font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: #66696f; cursor: pointer; transition: color 150ms ease-out; } .ds-tab:hover { color: #e5e8ed; } .ds-tab-active { background: #030407; color: #e5e8ed; border-color: #181b20; }"
+    },
+    {
+      "name": "Sidebar Row (cursor-active)",
+      "kind": "nav",
+      "refersTo": "row-active",
+      "description": "A selectable tree row (initiative / file / dir / agent). The keyboard cursor highlight is accent-at-20%.",
+      "html": "<button class=\"ds-row ds-row-active\"><span class=\"ds-dot\"></span>realtime-temporary-block</button>",
+      "css": ".ds-row { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 6px; border-radius: 6px; background: transparent; color: rgba(229,232,237,0.8); font-family: ui-monospace, monospace; font-size: 12px; text-align: left; border: none; cursor: pointer; transition: background-color 150ms ease-out; } .ds-row:hover { background: #090b10; } .ds-row-active { background: oklch(72% 0.18 65 / 0.2); color: #fff; } .ds-dot { width: 8px; height: 8px; border-radius: 9999px; background: #22c55e; }"
+    },
+    {
+      "name": "Launch Button",
+      "kind": "button",
+      "refersTo": "launch-button",
+      "description": "The single primary action: start an agent in a directory. Low-key accent tint, not a filled CTA.",
+      "html": "<button class=\"ds-launch\">▸ realtime · start claude</button>",
+      "css": ".ds-launch { font-family: ui-monospace, monospace; font-size: 11px; padding: 4px 8px; border-radius: 6px; border: 1px solid #181b20; background: oklch(72% 0.18 65 / 0.2); color: oklch(72% 0.18 65); cursor: pointer; transition: background-color 150ms ease-out; } .ds-launch:hover { background: oklch(72% 0.18 65 / 0.3); } .ds-launch:focus-visible { outline: none; box-shadow: inset 0 0 0 1px oklch(72% 0.18 65 / 0.5); }"
+    },
+    {
+      "name": "Command Palette",
+      "kind": "custom",
+      "refersTo": "overlay",
+      "description": "Ctrl+P command palette: a floating overlay listing every action with its key hint. The system's only shadow surface.",
+      "html": "<div class=\"ds-overlay\"><input class=\"ds-overlay-input\" placeholder=\"Run a command…\" /><ul class=\"ds-overlay-list\"><li class=\"ds-overlay-item ds-overlay-item-active\"><span>New initiative</span><kbd>N</kbd></li><li class=\"ds-overlay-item\"><span>Diff view</span><kbd>2</kbd></li></ul></div>",
+      "css": ".ds-overlay { width: 520px; max-width: 90vw; background: #090b10; border: 1px solid #181b20; border-radius: 8px; box-shadow: 0 16px 48px -12px rgba(1,4,9,0.85); overflow: hidden; font-family: ui-monospace, monospace; } .ds-overlay-input { width: 100%; padding: 10px 12px; background: #030407; border: none; border-bottom: 1px solid #181b20; color: #e5e8ed; font: inherit; font-size: 14px; outline: none; } .ds-overlay-list { list-style: none; margin: 0; padding: 4px 0; } .ds-overlay-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; font-size: 13px; color: rgba(229,232,237,0.9); } .ds-overlay-item-active { background: oklch(72% 0.18 65 / 0.2); color: #fff; } .ds-overlay-item kbd { font-size: 11px; color: #66696f; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "tab-idle",
+      "description": "Memory entry type chip (decision / summary / snippet / file_context / note). Semantic color at low alpha, uppercase. Deliberately avoids amber, which is reserved for the accent.",
+      "html": "<span class=\"ds-badge ds-badge-decision\">decision</span>",
+      "css": ".ds-badge { font-family: ui-monospace, monospace; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; } .ds-badge-decision { background: rgba(168,85,247,0.2); color: #d8b4fe; } .ds-badge-summary { background: rgba(59,130,246,0.2); color: #93c5fd; } .ds-badge-snippet { background: rgba(34,197,94,0.2); color: #86efac; } .ds-badge-file_context { background: rgba(20,184,166,0.2); color: #5eead4; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "overlay",
+      "description": "Single-line field (prompt modal, memory search). Border shifts to accent on focus, no glow.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search memory…\" />",
+      "css": ".ds-input { width: 100%; padding: 6px 12px; background: #030407; border: 1px solid #181b20; border-radius: 6px; color: #e5e8ed; font-family: ui-monospace, monospace; font-size: 13px; outline: none; transition: border-color 150ms ease-out; } .ds-input:focus { border-color: oklch(72% 0.18 65); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Workbench",
+    "overview": "Codrift is a precise instrument, not a destination. The interface is the bench you reach across to drive several AI coding agents at once; it should disappear into the work the moment you start. Every surface is quiet, dark, and dense, framing the one thing that matters: each agent's own live output, rendered faithfully in its native terminal. The register is sharp, technical, and confident, in the lane of Linear, Raycast, and Ghostty, built for an engineer who already knows what they want and moves by keyboard. Density is a feature, held legible by clear type weight and deliberate grouping rather than by whitespace and cards.",
+    "keyCharacteristics": [
+      "Cool near-black surface tinted toward hue 265, one warm amber accent, used sparingly. Accent and neutrals are shared with the Codrift marketing site.",
+      "A single monospace typeface across the entire product.",
+      "Flat by default; 1px borders and tonal background shifts do the separating.",
+      "Keyboard-first: a visible focus ring marks the active pane and row.",
+      "Status is shown by shape and text, never by color alone."
+    ],
+    "rules": [
+      { "name": "The Quiet Accent Rule", "body": "Codrift Amber covers no more than about 10% of any screen. It means focus, selection, or the single primary action. The moment it decorates, it stops meaning anything. Amber is reserved for the accent alone, it never doubles as a status color.", "section": "colors" },
+      { "name": "The Status-Is-Not-Decoration Rule", "body": "Green, sky, violet, and red appear only to encode real state, and never alone: always paired with a glyph or a text label, so meaning survives color blindness and grayscale.", "section": "colors" },
+      { "name": "The One Typeface Rule", "body": "Monospace, everywhere, always. No serif, no proportional sans, not even for headings. Hierarchy comes from weight and size, never from a font switch.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Panels, rows, cards, and the sidebar are flat. They separate with a border hairline or a step from canvas to surface. If you are reaching for a shadow on a non-floating element, use a border or a tonal shift instead.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep Codrift Amber to roughly 10% of any screen: focus, selection, and the single primary action only.",
+      "Do separate surfaces with a 1px border hairline or a step from canvas to surface, not with a shadow.",
+      "Do set everything in ui-monospace; build hierarchy with weight (400/600) and size.",
+      "Do keep a visible keyboard focus ring on the active pane and row, and make every action key-reachable.",
+      "Do pair every status color with a glyph or text label, never color alone.",
+      "Do let the agent's own terminal output be the visual centre; keep Codrift's chrome quiet around it."
+    ],
+    "donts": [
+      "Don't build a generic SaaS dashboard: no card grids, no hero-metric tiles, no gradient accents, no rounded-everything.",
+      "Don't use a bright light-mode admin look, white/teal corporate panels, or heavy enterprise chrome.",
+      "Don't go neon-on-black 'AI/crypto': no glows, no purple/cyan neon, no decorative glassmorphism, no sci-fi gradients.",
+      "Don't recreate a cluttered legacy IDE: no toolbar soup, no tiny-icon rows, no dense panels without hierarchy.",
+      "Don't use #000 or #fff; tint neutrals toward the surface.",
+      "Don't add a border-left/border-right colored stripe as an accent on rows, cards, or callouts.",
+      "Don't use gradient text (background-clip: text); emphasize with weight or size.",
+      "Don't reach for a modal when an inline or progressive affordance would do."
+    ]
+  }
+}

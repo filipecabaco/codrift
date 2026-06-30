@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Codrift — Terminal spike</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: ui-monospace, "Cascadia Code", Menlo, monospace;
+      background: #0d1117; color: #e6edf3; height: 100vh;
+      display: flex; flex-direction: column;
+    }
+    header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; background: #161b22; border-bottom: 1px solid #30363d;
+    }
+    header h1 { font-size: 13px; font-weight: 600; color: #58a6ff; margin-right: 8px; }
+    input {
+      padding: 4px 8px; background: #0d1117; border: 1px solid #30363d;
+      border-radius: 6px; color: #e6edf3; font: inherit; font-size: 12px; width: 220px;
+    }
+    button {
+      padding: 4px 12px; background: #238636; border: none; border-radius: 6px;
+      color: #fff; cursor: pointer; font-size: 12px;
+    }
+    button:hover { background: #2ea043; }
+    #status {
+      font-size: 11px; color: #8b949e; padding: 6px 14px;
+      border-bottom: 1px solid #30363d; min-height: 26px;
+    }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .dot.on { background: #3fb950; } .dot.off { background: #f85149; }
+    #term { flex: 1; padding: 6px; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Codrift</h1>
+    <input id="initiative" placeholder="Initiative ID" />
+    <input id="agent" placeholder="Agent ID" />
+    <button id="connect">Connect</button>
+    <button id="disconnect" style="background:#6e2222">Disconnect</button>
+  </header>
+  <div id="status">Enter an initiative ID and an agent ID, then Connect.</div>
+  <div id="term"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let term, fit, sse, ws;
+
+    function setStatus(html) { $("status").innerHTML = html; }
+
+    function teardown() {
+      if (sse) { sse.close(); sse = null; }
+      if (ws) { ws.close(); ws = null; }
+    }
+
+    function connect() {
+      const initiative = $("initiative").value.trim();
+      const agentId = $("agent").value.trim();
+      if (!initiative || !agentId) return;
+      teardown();
+
+      if (!term) {
+        term = new Terminal({
+          fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
+          fontSize: 13, theme: { background: "#0d1117", foreground: "#e6edf3" },
+          cursorBlink: true, scrollback: 5000, convertEol: false,
+        });
+        fit = new FitAddon.FitAddon();
+        term.loadAddon(fit);
+        term.open($("term"));
+
+        // Keystrokes / pasted data → PTY (raw passthrough).
+        term.onData((data) => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ t: "d", d: data }));
+          }
+        });
+
+        // Report terminal size to the PTY on every resize.
+        term.onResize(({ cols, rows }) => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ t: "r", cols, rows }));
+          }
+        });
+      }
+      fit.fit();
+
+      // 1. Replay buffered scrollback before live bytes arrive.
+      fetch(`/api/agent/${encodeURIComponent(agentId)}/output?n=400`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data && Array.isArray(data.output)) {
+            data.output.forEach((chunk) => term.write(chunk));
+          }
+        })
+        .catch(() => {});
+
+      // 2. Live output over the initiative SSE stream, demuxed by agent_id.
+      sse = new EventSource(`/events/initiative/${encodeURIComponent(initiative)}`);
+      sse.addEventListener("connected", () => {
+        setStatus(`<span class="dot on"></span>Connected — watching agent ${agentId.slice(0, 8)}`);
+      });
+      sse.addEventListener("output", (e) => {
+        const d = JSON.parse(e.data);
+        if (d.agent_id === agentId) term.write(d.content);
+      });
+      sse.addEventListener("stopped", (e) => {
+        const d = JSON.parse(e.data);
+        if (d.agent_id === agentId) {
+          term.write(`\r\n\x1b[31m[agent stopped, exit ${d.exit_code}]\x1b[0m\r\n`);
+        }
+      });
+      sse.onerror = () => setStatus(`<span class="dot off"></span>SSE error — retrying…`);
+
+      // 3. Input channel — keystrokes + resize.
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${location.host}/ws/agent/${encodeURIComponent(agentId)}`);
+      ws.onopen = () => {
+        term.focus();
+        // Push the initial size so the PTY matches the visible terminal.
+        ws.send(JSON.stringify({ t: "r", cols: term.cols, rows: term.rows }));
+      };
+      ws.onclose = () => setStatus(`<span class="dot off"></span>Input channel closed`);
+    }
+
+    $("connect").addEventListener("click", connect);
+    $("disconnect").addEventListener("click", () => {
+      teardown();
+      setStatus(`<span class="dot off"></span>Disconnected`);
+    });
+    window.addEventListener("resize", () => { if (fit) fit.fit(); });
+  </script>
+</body>
+</html>

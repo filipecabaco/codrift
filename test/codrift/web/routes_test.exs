@@ -128,6 +128,33 @@ defmodule Codrift.Web.RoutesTest do
     end
   end
 
+  describe "POST /api/rpc" do
+    test "dispatches a Core operation and wraps the result" do
+      conn = post_json("/api/rpc", %{"name" => "list_initiatives", "args" => %{}})
+      assert conn.status == 200
+      assert %{"ok" => ok} = Jason.decode!(conn.resp_body)
+      assert is_list(ok)
+    end
+
+    test "returns 422 with the error message for a known op that fails" do
+      conn =
+        post_json("/api/rpc", %{
+          "name" => "delete_initiative",
+          "args" => %{"initiative_id" => "nonexistent"}
+        })
+
+      assert conn.status == 422
+      assert %{"error" => msg} = Jason.decode!(conn.resp_body)
+      assert String.contains?(msg, "not found")
+    end
+
+    test "returns 422 for an unknown op" do
+      conn = post_json("/api/rpc", %{"name" => "no_such_op", "args" => %{}})
+      assert conn.status == 422
+      assert %{"error" => "unknown tool: no_such_op"} = Jason.decode!(conn.resp_body)
+    end
+  end
+
   describe "unmatched routes" do
     test "returns 404 for unknown path" do
       conn = get("/no/such/route")

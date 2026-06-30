@@ -34,7 +34,20 @@ defmodule Codrift do
 
   @impl true
   def start(_type, _args) do
-    children = [
+    if System.get_env("RELEASE_NAME") == "desktop" do
+      # When launched as the Tauri desktop app, the process inherits macOS's
+      # minimal launchd PATH (no ~/.local/bin, mise shims, homebrew…), so agent
+      # CLIs like `claude` can't be found. Restore the user's login-shell PATH.
+      ensure_login_path()
+      # The sidecar's stdout is a pipe Tauri reads. If Tauri dies (crash /
+      # force-quit) that pipe breaks, and continuing to log to it destabilises the
+      # node's IO — which was preventing the heartbeat-loss shutdown from running
+      # (the manager would restart instead of stopping). Log to a file instead so
+      # a dead GUI can never wedge the backend's own shutdown path.
+      redirect_logs_to_file()
+    end
+
+    base = [
       {Registry, keys: :unique, name: Codrift.AgentRegistry},
       {Registry, keys: :unique, name: Codrift.ConductorRegistry},
       Codrift.SessionStore,
@@ -49,10 +62,65 @@ defmodule Codrift do
          Application.get_env(:codrift, :bandit_opts, [])}
     ]
 
+    # Codrift.ShutdownManager System.stop/0s the app if it stops receiving the
+    # Tauri heartbeat — only safe when actually launched as the desktop sidecar
+    # (RELEASE_NAME=desktop). Gated so `mix codrift.tui`/`mix run` don't get
+    # killed ~1.5s after boot. Placed last (after Bandit) so it can use
+    # Codrift.TaskSupervisor and its timeout baseline starts near port-up, and it
+    # only enforces the timeout after the first heartbeat (see its moduledoc).
+    children =
+      if System.get_env("RELEASE_NAME") == "desktop",
+        do: base ++ [Codrift.ShutdownManager],
+        else: base
+
     Supervisor.start_link(children, strategy: :one_for_one, name: Codrift.Supervisor)
   end
 
+  # Merges the user's login-shell PATH into the running env so spawned agent
+  # CLIs resolve. Best-effort: failures leave the existing PATH untouched.
+  defp ensure_login_path do
+    shell = System.get_env("SHELL") || "/bin/zsh"
+
+    with {out, 0} <-
+           System.cmd(shell, ["-lic", "echo CODRIFT_PATH=$PATH"], stderr_to_stdout: false),
+         [_, login_path] <- Regex.run(~r/CODRIFT_PATH=(.+)/, out) do
+      merged =
+        (String.split(login_path, ":") ++ String.split(System.get_env("PATH") || "", ":"))
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.uniq()
+        |> Enum.join(":")
+
+      System.put_env("PATH", merged)
+    else
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  # Swap the console logger (which writes to the Tauri-owned stdout pipe) for a
+  # file handler, so a dead GUI's broken pipe can't wedge the backend. Logs land
+  # in <tmp>/codrift_desktop.log. Best-effort: keep the default handler on failure.
+  defp redirect_logs_to_file do
+    path = Path.join(System.tmp_dir!(), "codrift_desktop.log")
+
+    :ok =
+      :logger.add_handler(:codrift_file, :logger_std_h, %{
+        config: %{type: {:file, String.to_charlist(path)}},
+        formatter: Logger.Formatter.new()
+      })
+
+    :logger.remove_handler(:default)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   get("/", fn _ -> "ok" end)
+
+  # Cheap liveness probe the web UI polls to detect (and recover from) a dropped
+  # server — kept tiny so reconnect polling is effectively free.
+  get("/api/health", fn _ -> %{ok: true} end)
 
   get("/api/initiatives", fn _conn ->
     Enum.map(Store.list(), &Codrift.Initiative.to_map/1)
@@ -96,6 +164,77 @@ defmodule Codrift do
     end
   end)
 
+  # Recent buffered output for a single agent, oldest-first. Used by web
+  # terminals to replay scrollback before live bytes start arriving over SSE.
+  get("/api/agent/:id/output", fn conn ->
+    n =
+      case Integer.parse(conn.params["n"] || "200") do
+        {v, _} when v > 0 -> min(v, 1000)
+        _ -> 200
+      end
+
+    case Codrift.AgentSupervisor.find_agent(conn.params["id"]) do
+      {:ok, pid} ->
+        # Base64 so binary/partial-UTF-8 PTY bytes survive JSON encoding.
+        %{"output" => Enum.map(Codrift.AgentProcess.recent_output(pid, n), &Base.encode64/1)}
+
+      {:error, :not_found} ->
+        json(conn, 404, %{"error" => "agent not found"})
+    end
+  end)
+
+  # Generic operation endpoint backing the web UI. Delegates to `Codrift.Core`,
+  # the same layer the MCP server uses, so every product capability is reachable
+  # from one route. Body: `{"name": "<op>", "args": {...}}`.
+  post("/api/rpc", fn conn ->
+    name = conn.body_params["name"]
+    args = conn.body_params["args"] || %{}
+
+    try do
+      case Codrift.Core.call(name, args) do
+        {:ok, result} -> %{"ok" => result}
+        {:error, msg} -> json(conn, 422, %{"error" => msg})
+      end
+    rescue
+      e -> json(conn, 400, %{"error" => Exception.message(e)})
+    end
+  end)
+
+  # Bidirectional input channel for a single agent's PTY. Output flows the
+  # other way over the initiative SSE stream (`/events/initiative/:id`).
+  #
+  # Client → server JSON frames:
+  #   {"t":"d","d":"<bytes>"}       raw terminal data / keystrokes → send_raw
+  #   {"t":"r","cols":N,"rows":M}   terminal resize → PTY winsz
+  #
+  # The handler body is inlined: `ws/3` compiles it into a separate generated
+  # module, so it can only call public functions (not `Codrift` privates).
+  ws("/ws/agent/:agent_id", fn
+    :join, _socket ->
+      :noreply
+
+    {:received, frame}, socket ->
+      with {:ok, pid} <- Codrift.AgentSupervisor.find_agent(socket.params["agent_id"]),
+           {:ok, msg} <- JSON.decode(frame) do
+        case msg do
+          %{"t" => "d", "d" => data} when is_binary(data) ->
+            Codrift.AgentProcess.send_raw(pid, data)
+
+          %{"t" => "r", "cols" => cols, "rows" => rows}
+          when is_integer(cols) and is_integer(rows) ->
+            Codrift.AgentProcess.resize(pid, cols, rows)
+
+          _ ->
+            :ok
+        end
+      end
+
+      :noreply
+
+    {:close, _reason}, _socket ->
+      :ok
+  end)
+
   sse("/events/initiative/:id", fn
     :join, socket ->
       initiative_id = socket.params["id"]
@@ -111,7 +250,7 @@ defmodule Codrift do
        %{event: "connected", data: %{initiative_id: initiative_id, agent_count: length(agents)}}}
 
     {:received, {:agent_output, agent_id, data}}, _socket ->
-      {:reply, %{event: "output", data: %{agent_id: agent_id, content: data}}}
+      {:reply, %{event: "output", data: %{agent_id: agent_id, content: Base.encode64(data)}}}
 
     {:received, {:agent_stopped, agent_id, code}}, _socket ->
       {:reply, %{event: "stopped", data: %{agent_id: agent_id, exit_code: code}}}
@@ -120,7 +259,7 @@ defmodule Codrift do
       {:reply,
        %{
          event: "conductor_output",
-         data: %{initiative_id: initiative_id, agent_id: agent_id, content: data}
+         data: %{initiative_id: initiative_id, agent_id: agent_id, content: Base.encode64(data)}
        }}
 
     {:received, {:conductor_agent_ready, initiative_id, agent_id}}, _socket ->

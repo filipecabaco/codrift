@@ -25,3 +25,12 @@ erl_crash.dump
 # Dialyzer PLT files (cached in CI, not committed)
 /priv/plts/*.plt
 /priv/plts/*.plt.hash
+
+# Built web UI artifacts (generated from assets/ by `vite build`).
+# The diff.html / term.html prototypes are hand-written and stay tracked.
+/priv/static/index.html
+/priv/static/assets/
+
+# Tauri Rust build output
+/assets/src-tauri/target/
+/assets/src-tauri/gen/

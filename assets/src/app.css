@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+/* Codrift brand tokens (shared with codrift.sh): neutrals tinted toward hue 265,
+   one amber accent. Surfaced as Tailwind utilities (bg-surface, text-muted…). */
+@theme {
+  --color-canvas: oklch(11% 0.01 265);
+  --color-surface: oklch(15% 0.012 265);
+  --color-border: oklch(22% 0.012 265);
+  --color-muted: oklch(52% 0.01 265);
+  --color-fg: oklch(93% 0.008 265);
+  --color-accent: oklch(72% 0.18 65);
+  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+}

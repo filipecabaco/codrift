@@ -36,7 +36,8 @@ defmodule Codrift.MixProject do
         include_erts: true,
         strip_beams: true,
         steps: [:assemble, &add_cli_commands/1, :tar]
-      ]
+      ],
+      desktop: [steps: [:assemble]]
     ]
   end
 
@@ -71,6 +72,7 @@ defmodule Codrift.MixProject do
       {:erlexec, "~> 2.0"},
       {:exqlite, "~> 0.23"},
       {:quantum, "~> 3.0"},
+      {:ex_tauri, github: "filipecabaco/ex_tauri", branch: "main"},
       # Code quality
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},

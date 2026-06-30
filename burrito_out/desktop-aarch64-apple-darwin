@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "/Users/filipecabaco/Documents/workspace/codrift/_build/prod/rel/desktop/bin/desktop" start "$@"
