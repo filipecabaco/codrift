@@ -66,3 +66,60 @@ export type MemoryEntry = {
 
 // Adapters that can be launched from the UI (terminal is started internally only).
 export const ADAPTERS = ["claude", "codex", "opencode", "gemini", "copilot"] as const;
+
+// ── Integrations / OAuth ────────────────────────────────────────────────────
+
+export type OAuthFlow = "pkce_browser" | "device_flow" | "guided_token";
+
+export type OAuthService = {
+  connected: boolean;
+  oauth_supported: boolean;
+  flow: OAuthFlow;
+};
+
+export type OAuthStatus = { services: Record<string, OAuthService> };
+
+// Result shapes returned by start_oauth_flow, discriminated by `flow`.
+export type StartFlowResult =
+  | { flow: "pkce_browser"; service: string; auth_url: string; message: string }
+  | {
+      flow: "device_flow";
+      service: string;
+      user_code: string;
+      verification_uri: string;
+      message: string;
+    }
+  | { flow: "guided_token"; service: string; instructions: string; message: string };
+
+export function oauthStatus(): Promise<OAuthStatus> {
+  return rpc<OAuthStatus>("get_oauth_status");
+}
+
+export function startOAuthFlow(service: string): Promise<StartFlowResult> {
+  return rpc<StartFlowResult>("start_oauth_flow", { service });
+}
+
+export function saveGuidedToken(service: string, token: string): Promise<unknown> {
+  return rpc("save_guided_token", { service, token });
+}
+
+export function revokeOAuthToken(service: string): Promise<unknown> {
+  return rpc("revoke_oauth_token", { service });
+}
+
+// The Tauri webview can't launch the system browser, so the backend (same
+// machine) opens it for us. In a plain browser this is still harmless.
+export function openUrl(url: string): Promise<unknown> {
+  return rpc("open_url", { url });
+}
+
+// Friendly display metadata. Services not listed fall back to a title-cased key.
+export const SERVICE_META: Record<string, { label: string; blurb: string }> = {
+  linear: { label: "Linear", blurb: "Issues" },
+  linear_projects: { label: "Linear Projects", blurb: "Projects & milestones" },
+  github: { label: "GitHub", blurb: "Issues & pull requests" },
+  github_projects: { label: "GitHub Projects", blurb: "Project boards" },
+  gitlab: { label: "GitLab", blurb: "Issues & merge requests" },
+  jira: { label: "Jira", blurb: "Issues" },
+  notion: { label: "Notion", blurb: "Pages & databases" },
+};

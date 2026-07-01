@@ -230,6 +230,37 @@ defmodule Codrift.Core do
                "The Codrift server will save the token automatically."
          }}
 
+      {:ok,
+       %{
+         flow: :device_flow,
+         user_code: user_code,
+         verification_uri: verification_uri,
+         device_code: device_code,
+         expires_in: expires_in,
+         interval: interval
+       }} ->
+        # No live process to notify in a stateless RPC — pass nil and let the
+        # supervised poller save the token. The caller polls get_oauth_status.
+        expires_at = System.os_time(:second) + expires_in
+
+        Codrift.OAuth.poll_device_auth(
+          nil,
+          service,
+          device_code,
+          expires_at,
+          interval,
+          nil
+        )
+
+        {:ok,
+         %{
+           flow: "device_flow",
+           service: service,
+           user_code: user_code,
+           verification_uri: verification_uri,
+           message: "Visit #{verification_uri} and enter code #{user_code}"
+         }}
+
       {:ok, %{flow: :guided_token, instructions: instructions}} ->
         {:ok,
          %{
@@ -246,6 +277,15 @@ defmodule Codrift.Core do
     end
   end
 
+  def call("open_url", %{"url" => url}) when is_binary(url) do
+    if String.starts_with?(url, "http://") or String.starts_with?(url, "https://") do
+      open_in_browser(url)
+      {:ok, %{opened: true, url: url}}
+    else
+      {:error, "refusing to open non-http(s) URL"}
+    end
+  end
+
   def call("save_guided_token", %{"service" => service, "token" => token}) do
     case Codrift.OAuth.save_guided_token(service, token) do
       :ok -> {:ok, %{connected: true, service: service}}
@@ -253,12 +293,24 @@ defmodule Codrift.Core do
     end
   end
 
+  def call("revoke_oauth_token", %{"service" => service}) do
+    :ok = Codrift.OAuth.revoke_token(service)
+    {:ok, %{connected: false, service: service}}
+  end
+
   def call("get_oauth_status", _args) do
     all = OAuthConfig.supported_services()
 
     status =
       Map.new(all, fn service ->
-        {service, %{connected: Codrift.OAuth.connected?(service), oauth_supported: true}}
+        flow = with {:ok, config} <- OAuthConfig.get(service), do: config.flow
+
+        {service,
+         %{
+           connected: Codrift.OAuth.connected?(service),
+           oauth_supported: true,
+           flow: to_string(flow)
+         }}
       end)
 
     {:ok, %{services: status}}
@@ -522,4 +574,25 @@ defmodule Codrift.Core do
   # type (float, nil) falls back to the default of 20.
   defp clamp_limit(n) when is_integer(n) and n > 0, do: min(n, 100)
   defp clamp_limit(_), do: 20
+
+  # Opens a URL in the user's default browser. The web UI runs inside a Tauri
+  # webview that can't itself launch the system browser, so it delegates here —
+  # the backend runs on the same machine. Best-effort per OS; failures are
+  # swallowed (the UI also shows the raw URL as a copy/paste fallback).
+  defp open_in_browser(url) do
+    {cmd, args} =
+      case :os.type() do
+        {:win32, _} -> {"cmd", ["/c", "start", "", url]}
+        {:unix, :darwin} -> {"open", [url]}
+        {:unix, _} -> {"xdg-open", [url]}
+      end
+
+    Task.Supervisor.start_child(Codrift.TaskSupervisor, fn ->
+      System.cmd(cmd, args, stderr_to_stdout: true)
+    end)
+
+    :ok
+  rescue
+    _ -> :ok
+  end
 end

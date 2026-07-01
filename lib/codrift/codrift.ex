@@ -298,6 +298,26 @@ defmodule Codrift do
           "message" => "Open auth_url in your browser to authorize #{service}"
         }
 
+      {:ok,
+       %{
+         flow: :device_flow,
+         user_code: user_code,
+         verification_uri: verification_uri,
+         device_code: device_code,
+         expires_in: expires_in,
+         interval: interval
+       }} ->
+        expires_at = System.os_time(:second) + expires_in
+        OAuth.poll_device_auth(nil, service, device_code, expires_at, interval, nil)
+
+        %{
+          "flow" => "device_flow",
+          "service" => service,
+          "user_code" => user_code,
+          "verification_uri" => verification_uri,
+          "message" => "Visit #{verification_uri} and enter code #{user_code}"
+        }
+
       {:ok, %{flow: :guided_token, instructions: instructions}} ->
         %{
           "flow" => "guided_token",

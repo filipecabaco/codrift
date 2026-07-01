@@ -90,8 +90,12 @@ defmodule Codrift.OAuth do
 
   to `notify_pid`. `return_to` is passed through unchanged for the caller to
   use for post-auth navigation.
+
+  `notify_pid` may be `nil` when the caller has no live process to notify
+  (e.g. a stateless web RPC that polls `connected?/1` instead) — the token is
+  still saved either way.
   """
-  @spec poll_device_auth(pid(), String.t(), String.t(), integer(), integer(), term()) :: :ok
+  @spec poll_device_auth(pid() | nil, String.t(), String.t(), integer(), integer(), term()) :: :ok
   def poll_device_auth(notify_pid, service, device_code, expires_at, interval, return_to) do
     with {:ok, config} <- Config.get(service),
          {:ok, client_id} <- Config.resolve_client_id(config, service) do
@@ -226,12 +230,12 @@ defmodule Codrift.OAuth do
     :timer.sleep(interval * 1_000)
 
     if System.os_time(:second) >= expires_at do
-      send(notify_pid, {:device_auth_failed, service, "device code expired", return_to})
+      notify(notify_pid, {:device_auth_failed, service, "device code expired", return_to})
     else
       case HTTP.post(token_url, params, [{"accept", "application/json"}]) do
         {:ok, %{"access_token" => _} = token_data} ->
           save_token(service, token_data)
-          send(notify_pid, {:device_auth_complete, service, return_to})
+          notify(notify_pid, {:device_auth_complete, service, return_to})
 
         {:ok, %{"error" => "authorization_pending"}} ->
           do_poll(notify_pid, service, token_url, params, expires_at, interval, return_to)
@@ -240,13 +244,16 @@ defmodule Codrift.OAuth do
           do_poll(notify_pid, service, token_url, params, expires_at, interval + 5, return_to)
 
         {:ok, %{"error" => reason}} ->
-          send(notify_pid, {:device_auth_failed, service, reason, return_to})
+          notify(notify_pid, {:device_auth_failed, service, reason, return_to})
 
         {:error, _} ->
           do_poll(notify_pid, service, token_url, params, expires_at, interval, return_to)
       end
     end
   end
+
+  defp notify(nil, _msg), do: :ok
+  defp notify(pid, msg) when is_pid(pid), do: send(pid, msg)
 
   # ── Token enrichment (service-specific post-processing) ───────────────────────
 
@@ -297,8 +304,6 @@ defmodule Codrift.OAuth do
        "invalid token format — expected a token starting with #{Enum.join(prefixes, " or ")}"}
     end
   end
-
-  defp validate_guided_token(_token, _config), do: :ok
 
   # ── Storage ──────────────────────────────────────────────────────────────────
 

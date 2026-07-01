@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
-  import { ArrowPath, CommandLine } from "@steeze-ui/heroicons";
+  import { ArrowPath, CommandLine, Link } from "@steeze-ui/heroicons";
   import { rpc, type Initiative, type Agent } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
   import {
@@ -20,6 +20,7 @@
   import CommandPalette from "$lib/CommandPalette.svelte";
   import Prompt from "$lib/Prompt.svelte";
   import Editor from "$lib/Editor.svelte";
+  import Integrations from "$lib/Integrations.svelte";
 
   let initiatives = $state<Initiative[]>([]);
   let agentsByInit = $state<Record<string, Agent[]>>({});
@@ -63,6 +64,7 @@
     | { kind: "palette" }
     | { kind: "prompt"; title: string; placeholder?: string; submit: (v: string) => void }
     | { kind: "confirm"; message: string; onConfirm: () => void }
+    | { kind: "integrations" }
     | null;
   let modal = $state<Modal>(null);
 
@@ -557,6 +559,14 @@
     {/if}
     <button
       class="ml-auto rounded-md p-1 text-muted hover:text-fg"
+      title="Integrations"
+      onclick={() => (modal = { kind: "integrations" })}
+      aria-label="Integrations"
+    >
+      <Icon src={Link} class="size-4" />
+    </button>
+    <button
+      class="rounded-md p-1 text-muted hover:text-fg"
       title="Command palette ({formatSpec(keymap.palette)})"
       onclick={() => (modal = { kind: "palette" })}
       aria-label="Command palette"
@@ -766,7 +776,9 @@
   />
 {/if}
 
-{#if modal?.kind === "palette"}
+{#if modal?.kind === "integrations"}
+  <Integrations onClose={() => (modal = null)} />
+{:else if modal?.kind === "palette"}
   <CommandPalette items={paletteItems} onRun={runAction} onClose={() => (modal = null)} />
 {:else if modal?.kind === "prompt"}
   <Prompt
