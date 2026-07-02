@@ -1,6 +1,9 @@
 defmodule Codrift.Config.Keybindings do
   @moduledoc """
-  Keybinding configuration for the Codrift TUI.
+  Keybinding configuration for Codrift.
+
+  The desktop app fetches these over the `get_keybindings` RPC and drives its
+  own key dispatch (see `assets/src/lib/keys.ts`).
 
   Custom keybindings are loaded from `~/.codrift/keybindings.json`.
   Any action omitted from the file falls back to its default.
@@ -109,7 +112,7 @@ defmodule Codrift.Config.Keybindings do
   """
   @spec load() :: t()
   def load do
-    path = Path.join(Path.expand("~/.codrift"), "keybindings.json")
+    path = Path.join(Codrift.Paths.data_dir(), "keybindings.json")
 
     overrides =
       with {:ok, raw} <- File.read(path),
@@ -123,54 +126,6 @@ defmodule Codrift.Config.Keybindings do
 
     Map.merge(@default_bindings, overrides)
   end
-
-  @doc """
-  Builds a reverse lookup map: `key_spec → action atom`.
-
-  Used for O(1) key dispatch in the TUI event loop.
-  Collisions (two actions sharing the same key) keep only the last one.
-  """
-  @spec build_reverse(t()) :: %{required(key_spec()) => action()}
-  def build_reverse(bindings) do
-    Map.new(bindings, fn {action, key} -> {key, action} end)
-  end
-
-  @doc "Returns the configured key spec for an action, or `nil` if not found."
-  @spec key_for(t(), action()) :: key_spec() | nil
-  def key_for(bindings, action), do: Map.get(bindings, action)
-
-  @doc """
-  Parses a key spec string into `{code, modifiers}` compatible with
-  `ExRatatui.Event.Key`.
-
-      iex> Codrift.Config.Keybindings.parse_spec("ctrl+b")
-      {"b", ["ctrl"]}
-
-      iex> Codrift.Config.Keybindings.parse_spec("j")
-      {"j", []}
-  """
-  @spec parse_spec(key_spec()) :: {String.t(), [String.t()]}
-  def parse_spec(spec) do
-    case String.split(spec, "+", parts: 2) do
-      [mod, key] when mod in ["ctrl", "alt", "shift"] -> {key, [mod]}
-      _ -> {spec, []}
-    end
-  end
-
-  @doc """
-  Formats a key spec for display in hints and the status bar.
-
-      iex> Codrift.Config.Keybindings.format("ctrl+p")
-      "Ctrl+P"
-
-      iex> Codrift.Config.Keybindings.format("j")
-      "j"
-  """
-  @spec format(key_spec()) :: String.t()
-  def format("ctrl+" <> key), do: "Ctrl+#{String.upcase(key)}"
-  def format("alt+" <> key), do: "Alt+#{String.upcase(key)}"
-  def format("shift+" <> key), do: "Shift+#{String.upcase(key)}"
-  def format(key), do: key
 
   # ── Private helpers ───────────────────────────────────────────────────────────
 

@@ -8,7 +8,7 @@ product
 
 Professional software engineers who run multiple AI coding agents (Claude Code, Codex, Opencode, Gemini, Copilot) and shell sessions side by side across several project directories. They live in the keyboard, work across many repositories at once, and treat agents as parallel collaborators they supervise rather than tools they babysit. Context when using Codrift: a focused, high-attention work session where the user is launching agents, watching live output, reviewing diffs, and steering work across initiatives without leaving one surface.
 
-The job to be done: group related directories into an "initiative", launch and supervise agents per directory, watch their output live, review the resulting diffs, browse the file tree, and let agents share a memory store, all from a single keyboard-driven surface (terminal TUI or the Tauri desktop / web UI).
+The job to be done: group related directories into an "initiative", launch and supervise agents per directory, watch their output live, review the resulting diffs, browse the file tree, and let agents share a memory store, all from a single keyboard-driven surface — the Codrift desktop app.
 
 ## Product Purpose
 
@@ -29,10 +29,10 @@ Sharp, technical, confident. The register of Linear, Raycast, and Ghostty: preci
 
 ## Design Principles
 
-- **The agent is the star.** Codrift's own chrome stays out of the way. The focal content is each agent's live output (its native PTY/TUI, rendered faithfully); the surrounding UI frames it and never competes with it.
-- **Keyboard is the primary interface.** Every action is reachable and discoverable by key (navigation, view switching, launching, the command palette). The mouse is a convenience, not the main path. This carries the TUI heritage into every surface.
+- **The agent is the star.** Codrift's own chrome stays out of the way. The focal content is each agent's live output (its native PTY, rendered faithfully in an embedded terminal); the surrounding UI frames it and never competes with it.
+- **Keyboard is the primary interface.** Every action is reachable and discoverable by key (navigation, view switching, launching, the command palette). The mouse is a convenience, not the main path.
 - **Dense, but with hierarchy.** Information-dense like a terminal, yet always legible: clear type hierarchy, deliberate spacing rhythm, and grouping that keeps density from becoming clutter.
-- **One model across surfaces.** The desktop / web UI mirrors the TUI's mental model (initiatives, Context / Diff / Tree, per-directory agent panes). A user who knows one knows the other.
+- **One coherent model.** Initiatives, Context / Diff / Tree, and per-directory agent panes form a single mental model across every view in the app.
 - **Show real state, earn every pixel.** Surfaces reflect live system truth (agent status, diffs, memory entries, git state). No decorative filler, no fabricated affordances, nothing on screen that does not mean something.
 
 ## Accessibility & Inclusion

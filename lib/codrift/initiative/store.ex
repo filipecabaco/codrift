@@ -24,10 +24,8 @@ defmodule Codrift.Initiative.Store do
   alias Codrift.Initiative.DirEntry
   alias Codrift.Worktree
 
-  @default_path "~/.config/codrift/initiatives.json"
-
   @doc "Returns the context folder path for an initiative (pure function, no GenServer call)."
-  def context_path(id), do: Path.expand("~/.codrift/initiatives/#{id}")
+  def context_path(id), do: Codrift.Paths.initiative_dir(id)
 
   @doc """
   Returns `true` when `path` is strictly inside `~/.codrift/initiatives/`.
@@ -39,7 +37,7 @@ defmodule Codrift.Initiative.Store do
   def context_file_path?(nil), do: false
 
   def context_file_path?(path) do
-    base = Path.expand("~/.codrift/initiatives")
+    base = Codrift.Paths.initiatives_base()
     expanded = Path.expand(path)
     String.starts_with?(expanded, base <> "/")
   end
@@ -115,12 +113,11 @@ defmodule Codrift.Initiative.Store do
     GenServer.call(server, {:toggle_dir_worktree, id, dir})
   end
 
-  @default_context_base "~/.codrift/initiatives"
-
   @impl true
   def init(opts) do
-    path = Path.expand(Keyword.get(opts, :path, @default_path))
-    ctx_base = Path.expand(Keyword.get(opts, :context_dir_base, @default_context_base))
+    default_path = Path.join(Codrift.Paths.config_dir(), "initiatives.json")
+    path = Path.expand(Keyword.get(opts, :path, default_path))
+    ctx_base = Path.expand(Keyword.get(opts, :context_dir_base, Codrift.Paths.initiatives_base()))
     initiatives = load(path)
     # Ensure context dirs, CLAUDE.md symlinks, and git repos exist for all
     # previously-created initiatives (backfills anything created before these
@@ -390,7 +387,8 @@ defmodule Codrift.Initiative.Store do
 
   Pure function — no GenServer call.
   """
-  def orchestration_md_path(id), do: Path.expand("~/.codrift/initiatives/#{id}/orchestration.md")
+  def orchestration_md_path(id),
+    do: Path.join(Codrift.Paths.initiative_dir(id), "orchestration.md")
 
   @doc """
   Reads `orchestration.md` for an initiative.
@@ -521,7 +519,7 @@ defmodule Codrift.Initiative.Store do
 
   # Updates only the <!-- codrift:dirs:start/end --> block in an existing file,
   # preserving all user-editable content (Goal, Context, Notes, etc.).
-  defp update_initiative_md_dirs(initiative, base \\ Path.expand("~/.codrift/initiatives")) do
+  defp update_initiative_md_dirs(initiative, base \\ Codrift.Paths.initiatives_base()) do
     md = Path.join(ctx_path(base, initiative.id), "initiative.md")
 
     case File.read(md) do

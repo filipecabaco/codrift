@@ -2,6 +2,10 @@
 
 Each initiative has a searchable knowledge base backed by SQLite FTS5. All agents working on the same initiative can write summaries, decisions, and code snippets to it and search it before starting work — saving tokens and keeping agents aligned across sessions.
 
+In the app, the **memory** tab on any initiative shows recent entries and a full-text search box; entries are colour-coded by chunk type.
+
+![Memory tab — FTS5 search over colour-coded knowledge chunks](images/memory-view.png)
+
 ## Storage
 
 `~/.codrift/initiatives/{id}/memory.db` — created automatically on first write. Removed when the initiative is deleted.

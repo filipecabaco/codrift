@@ -59,7 +59,7 @@ defmodule Codrift.SessionStore do
 
   @impl true
   def init(opts) do
-    path = Keyword.get(opts, :path, Path.expand("~/.codrift/codrift.db"))
+    path = Keyword.get(opts, :path, Path.join(Codrift.Paths.data_dir(), "codrift.db"))
 
     path |> Path.dirname() |> File.mkdir_p!()
 

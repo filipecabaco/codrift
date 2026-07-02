@@ -1,109 +1,123 @@
 #!/bin/sh
-# Codrift installer
-# Usage: curl -fsSL https://codrift.sh/install | sh
+# Codrift installer — installs the Codrift desktop app plus the headless CLI.
+# Usage: curl -fsSL https://codrift.sh/install.sh | sh
 #
 # Environment overrides:
-#   CODRIFT_VERSION    — install a specific version (e.g. "0.2.0")
-#   CODRIFT_INSTALL_DIR — where to extract the release (default ~/.local/share/codrift)
+#   CODRIFT_VERSION — install a specific release tag (e.g. "0.2.0")
 #
 set -e
 
 REPO="filipecabaco/codrift"
-INSTALL_DIR="${CODRIFT_INSTALL_DIR:-${HOME}/.local/share/codrift}"
-BIN_DIR="${HOME}/.local/bin"
-
-# ── Detect platform ────────────────────────────────────────────────────────────
-
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
+# Target suffix used for the CLI tarball asset name (see release.yml).
 case "${OS}-${ARCH}" in
-  Darwin-arm64)   TARGET="aarch64-apple-darwin" ;;
-  Darwin-x86_64)  TARGET="x86_64-apple-darwin" ;;
-  Linux-x86_64)   TARGET="x86_64-linux-gnu" ;;
-  Linux-aarch64)  TARGET="aarch64-linux-gnu" ;;
+  Darwin-arm64)   CLI_TARGET="aarch64-apple-darwin" ;;
+  Darwin-x86_64)  CLI_TARGET="x86_64-apple-darwin" ;;
+  Linux-x86_64)   CLI_TARGET="x86_64-linux-gnu" ;;
+  Linux-aarch64)  CLI_TARGET="aarch64-linux-gnu" ;;
+  *)              CLI_TARGET="" ;;
+esac
+
+# ── Resolve the release to install ───────────────────────────────────────────
+
+if [ -n "${CODRIFT_VERSION:-}" ]; then
+  API="https://api.github.com/repos/${REPO}/releases/tags/v${CODRIFT_VERSION}"
+else
+  API="https://api.github.com/repos/${REPO}/releases/latest"
+fi
+
+printf 'Fetching release metadata...\n'
+RELEASE_JSON="$(curl -fsSL "${API}")"
+
+# Pick the download URL for an asset whose name matches a suffix/keyword.
+# $1 = grep pattern applied to the asset file name.
+asset_url() {
+  printf '%s\n' "${RELEASE_JSON}" \
+    | grep '"browser_download_url"' \
+    | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' \
+    | grep -iE "$1" \
+    | head -1
+}
+
+# ── Install the desktop app ──────────────────────────────────────────────────
+
+case "${OS}" in
+  Darwin)
+    case "${ARCH}" in
+      arm64)  URL="$(asset_url 'aarch64.*\.dmg$|arm64.*\.dmg$')" ;;
+      x86_64) URL="$(asset_url 'x64.*\.dmg$|x86_64.*\.dmg$')" ;;
+    esac
+    [ -z "${URL}" ] && URL="$(asset_url '\.dmg$')"
+    [ -z "${URL}" ] && { printf 'error: no macOS .dmg found in the latest release.\n' >&2; exit 1; }
+
+    TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT INT TERM
+    printf 'Downloading %s\n' "${URL}"
+    curl -fsSL --progress-bar "${URL}" -o "${TMP}/codrift.dmg"
+
+    MNT="${TMP}/mnt"; mkdir -p "${MNT}"
+    hdiutil attach "${TMP}/codrift.dmg" -nobrowse -quiet -mountpoint "${MNT}"
+    APP="$(find "${MNT}" -maxdepth 1 -name '*.app' | head -1)"
+    if [ -z "${APP}" ]; then
+      hdiutil detach "${MNT}" -quiet || true
+      printf 'error: no .app found inside the disk image.\n' >&2; exit 1
+    fi
+    printf 'Installing %s to /Applications\n' "$(basename "${APP}")"
+    rm -rf "/Applications/$(basename "${APP}")"
+    cp -R "${APP}" /Applications/
+    hdiutil detach "${MNT}" -quiet || true
+    printf 'Codrift.app installed to /Applications.\n'
+    ;;
+
+  Linux)
+    URL="$(asset_url '\.AppImage$')"
+    [ -z "${URL}" ] && { printf 'error: no Linux .AppImage found in the latest release.\n' >&2; exit 1; }
+
+    APP_DIR="${HOME}/.local/bin"
+    mkdir -p "${APP_DIR}"
+    printf 'Downloading %s\n' "${URL}"
+    curl -fsSL --progress-bar "${URL}" -o "${APP_DIR}/codrift-app"
+    chmod +x "${APP_DIR}/codrift-app"
+    printf 'Codrift app installed to %s/codrift-app\n' "${APP_DIR}"
+    ;;
+
   *)
-    printf 'error: unsupported platform: %s on %s\n' "${ARCH}" "${OS}" >&2
-    printf '  See https://github.com/%s/releases for manual download.\n' "${REPO}" >&2
+    printf 'error: unsupported platform: %s\n' "${OS}" >&2
+    printf '  Download a bundle manually from https://github.com/%s/releases\n' "${REPO}" >&2
     exit 1
     ;;
 esac
 
-# ── Resolve version ────────────────────────────────────────────────────────────
+# ── Install the headless CLI ─────────────────────────────────────────────────
 
-if [ -n "${CODRIFT_VERSION:-}" ]; then
-  VERSION="${CODRIFT_VERSION}"
-else
-  printf 'Fetching latest release...\n'
-  # Extract the tag_name value and strip an optional leading 'v' so both
-  # "v1.2.3" and "1.2.3" tag formats produce a bare version number.
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' \
-    | head -1 \
-    | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/' \
-    | sed 's/^v//')"
-fi
+install_cli() {
+  [ -z "${CLI_TARGET}" ] && { printf '\nSkipping CLI: no build for %s-%s.\n' "${OS}" "${ARCH}"; return; }
 
-[ -z "${VERSION}" ] && {
-  printf 'error: could not determine latest version.\n' >&2
-  printf '  Set CODRIFT_VERSION=x.y.z to install a specific release.\n' >&2
-  exit 1
+  CLI_URL="$(asset_url "codrift-cli-.*${CLI_TARGET}\.tar\.gz$")"
+  [ -z "${CLI_URL}" ] && { printf '\nSkipping CLI: no codrift-cli tarball for %s.\n' "${CLI_TARGET}"; return; }
+
+  CLI_DIR="${HOME}/.local/share/codrift"
+  BIN_DIR="${HOME}/.local/bin"
+  CTMP="$(mktemp -d)"
+
+  printf '\nInstalling codrift CLI...\n'
+  curl -fsSL --progress-bar "${CLI_URL}" -o "${CTMP}/codrift-cli.tar.gz"
+  rm -rf "${CLI_DIR}"; mkdir -p "${CLI_DIR}" "${BIN_DIR}"
+  # The mix release :tar step does not wrap files in a top-level directory, so
+  # extract straight into CLI_DIR (bin/, lib/, erts-*, releases/ at the root).
+  tar -xzf "${CTMP}/codrift-cli.tar.gz" -C "${CLI_DIR}"
+  rm -rf "${CTMP}"
+  ln -sf "${CLI_DIR}/bin/codrift" "${BIN_DIR}/codrift"
+  printf 'codrift CLI installed to %s/codrift\n' "${BIN_DIR}"
+
+  case ":${PATH}:" in
+    *":${BIN_DIR}:"*) ;;
+    *) printf 'Add %s to your PATH to use the `codrift` command.\n' "${BIN_DIR}" ;;
+  esac
 }
 
-# ── Download ───────────────────────────────────────────────────────────────────
+install_cli
 
-TARBALL="codrift-${VERSION}-${TARGET}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/v${VERSION}/${TARBALL}"
-
-printf 'Installing codrift %s (%s)\n' "${VERSION}" "${TARGET}"
-printf '  -> %s\n\n' "${INSTALL_DIR}"
-
-TMP="$(mktemp -d)"
-trap 'rm -rf "${TMP}"' EXIT INT TERM
-
-curl -fsSL --progress-bar "${URL}" -o "${TMP}/${TARBALL}"
-
-# ── Extract ────────────────────────────────────────────────────────────────────
-
-# Elixir's mix release :tar step does NOT wrap files in a top-level directory.
-# The tarball root contains bin/, lib/, erts-*/, releases/ directly, so we
-# extract straight into INSTALL_DIR (no --strip-components).
-
-rm -rf "${INSTALL_DIR}"
-mkdir -p "${INSTALL_DIR}"
-tar -xzf "${TMP}/${TARBALL}" -C "${INSTALL_DIR}"
-
-# ── Link into PATH ─────────────────────────────────────────────────────────────
-
-mkdir -p "${BIN_DIR}"
-ln -sf "${INSTALL_DIR}/bin/codrift" "${BIN_DIR}/codrift"
-
-# ── Done ───────────────────────────────────────────────────────────────────────
-
-printf '\ncodrift %s installed.\n\n' "${VERSION}"
-
-case ":${PATH}:" in
-  *":${BIN_DIR}:"*)
-    ;;
-  *)
-    EXPORT_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
-    ADDED=0
-    for rc in "${HOME}/.zshrc" "${HOME}/.bashrc" "${HOME}/.profile"; do
-      if [ -f "${rc}" ] && ! grep -qF "${BIN_DIR}" "${rc}" 2>/dev/null; then
-        printf '\n# Added by codrift installer\n%s\n' "${EXPORT_LINE}" >> "${rc}"
-        printf 'Added %s to PATH in %s\n' "${BIN_DIR}" "${rc}"
-        ADDED=1
-      fi
-    done
-    if [ "${ADDED}" -eq 0 ] && [ ! -f "${HOME}/.zshrc" ] && [ ! -f "${HOME}/.bashrc" ]; then
-      printf '\n# Added by codrift installer\n%s\n' "${EXPORT_LINE}" >> "${HOME}/.profile"
-      printf 'Added %s to PATH in ~/.profile\n' "${BIN_DIR}"
-    fi
-    printf 'Run: source ~/.zshrc  (or open a new terminal)\n\n'
-    ;;
-esac
-
-printf 'Quick start:\n'
-printf '  codrift tui\n\n'
-printf 'Register MCP server with Claude Code:\n'
+printf '\nRegister the MCP server with Claude Code (optional):\n'
 printf '  codrift mcp install\n'

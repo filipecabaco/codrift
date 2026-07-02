@@ -163,12 +163,12 @@ defmodule Codrift.Integration do
   @doc "Returns the path to the integration metadata JSON file for an initiative."
   @spec meta_path(String.t()) :: String.t()
   def meta_path(initiative_id),
-    do: Path.expand("~/.codrift/initiatives/#{initiative_id}/integration.json")
+    do: Path.join(Codrift.Paths.initiative_dir(initiative_id), "integration.json")
 
   @doc "Returns the path to the integration context Markdown file for an initiative."
   @spec context_path(String.t()) :: String.t()
   def context_path(initiative_id),
-    do: Path.expand("~/.codrift/initiatives/#{initiative_id}/integration.md")
+    do: Path.join(Codrift.Paths.initiative_dir(initiative_id), "integration.md")
 
   # ── Private helpers ──────────────────────────────────────────────────────────
 

@@ -20,9 +20,10 @@ defmodule Codrift.CLI.Initiative do
 
   alias Codrift.{ClaudePermissions, Initiative}
   alias Codrift.Initiative.{DirEntry, Store}
+  alias Codrift.Paths
   alias Codrift.Worktree
 
-  @default_path "~/.config/codrift/initiatives.json"
+  defp initiatives_path, do: Path.join(Paths.config_dir(), "initiatives.json")
 
   # ── Dispatch ─────────────────────────────────────────────────────────────────
 
@@ -187,7 +188,7 @@ defmodule Codrift.CLI.Initiative do
   end
 
   defp load_map do
-    path = Path.expand(@default_path)
+    path = initiatives_path()
 
     with true <- File.exists?(path),
          {:ok, content} <- File.read(path),
@@ -218,19 +219,19 @@ defmodule Codrift.CLI.Initiative do
   end
 
   defp persist(initiatives_map) do
-    path = Path.expand(@default_path)
+    path = initiatives_path()
     path |> Path.dirname() |> File.mkdir_p!()
     data = Map.new(initiatives_map, fn {id, i} -> {id, Initiative.to_map(i)} end)
     File.write!(path, JSON.encode!(%{"initiatives" => data}))
   end
 
-  defp context_path(id), do: Path.expand("~/.codrift/initiatives/#{id}")
+  defp context_path(id), do: Paths.initiative_dir(id)
 
   # Mirrors the path-traversal guard in Codrift.Initiative.Store.
-  # Only removes paths that are direct children of ~/.codrift/initiatives/
+  # Only removes paths that are direct children of the initiatives base
   # to prevent accidental deletion of unrelated directories.
   defp safe_rm_context_dir!(path) do
-    base = Path.expand("~/.codrift/initiatives")
+    base = Paths.initiatives_base()
     expanded = Path.expand(path)
 
     unless Path.dirname(expanded) == base do

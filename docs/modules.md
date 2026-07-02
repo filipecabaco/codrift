@@ -46,7 +46,7 @@ API: `search/2`, `add/4`, `delete/2`, `recent/2`, `list/2`, `stats/1`, `valid_ty
 
 ## Codrift.SessionStore
 
-GenServer. SQLite-backed (Exqlite, `~/.codrift/codrift.db`). Persists session UUIDs per agent across TUI restarts. Rows include adapter name; `adapter` column added via non-destructive `ALTER TABLE` migration.
+GenServer. SQLite-backed (Exqlite, `~/.codrift/codrift.db`). Persists session UUIDs per agent across restarts. Rows include adapter name; `adapter` column added via non-destructive `ALTER TABLE` migration.
 
 API: `save/5` (agent_id, initiative_id, dir, session_id, adapter_name), `get_by_agent/1`, `list_all/0` → `[{agent_id, initiative_id, dir, session_id, adapter}]`, `list_by_dir/2`, `delete_by_agent/1`, `prune_deleted_initiatives/1`
 
@@ -60,7 +60,9 @@ GenServer owning an erlexec PTY (`:pty` mode) or Port (`:interactive` / `:once`)
 
 Subscribers receive `{:agent_output, id, data}`, `{:agent_ready, id}`, and `{:agent_stopped, id, code}`.
 
-Session UUID is auto-detected by polling `~/.claude/projects/<encoded-dir>/` for `.jsonl` files modified at or after agent start time (3 s delay, one retry at 8 s).
+For session-persistable adapters, a stable session UUID is generated (or reused
+from `SessionStore`) **before** the process launches and passed to the CLI — so
+the UUID is always known up front and never needs to be discovered from disk.
 
 API: `send_input/2`, `send_raw/2`, `resize/3`, `status/1`, `recent_output/2`, `session_uuid/1`, `subscribe/2`
 
@@ -69,6 +71,23 @@ API: `send_input/2`, `send_raw/2`, `resize/3`, `status/1`, `recent_output/2`, `s
 DynamicSupervisor. Accepts `:name` / `server` for test isolation.
 
 API: `start_agent/4`, `stop_agent/2`, `list_agents/1`, `find_agent/2`, `list_agents_for_initiative/2`
+
+## Codrift.Conductor
+
+GenServer. Orchestrates multiple `AgentProcess`es under a single initiative. Two modes:
+
+- **Fan-out** (`start_conductor/3`) — starts one agent per directory and broadcasts prompts to all of them.
+- **Orchestrator** (`start_orchestration/3`) — starts one Claude agent in the initiative's context dir with a planning prompt (from `orchestration.md`); that agent uses Codrift's MCP tools to spawn and direct sub-agents itself. Agents are tracked with a role of `:orchestrator` or `:worker`.
+
+Subscribers receive `{:conductor_output, initiative_id, agent_id, chunk}`, `{:conductor_agent_ready, …}`, and `{:conductor_agent_stopped, …, exit_code}`.
+
+API: `broadcast/2`, `send_to/3`, `results/1`, `agent_status/1`, `subscribe/2`
+
+## Codrift.ConductorSupervisor
+
+DynamicSupervisor. One `Conductor` per initiative, registered in `ConductorRegistry`.
+
+API: `start_conductor/3`, `start_orchestration/4`, `find_conductor/2`, `stop_conductor/2`, `list_conductors/1`
 
 ## Codrift.Agent (behaviour)
 
@@ -110,94 +129,19 @@ Pure module. Shells `git diff` via `System.cmd/3`, parses unified diff format.
 - `%Hunk{old_start, old_count, new_start, new_count, header, lines}`
 - `%Line{type, content}` — type: `:add | :remove | :context`
 
-## Codrift.TUI.VT100
-
-Pure Elixir VT100/ANSI terminal emulator. No Rustler NIF.
-
-| Function | Description |
-|----------|-------------|
-| `new(width, height)` | Allocate virtual screen (cell grid) |
-| `process(screen, data)` | Feed raw PTY bytes; updates cursor, cells, style, scroll region |
-| `to_text(screen, show_cursor)` | Convert cell grid to `%ExRatatui.Text{}` for `Paragraph` |
-| `resize(screen, width, height)` | Notify of dimension changes |
-
-Supported sequences: SGR colors/modifiers + attribute-off (21–29), cursor movement (H/f/A/B/C/D/G/d), erase (J/K/X), insert/delete chars (@/P), IL/DL (L/M), SU/SD (S/T), scroll region (r), save/restore cursor (ESC 7/8, [s/u), alternate screen (?1049h/l), cursor visibility (?25h/l), OSC/DCS/PM/APC skip, incomplete-sequence carry buffer across PTY chunks.
-
-## Codrift.TUI.Sidebar
-
-Builds and renders sidebar entries for context mode and diff mode.
-
-**Context mode** — `build_entries(initiatives, agents)` → flat list of:
-- `{:initiative, id, name, dir_count, agent_count, status}`
-- `{:context_dir, initiative_id, path, agent_count}`
-- `{:context_file, initiative_id, full_path, filename}`
-- `{:dir, initiative_id, path, agent_count}`
-- `{:agent, id, adapter, status}`
-
-**Diff mode** — `build_diff_entries([{dir, [%FileDiff{}]}])` → flat list of:
-- `{:diff_all, total_adds, total_dels}`
-- `{:diff_dir, dir, adds, dels}`
-- `{:diff_file, dir, path, adds, dels}`
-
-`render/3` — context sidebar widget
-`render_diff/3` — diff sidebar widget
-
-## Codrift.TUI.SidebarFilter
-
-Pure module. Filter state and matching logic for the sidebar in tree and diff modes.
-
-Holds `%{query: String.t(), active: boolean()}`. Mode is inferred from the query — no explicit switching:
-
-| Query form | Mode | Behaviour |
-|------------|------|-----------|
-| plain text | `:fuzzy` | case-insensitive substring |
-| starts with `/` | `:regex` | Elixir `Regex`, case-insensitive |
-| starts with `#` | `:tag` | predefined groups: `#test` `#config` `#doc` `#schema` `#router` |
-| contains `*` or `?` | `:glob` | shell wildcards |
-
-| Function | Description |
-|----------|-------------|
-| `new/0` | Blank, inactive filter |
-| `activate/1` | Marks filter as accepting input |
-| `deactivate/1` | Clears query and deactivates |
-| `put_char/2` | Appends a printable character |
-| `backspace/1` | Removes the last character |
-| `mode/1` | Returns `:fuzzy \| :glob \| :regex \| :tag` |
-| `matches?/2` | Tests a string under the active mode |
-| `apply_tree/3` | Filters `all_files` to matching `{:tree_file, …}` entries |
-| `apply_diff/2` | Retains only matching `{:diff_file, …}` entries |
-
-Extend via `@tag_patterns`, `mode/1`, or `do_match/3`.
-
-## Codrift.TUI.Tree
-
-Pure module. Builds and navigates the file tree sidebar for tree mode.
-
-| Function | Description |
-|----------|-------------|
-| `build_visible/2` | Flat list of entries respecting the `expanded` MapSet |
-| `all_files/1` | Flat list of all `{:tree_file, …}` entries across every directory, regardless of expand state — used by `SidebarFilter` |
-| `toggle_expand/2` | Toggles a path in the expanded `MapSet` |
-
 ## Codrift.Config.Keybindings
 
-Pure module. Loads `~/.codrift/keybindings.json` at TUI start; merges user overrides over built-in defaults.
+Pure module. Loads `~/.codrift/keybindings.json`; merges user overrides over built-in defaults.
 
-`load/0` returns a forward map `%{action => key}` and reverse map `%{key => action}` for dispatch. Palette hints and the footer status bar read from the resolved map so displayed labels always match the user's config.
-
-## Codrift.Config.Theme
-
-Pure module. Loads `~/.codrift/theme.json` at TUI start; resolves to a `%Theme{}` struct used by `Codrift.TUI.Styles`.
-
-Fields: `border`, `sidebar_highlight`, `diff_border`, `syntax_theme`
-
-Named themes: `default`, `dracula`, `nord`, `solarized`, `tokyo_night`. Unknown names and missing files fall back to `default`.
+`load/0` returns a `%{action => key}` map. The desktop UI fetches it through the
+`get_keybindings` RPC (see `Codrift.Core`) and drives its own key dispatch and
+palette hints, so displayed labels always match the user's config.
 
 ## Codrift.Config.Settings
 
 Pure module. Reads/writes `~/.codrift/settings.json` (Elixir 1.18+ JSON module).
 
-Tracks per-adapter start counts for sorting the agent picker modal (most-used first).
+Tracks per-adapter start counts for sorting the agent launcher (most-used first).
 
 API: `adapter_start_counts/0`, `increment_adapter_start/1`
 
@@ -213,9 +157,9 @@ Adapters: `GitHub`, `GitHubProjects`, `Linear`, `LinearProjects`, `GitLab`, `Jir
 
 ## Codrift.Integration.HTTP
 
-Pure module. Thin `:httpc` wrapper — GET/POST with JSON decode, Bearer auth, no extra deps.
+Pure module. Thin [Req](https://hex.pm/packages/req) wrapper — GET/POST/GraphQL with JSON decode and Bearer auth; 15 s timeout, non-2xx → `{:error, "HTTP {status}: {body}"}`.
 
-API: `get/2`, `post/3`
+API: `get/2`, `post/3`, `graphql/4`
 
 ## Codrift.Integration.Sync
 
@@ -233,7 +177,7 @@ Pure module. Manages OAuth2 token acquisition and storage for external integrati
 |------|----------|-------------|
 | PKCE browser | Linear, GitLab, Jira | RFC 7636; `start_flow/1` returns `auth_url`; `handle_callback/3` exchanges code + verifier |
 | Device flow | GitHub | RFC 8628; `start_flow/1` returns `user_code` + `verification_uri`; `poll_device_auth/5` polls in a supervised Task |
-| Guided token | Notion, Shortcut, Asana | TUI shows a URL + token input field |
+| Guided token | Notion, Shortcut, Asana | The app shows a URL + token input field |
 
 Tokens stored at `~/.codrift/oauth_tokens.json` (mode 0600).
 
@@ -259,7 +203,8 @@ Install: `codrift mcp install` (or `mix codrift.mcp.install`)
 
 | Category | Tools |
 |----------|-------|
-| Initiatives | `list_initiatives`, `get_diff`, `create_initiative`, `add_dir`, `delete_initiative` |
-| Agents | `list_agents`, `start_agent`, `send_to_agent`, `get_agent_output` |
+| Initiatives | `list_initiatives`, `get_diff`, `create_initiative`, `add_dir`, `delete_initiative`, `set_initiative_status` |
+| Agents | `list_agents`, `start_agent`, `send_to_agent`, `get_agent_output`, `broadcast_to_initiative` |
+| Orchestration | `start_conductor`, `start_orchestration`, `get_conductor_status`, `get_conductor_results` |
 | Memory | `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list` |
 | Integrations | `start_oauth_flow`, `get_oauth_status`, `list_integration_items`, `import_from_integration`, `sync_initiative_context` |

@@ -16,40 +16,20 @@ Branch name: `codrift/{initiative_id_prefix}/{dir-slug}`
 
 ## Enabling worktrees
 
-### When adding a directory (`a`)
+Worktrees are managed from the CLI (see below). Enabling one for a directory
+creates the worktree checkout and its branch; disabling it removes them. A
+directory's worktree state is stored on its `DirEntry` and persists across
+restarts.
 
-If the directory is a git repository, the add-dir modal shows:
-
-```
-[x] Use git worktree  (w to toggle)
-```
-
-The toggle defaults to the initiative's `worktree_default` setting (off by default). Press `w` to flip it before confirming with Enter.
-
-### On an existing directory
-
-With the cursor on a dir entry in the sidebar:
-
-- Press **`W`** — creates the worktree immediately, or removes it if one exists
-- Or open the command palette (`Ctrl+P`) → **Toggle Worktree for Directory**
-
-### Per-initiative default
-
-Open the palette → **Toggle Worktree Default (initiative)** — sets the default for all future directories added to that initiative.
-
-## Sidebar indicators
-
-```
-  ▸ ~/projects/realtime  [wt]   1   ← clean worktree, 1 agent running
-  ▸ ~/projects/walrus    [wt*]  0   ← dirty (uncommitted changes)
-  ▸ ~/projects/other               ← no worktree
-```
-
-`[wt]` is shown in muted gray; `[wt*]` is yellow. Status is computed each time the sidebar is rebuilt (on initiative/agent changes, not every frame).
+An initiative can also carry a `worktree_default` flag (`set_worktree_default` /
+the `toggle_dir_worktree` core op) so new directories inherit a preference.
 
 ## What changes for agents
 
-Agents spawned on a worktree-enabled directory run inside the worktree path, not the source path. The sidebar still shows the source path for identity; the branch shown is the worktree branch.
+Agents spawned on a worktree-enabled directory run inside the **worktree** path,
+not the source path — this is what `DirEntry.effective_path/1` resolves to. The
+initiative keeps the source path as the directory's identity, so it's still shown
+in the tree; edits and diffs, however, happen on the worktree branch.
 
 ## CLI commands
 
@@ -59,34 +39,14 @@ codrift initiative worktree-enable  <initiative_id> <dir_path>
 codrift initiative worktree-disable <initiative_id> <dir_path>
 ```
 
-`worktree-status` prints a JSON array of all dirs with their worktree state (branch, dirty flag, path). `worktree-enable` and `worktree-disable` operate without the TUI running — they call `Worktree.ensure/3` and `Worktree.remove/2` directly and persist the result.
+`worktree-status` prints a JSON array of all dirs with their worktree state (branch, dirty flag, path). `worktree-enable` and `worktree-disable` operate without the app running — they call `Worktree.ensure/3` and `Worktree.remove/2` directly and persist the result.
 
 ## Cleanup
 
-- **Remove directory** (`d` on a dir entry) — the worktree is pruned from git and the directory is deleted.
-- **Delete initiative** (`d` on the initiative row) — all worktrees for that initiative are cleaned up before the context folder is removed.
-
-## Dir detail pane
-
-When the cursor is on a dir entry with a worktree:
-
-```
-Branch:   codrift/abc12345/myrepo
-Worktree: ~/.codrift/.../worktrees/myrepo
-Source:   main (~/projects/myrepo)
-Remote:   https://github.com/org/repo
-
-Recent commits:
-  abc1234 feature work
-```
-
-Without a worktree:
-
-```
-Branch:   main
-Worktree: none  (W to enable, or Ctrl+P → Toggle Worktree)
-Remote:   https://github.com/org/repo
-```
+- **`worktree-disable`** — prunes the worktree from git and clears it from the
+  `DirEntry`.
+- **Delete initiative** (`d` on the initiative row) — all worktrees for that
+  initiative are cleaned up before the context folder is removed.
 
 ## Module reference
 

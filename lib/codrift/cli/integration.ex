@@ -3,14 +3,14 @@ defmodule Codrift.CLI.Integration do
   CLI implementation for external integration commands.
 
   Reads and writes files directly — no GenServer required — so it works in the
-  release `eval` context and when the TUI is not running.
+  release `eval` context and when the desktop app is not running.
 
   All output is JSON to stdout; errors go to stderr with a non-zero exit.
 
   ## Auth flows
 
   - PKCE (github, linear, gitlab, jira): delegates to the running web server
-    at localhost:7437, which holds the StateStore. The TUI must be running.
+    at localhost:7437, which holds the StateStore. The desktop app must be running.
   - Guided token (notion): fully local — prompts the user to paste a token
     created in Notion's web UI. No server needed.
   - API key env var: fallback for CI or headless environments.
@@ -21,9 +21,11 @@ defmodule Codrift.CLI.Integration do
   alias Codrift.Integration
   alias Codrift.OAuth
   alias Codrift.OAuth.Config, as: OAuthConfig
+  alias Codrift.Paths
 
   @server_url "http://localhost:7437"
-  @initiatives_file "~/.config/codrift/initiatives.json"
+
+  defp initiatives_file, do: Path.join(Paths.config_dir(), "initiatives.json")
 
   @spec run([String.t()]) :: :ok
 
@@ -133,7 +135,7 @@ defmodule Codrift.CLI.Integration do
 
     Auth flows:
       PKCE browser  (github, github_projects, linear, linear_projects, gitlab, jira)
-                    — requires the TUI to be running (`codrift tui`)
+                    — requires the Codrift desktop app to be running
       Guided token  (notion) — no server needed, just follow the prompts
       API key only  (shortcut) — set SHORTCUT_TOKEN env var
     """)
@@ -153,8 +155,8 @@ defmodule Codrift.CLI.Integration do
 
       {:error, :server_unavailable} ->
         fail(
-          "The Codrift TUI must be running to authorize #{service}.\n" <>
-            "Start it with `codrift tui`, then run this command again in a second terminal."
+          "The Codrift desktop app must be running to authorize #{service}.\n" <>
+            "Launch the app, then run this command again in a terminal."
         )
 
       {:error, reason} ->
@@ -212,14 +214,14 @@ defmodule Codrift.CLI.Integration do
   end
 
   defp persist(initiative) do
-    path = Path.expand(@initiatives_file)
+    path = initiatives_file()
     data = Map.put(load_raw(), initiative.id, Initiative.to_map(initiative))
     path |> Path.dirname() |> File.mkdir_p!()
     File.write!(path, JSON.encode!(%{"initiatives" => data}))
   end
 
   defp load_raw do
-    path = Path.expand(@initiatives_file)
+    path = initiatives_file()
 
     with true <- File.exists?(path),
          {:ok, content} <- File.read(path),
@@ -230,7 +232,7 @@ defmodule Codrift.CLI.Integration do
     end
   end
 
-  defp context_path(id), do: Path.expand("~/.codrift/initiatives/#{id}")
+  defp context_path(id), do: Paths.initiative_dir(id)
 
   defp server_get(url) do
     case Req.get(url, receive_timeout: 3_000) do

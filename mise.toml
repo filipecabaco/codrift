@@ -5,3 +5,4 @@ rust = "1.95.0"
 # published there (29.1/29.2 are not yet — they 404), so we lock to it to keep
 # production bundles reproducible. No OTP downgrade is required.
 erlang = "29.0.2"
+zig = "0.15.2"

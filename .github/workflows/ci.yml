@@ -15,8 +15,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - uses: erlef/setup-beam@v1
         id: setup-beam
@@ -71,8 +69,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - uses: erlef/setup-beam@v1
         with:
@@ -116,8 +112,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - uses: erlef/setup-beam@v1
         with:
@@ -156,3 +150,109 @@ jobs:
           output=$(./_build/prod/rel/codrift/bin/codrift memory stats ci-smoke-test)
           echo "output: $output"
           echo "$output" | jq -e '.total != null'
+
+  # ── 4. Desktop app build ─────────────────────────────────────────────────────
+  # Verifies the Tauri app builds AND runs: the frontend, the :desktop sidecar
+  # release, and the native Rust shell all compile, then the assembled sidecar is
+  # booted and smoke-tested — it must bind :7437 and serve both the health root
+  # ("ok") and the SPA (priv/static/index.html) from inside the release, catching
+  # static-path / boot regressions that a compile-only check misses. Full bundle
+  # production (Burrito wrap + .dmg/.AppImage) is exercised by release.yml on tags.
+  tauri_build:
+    name: Desktop build
+    runs-on: macos-14
+    needs: [lint, test]
+    env:
+      MIX_ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: assets/pnpm-lock.yaml
+
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        id: deps-cache
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+
+      - name: Restore _build cache
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-prod-desktop-${{ hashFiles('**/mix.lock') }}-${{ hashFiles('lib/**/*.ex') }}
+          restore-keys: |
+            ${{ runner.os }}-build-prod-desktop-${{ hashFiles('**/mix.lock') }}-
+            ${{ runner.os }}-build-prod-desktop-
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Elixir deps
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: mix deps.get
+
+      - name: Build frontend
+        working-directory: assets
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build sidecar release
+        run: BURRITO_SKIP=true mix release desktop --overwrite
+
+      # Boot the assembled sidecar exactly as the Tauri shell would and assert it
+      # serves. No heartbeat is sent, but ShutdownManager's first-heartbeat guard
+      # keeps the node alive (never stops before the first byte ever arrives), so
+      # this is safe and non-flaky.
+      - name: Boot sidecar & smoke test
+        run: |
+          set -uo pipefail
+          BIN=_build/prod/rel/desktop/bin/desktop
+          LOG="${TMPDIR:-/tmp}/codrift_desktop.log"
+
+          "$BIN" daemon
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:7437/ >/dev/null; then ready=1; break; fi
+            sleep 2
+          done
+
+          if [ "$ready" != "1" ]; then
+            echo "::error::desktop sidecar did not serve :7437 within 60s"
+            [ -f "$LOG" ] && cat "$LOG"
+            "$BIN" stop || true
+            exit 1
+          fi
+
+          fail=0
+          curl -sf http://localhost:7437/ | grep -q ok \
+            || { echo "::error::health root did not return ok"; fail=1; }
+          curl -sf http://localhost:7437/index.html | grep -qi 'id="app"' \
+            || { echo "::error::SPA index.html not served from the release"; fail=1; }
+
+          [ "$fail" != "0" ] && { [ -f "$LOG" ] && cat "$LOG"; }
+          "$BIN" stop || true
+          exit "$fail"
+
+      - name: Compile Tauri shell
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml

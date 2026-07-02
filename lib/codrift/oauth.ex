@@ -34,7 +34,7 @@ defmodule Codrift.OAuth do
   alias Codrift.OAuth.Config
   alias Codrift.OAuth.StateStore
 
-  @token_file "~/.codrift/oauth_tokens.json"
+  defp token_file, do: Path.join(Codrift.Paths.data_dir(), "oauth_tokens.json")
 
   # ── Public API ───────────────────────────────────────────────────────────────
 
@@ -312,7 +312,7 @@ defmodule Codrift.OAuth do
   end
 
   defp load_tokens do
-    path = Path.expand(@token_file)
+    path = token_file()
 
     with true <- File.exists?(path),
          {:ok, content} <- File.read(path),
@@ -324,7 +324,7 @@ defmodule Codrift.OAuth do
   end
 
   defp save_tokens(tokens) do
-    path = Path.expand(@token_file)
+    path = token_file()
     path |> Path.dirname() |> File.mkdir_p!()
     File.write!(path, JSON.encode!(tokens))
     File.chmod!(path, 0o600)

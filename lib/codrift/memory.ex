@@ -40,7 +40,7 @@ defmodule Codrift.Memory do
   @doc "Returns the filesystem path to the memory DB for an initiative."
   @spec db_path(String.t()) :: String.t()
   def db_path(initiative_id),
-    do: Path.expand("~/.codrift/initiatives/#{initiative_id}/#{@db_file}")
+    do: Path.join(Codrift.Paths.initiative_dir(initiative_id), @db_file)
 
   @doc "Returns the list of valid chunk type strings."
   @spec valid_types() :: [String.t()]

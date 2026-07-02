@@ -1,3 +1,0 @@
-[submodule "vendor/ex_ratatui"]
-	path = vendor/ex_ratatui
-	url = git@github.com:filipecabaco/ex_ratatui.git

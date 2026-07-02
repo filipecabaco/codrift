@@ -14,8 +14,10 @@ defmodule Codrift.CLI.Session do
       codrift session prune
   """
 
-  @db_path "~/.codrift/codrift.db"
-  @initiatives_path "~/.config/codrift/initiatives.json"
+  alias Codrift.Paths
+
+  defp db_path, do: Path.join(Paths.data_dir(), "codrift.db")
+  defp initiatives_path, do: Path.join(Paths.config_dir(), "initiatives.json")
 
   # ── Dispatch ─────────────────────────────────────────────────────────────────
 
@@ -62,10 +64,10 @@ defmodule Codrift.CLI.Session do
 
   # ── SQLite helpers ────────────────────────────────────────────────────────────
 
-  defp db_missing?, do: not File.exists?(Path.expand(@db_path))
+  defp db_missing?, do: not File.exists?(db_path())
 
   defp with_db(fun) do
-    path = Path.expand(@db_path)
+    path = db_path()
     {:ok, db} = Exqlite.Sqlite3.open(path)
 
     try do
@@ -141,7 +143,7 @@ defmodule Codrift.CLI.Session do
   # ── Initiative JSON helpers ───────────────────────────────────────────────────
 
   defp load_initiative_ids do
-    path = Path.expand(@initiatives_path)
+    path = initiatives_path()
 
     with true <- File.exists?(path),
          {:ok, content} <- File.read(path),

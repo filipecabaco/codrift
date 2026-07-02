@@ -155,6 +155,15 @@ defmodule Codrift.Web.RoutesTest do
     end
   end
 
+  describe "GET /oauth/callback/:service" do
+    test "escapes the service path param in the error page (no reflected XSS)" do
+      conn = get("/oauth/callback/%3Csvg%20onload%3Dalert(1)%3E?error=denied")
+      assert conn.status == 400
+      refute conn.resp_body =~ "<svg onload=alert(1)>"
+      assert conn.resp_body =~ "&lt;svg"
+    end
+  end
+
   describe "unmatched routes" do
     test "returns 404 for unknown path" do
       conn = get("/no/such/route")

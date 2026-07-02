@@ -28,7 +28,7 @@ defmodule Codrift.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  @cli_commands ~w(tui mcp initiative session memory integration update)
+  @cli_commands ~w(mcp initiative session memory integration update)
 
   defp releases do
     [
@@ -37,8 +37,28 @@ defmodule Codrift.MixProject do
         strip_beams: true,
         steps: [:assemble, &add_cli_commands/1, :tar]
       ],
-      desktop: [steps: [:assemble]]
+      # The desktop release is the Tauri sidecar. In production it is
+      # Burrito-wrapped into a single binary (burrito_out/desktop_<triple>),
+      # which ex_tauri renames to desktop-<triple> and bundles as externalBin.
+      # `mix ex_tauri.dev` sets BURRITO_SKIP=true to build a plain release for
+      # fast local iteration (and so local builds never invoke Zig — see
+      # docs/decisions.md). CI sets BURRITO_TARGET to build only the runner's
+      # native triple.
+      desktop: [
+        steps: [:assemble] ++ desktop_wrap_steps(),
+        burrito: [
+          targets: [
+            "aarch64-apple-darwin": [os: :darwin, cpu: :aarch64],
+            "x86_64-apple-darwin": [os: :darwin, cpu: :x86_64],
+            "x86_64-unknown-linux-gnu": [os: :linux, cpu: :x86_64]
+          ]
+        ]
+      ]
     ]
+  end
+
+  defp desktop_wrap_steps do
+    if System.get_env("BURRITO_SKIP") == "true", do: [], else: [&Burrito.wrap/1]
   end
 
   defp add_cli_commands(release) do
@@ -68,7 +88,6 @@ defmodule Codrift.MixProject do
     [
       {:francis, "~> 0.2"},
       {:req, "~> 0.5"},
-      {:ex_ratatui, github: "filipecabaco/ex_ratatui", branch: "main", override: true},
       {:erlexec, "~> 2.0"},
       {:exqlite, "~> 0.23"},
       {:quantum, "~> 3.0"},

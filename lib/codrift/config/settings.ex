@@ -6,7 +6,7 @@ defmodule Codrift.Config.Settings do
   most-used adapters.
   """
 
-  @path Path.expand("~/.codrift/settings.json")
+  defp path, do: Path.join(Codrift.Paths.data_dir(), "settings.json")
 
   @doc "Returns a map of adapter name → start count."
   def adapter_start_counts do
@@ -22,14 +22,15 @@ defmodule Codrift.Config.Settings do
   end
 
   defp read do
-    case File.read(@path) do
+    case File.read(path()) do
       {:ok, content} -> JSON.decode!(content)
       {:error, _} -> %{}
     end
   end
 
   defp write(data) do
-    File.mkdir_p!(Path.dirname(@path))
-    File.write!(@path, JSON.encode!(data))
+    path = path()
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, JSON.encode!(data))
   end
 end

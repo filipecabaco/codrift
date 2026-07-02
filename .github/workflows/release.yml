@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build · ${{ matrix.target }}
+  bundle:
+    name: Bundle · ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -18,8 +18,13 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             runner: macos-14
-          - target: x86_64-linux-gnu
-            runner: ubuntu-latest
+            cli_suffix: aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            cli_suffix: x86_64-apple-darwin
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            cli_suffix: x86_64-linux-gnu
 
     env:
       MIX_ENV: prod
@@ -27,37 +32,85 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ── Toolchains ───────────────────────────────────────────────────────────
+      # OTP 27: ex_tauri wraps the Elixir sidecar with Burrito, which does not yet
+      # support OTP 28.
       - uses: erlef/setup-beam@v1
         with:
           otp-version: "27"
           elixir-version: "1.18"
 
-      - name: Restore deps cache
-        uses: actions/cache@v4
-        id: deps-cache
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          path: deps
-          key: ${{ runner.os }}-${{ matrix.target }}-prod-mix-${{ hashFiles('**/mix.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.target }}-prod-mix-
+          targets: ${{ matrix.target }}
 
-      - name: Install dependencies
-        if: steps.deps-cache.outputs.cache-hit != 'true'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: assets/pnpm-lock.yaml
+
+      # Burrito wraps the sidecar with Zig; it pins an exact version and also
+      # needs `xz` on PATH.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+
+      # Linux Tauri builds need GTK/WebKit system libraries; xz for Burrito.
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev patchelf xz-utils
+
+      # ── Dependencies ─────────────────────────────────────────────────────────
+      - name: Elixir deps
         run: mix deps.get --only prod
 
-      - name: Build release
+      - name: Frontend deps + build
+        working-directory: assets
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      # ── Desktop bundle ───────────────────────────────────────────────────────
+      # `mix ex_tauri.build` assembles the :desktop release, Burrito-wraps it as
+      # the Tauri sidecar (burrito_out/desktop-<triple>), and bundles the app.
+      # BURRITO_TARGET limits Burrito to the runner's native triple so we never
+      # attempt a cross-OS BEAM build.
+      - name: Build Tauri bundle
         env:
           CARGO_PROFILE_RELEASE_LTO: true
-        run: mix release
+          BURRITO_TARGET: ${{ matrix.target }}
+        run: mix ex_tauri.build --ci --target ${{ matrix.target }}
 
-      - name: Rename tarball with platform suffix
+      # ── Headless CLI ─────────────────────────────────────────────────────────
+      # The `codrift` release is the headless CLI (mcp / initiative / session /
+      # memory / integration / update). Shipped alongside the app so users can run
+      # `codrift mcp install` and scripting commands.
+      - name: Build CLI release
+        run: mix release codrift --overwrite
+
+      - name: Rename CLI tarball
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mv _build/prod/codrift-*.tar.gz \
-             "codrift-${VERSION}-${{ matrix.target }}.tar.gz"
+             "codrift-cli-${VERSION}-${{ matrix.cli_suffix }}.tar.gz"
 
-      - name: Upload to GitHub Release
+      # ── Publish ──────────────────────────────────────────────────────────────
+      - name: Upload artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "codrift-*.tar.gz"
+          files: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            codrift-cli-*.tar.gz
           generate_release_notes: true

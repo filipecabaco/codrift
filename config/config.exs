@@ -13,4 +13,10 @@ config :ex_tauri,
 # (e.g. the ex_tauri desktop build).
 config :francis, static: [from: {:codrift, "priv/static"}, at: "/"]
 
+# Bind the HTTP server to the loopback interface only. Codrift is a local
+# desktop sidecar and its routes (POST /api/rpc → Core.write_file/start_agent,
+# the OAuth callback) are unauthenticated, so the socket must never be reachable
+# from the LAN. Config deep-merges this with each env's `port` in *.exs.
+config :codrift, bandit_opts: [ip: {127, 0, 0, 1}]
+
 import_config "#{config_env()}.exs"

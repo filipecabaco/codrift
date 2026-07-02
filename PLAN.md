@@ -1,35 +1,19 @@
-# Codrift — AI Coding Companion TUI
+# Codrift — AI Coding Companion
 
-**Stack:** Elixir · Francis · ex_ratatui · Git · SQLite (Exqlite)
+**Stack:** Elixir · Francis · ex_tauri · Svelte · xterm.js · Git · SQLite (Exqlite)
 
 **Docs:** [Architecture](docs/architecture.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md) · [Keyboard](docs/keyboard.md) · [Tree View](docs/tree-view.md) · [Diff Mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md)
 
 ---
 
-## ✅ Done
+Codrift is a desktop app (Tauri + Svelte + xterm.js) backed by an Elixir/Francis
+server that runs and supervises multiple AI coding agents across a project's
+directories. See the docs above for the current shape of each subsystem.
 
-| # | Feature |
-|---|---------|
-| 1–5 | Backend foundation: initiative model, agent process, diff parser, code quality |
-| 6–11 | TUI core: VT100 emulator, PTY agents, terminals, mouse, graceful shutdown |
-| 12–19 | TUI navigation: multi-dir sidebar, initiative CRUD, context folder, in-TUI editor |
-| 20–21 | Diff viewer: web view, unified/split toggle |
-| 22–24, 31 | Agent sessions: multi-agent per dir, SQLite persistence, auto-restart |
-| 25–26 | MCP server: HTTP+SSE, initiative tools |
-| 27–30 | Polish: ASCII labels, sidebar collapse, expanded command palette |
-| 32–33 | Config layer: keybinding overrides, theme chooser (5 themes) |
-| 34–36 | Memory store, CLI, distribution, GitHub Actions CI |
-| 37, 42 | Git worktrees: per-dir opt-in, sidebar status label, CLI commands |
-| 39 | External integrations: 9 adapters, OAuth flows, 5 MCP tools |
-| 41 | Safe paste + input hardening: bracketed paste NIF, Unicode, Tab, Shift+Enter |
-| 43 | Additional CLI adapters: Claude, Codex, Opencode, Gemini, Copilot; agent picker |
-| 44–45, 49 | Tree view: file-tree sidebar, syntax-highlighted preview, embedded `$EDITOR`, quick-open |
-| 48, 52 | Sidebar filter: `/` activates, `Esc` clears; fuzzy, glob (`*.test.ts`), regex (`/pattern/`), tag (`#test` `#config` `#doc` `#schema` `#router`); works in tree and diff mode |
-| 50 | Modal text-input focus audit |
+## Next
 
-## ⬜ Upcoming
-
-| # | Feature |
-|---|---------|
-| 51 | OAuth app credentials: bundle `client_id` into release binary |
-| 47 | Website: `codrift.sh` landing page with install one-liner and asciinema demo |
+- Verify the desktop build end-to-end in CI (`mix ex_tauri.build`).
+- Ship Tauri bundles (`.dmg`/`.AppImage`) from CI on tagged releases.
+- Bundle OAuth `client_id`s into the release so integrations work without env vars.
+- Deploy the `codrift.sh` landing page (built in `website/`, Francis + Tailwind, with per-platform download links and product screenshots).
+</content>

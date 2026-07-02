@@ -1,112 +1,57 @@
 # Tree View (Mode 3)
 
-Press `3` (or select *Tree View* from `Ctrl+P`) to enter tree mode.
+Press `3` (or click **3 Tree**, or select *Tree view* from `Ctrl+P`) to browse
+the files of the active initiative.
+
+![Tree view: initiative sidebar, file tree, and syntax-highlighted preview](images/tree-view.png)
 
 ## Overview
 
-Tree mode replaces the sidebar with a file-tree of all directories in the active initiative. The main pane shows a syntax-highlighted preview of the selected file.
+Tree mode shows three panes: the initiative sidebar on the far left, a file tree
+of the initiative's directories in the middle, and a syntax-highlighted preview
+of the selected file on the right. Top-level directories are expanded by default;
+directories are listed before files, both sorted alphabetically.
 
-```
-┌──────────────────┬───────────────────────────────────────────┐
-│ ▸ ~/projects/api │  1  defmodule MyApp.Router do              │
-│   ├ router.ex    │  2    use Phoenix.Router                   │
-│   ├ config/      │  3    ...                                  │
-│   └ lib/         │                                            │
-└──────────────────┴───────────────────────────────────────────┘
-```
+The file list comes from the `list_tree` RPC, which walks each directory in the
+initiative (respecting `.gitignore` via `git ls-files`, with a naive fallback).
 
 ## Navigation
 
-| Key | Action |
-|-----|--------|
-| `j` / `k` / `↑` / `↓` | Move cursor |
-| `Enter` / `Space` | Expand / collapse directory |
-| `→` | Expand directory |
-| `←` | Collapse directory |
-| `Tab` | Cycle focus between sidebar tree and preview pane |
-| Mouse wheel | Scroll sidebar or preview (depending on focus) |
+| Key / action | Effect |
+|--------------|--------|
+| Click a directory | Expand / collapse it |
+| Click a file | Load it into the preview pane |
+| `Tab` / `Shift+Tab` | Cycle focus between the sidebar and the terminal |
+| Mouse wheel | Scroll the tree or the preview |
 
-## File operations
+## Editing
 
-| Key | Action |
-|-----|--------|
-| `e` | Open file at cursor in `$EDITOR` (embedded PTY in main pane) |
-| `n` | New file or directory (prompt for name; trailing `/` creates a dir) |
-| `d` | Delete file or directory (confirmation required) |
+The preview pane has an **Edit** button in its header. It opens the file in the
+in-app editor — a full-screen CodeMirror pane with **Vim mode** enabled. Save
+with `:w`, `:wq`, or `⌘S` / `Ctrl+S`; close with `:q`. See
+[Keyboard reference → Editor](keyboard.md#editor).
 
-## Embedded editor
-
-`e` spawns `$EDITOR` (falling back to `vim`) as a PTY inside the main pane. The editor session behaves identically to a Terminal agent: full VT100 emulation, live output, raw keypress forwarding, and correct dimensions on first `ioctl`.
-
-On exit, the tree sidebar reloads automatically.
-
-## File filter
-
-Press `/` to activate the filter input at the top of the sidebar. All files across every directory are searched regardless of expand state. The filter mode is inferred automatically from what you type:
-
-| Query | Mode | Matches |
-|-------|------|---------|
-| `router` | fuzzy | any file whose name or path contains `router` |
-| `*.test.ts` | glob | shell-style wildcards (`*` = any chars, `?` = one char) |
-| `/\.test\./` | regex | Elixir `Regex` — case-insensitive, strip trailing `/` |
-| `#test` | tag | predefined group: test files (`_test.`, `.spec.`, `test/`) |
-| `#config` | tag | config files (`.env`, `config.`, `mix.exs`) |
-| `#doc` | tag | docs (`.md`, `README`, `docs/`) |
-| `#schema` | tag | schema / migration files |
-| `#router` | tag | router / routes files |
-
-Unknown `#tag` falls back to substring match on the tag word.
-
-```
-┌ #test  tag  #test #config #doc … ─────┐
-│ ▶ test/router_test.ex                 │
-│   test/helpers/auth_test.ex           │
-└────────────────────────────────────────┘
-```
-
-| Key | Action |
-|-----|--------|
-| `/` | Activate filter |
-| any printable key | Append to query |
-| `Backspace` | Delete last character |
-| `Esc` | Clear filter and return to normal tree view |
-
-While a filter is active, `j`/`k`/`↑`/`↓` navigate the filtered list and `e` opens the selected file as normal. Expand/collapse (`→`/`←`/`Space`) are suspended during filtering.
+Reads and writes go through the sandboxed `read_file` / `write_file` RPCs, which
+refuse paths outside the initiative's allowed directories and cap previews at
+512 KB (`Codrift.Files`).
 
 ## Syntax highlighting
 
-The preview pane maps file extensions to syntect's built-in language set via `path_to_language/1`.
+Previews are highlighted with [Shiki](https://shiki.style) (theme
+`github-dark`). `langForPath/1` in `assets/src/lib/highlight.ts` resolves the
+language from the filename (e.g. `mix.exs`, `Dockerfile`) or extension. The
+bundled grammar set covers, among others:
 
-| Languages | Extensions |
-|-----------|-----------|
+| Languages | Examples |
+|-----------|----------|
 | Elixir | `.ex` `.exs` |
-| Erlang | `.erl` `.hrl` |
 | JavaScript / TypeScript | `.js` `.jsx` `.ts` `.tsx` |
-| Python | `.py` |
-| Ruby | `.rb` |
-| Rust | `.rs` |
-| Go | `.go` |
-| Java / Kotlin | `.java` `.kt` `.kts` |
-| Scala | `.scala` |
-| C# | `.cs` |
-| C / C++ / Objective-C | `.c` `.h` `.cpp` `.cc` `.cxx` `.hpp` `.m` |
-| Haskell | `.hs` |
-| OCaml | `.ml` `.mli` |
-| Lua | `.lua` |
-| PHP | `.php` |
-| Perl | `.pl` `.pm` |
-| Lisp | `.lisp` `.el` |
-| R | `.r` `.R` |
-| Groovy | `.groovy` |
-| D | `.d` |
-| Bash | `.sh` `.bash` `.zsh` `.fish` |
-| SQL | `.sql` |
-| JSON | `.json` |
-| YAML | `.yaml` `.yml` |
-| XML | `.xml` |
-| HTML | `.html` |
-| CSS / SCSS | `.css` `.scss` |
-| Markdown | `.md` |
-| Diff | `.diff` `.patch` |
+| Svelte / Vue | `.svelte` `.vue` |
+| Rust · Go · Python · Ruby | `.rs` `.go` `.py` `.rb` |
+| C / C++ | `.c` `.h` `.cpp` |
+| Shell | `.sh` `.bash` `.zsh` |
+| Markup & data | `.html` `.css` `.scss` `.json` `.yaml` `.toml` `.md` |
+| SQL · Docker | `.sql` `Dockerfile` |
 
-TypeScript and Kotlin use JavaScript/Java highlighting (closest built-in match). Files with unrecognised extensions render as plain text.
+Files with an unrecognised extension render as plain text (`"text"`).
+```

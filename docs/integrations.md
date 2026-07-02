@@ -1,8 +1,8 @@
 # Integrations
 
-Codrift can pull context from GitHub, Linear, GitLab, Jira, and Notion directly into an initiative. Each service supports two auth paths:
+Codrift can pull context from GitHub (Issues & Projects), Linear (Issues & Projects), GitLab, Jira, and Notion directly into an initiative. Each service supports two auth paths:
 
-- **OAuth (recommended)** — handled entirely inside the TUI. Tokens are stored at `~/.codrift/oauth_tokens.json` (mode 0600). No secret is ever stored in or shipped with the binary.
+- **OAuth (recommended)** — handled inside the app. Tokens are stored at `~/.codrift/oauth_tokens.json` (mode 0600). No secret is ever stored in or shipped with the binary.
 - **Env var fallback** — for CI, headless environments, or personal tokens. Set the variables listed under each service and Codrift will use them automatically.
 
 ---
@@ -11,8 +11,10 @@ Codrift can pull context from GitHub, Linear, GitLab, Jira, and Notion directly 
 
 1. Register a developer app for the services you want (instructions below).
 2. Set the `*_CLIENT_ID` env var for each service.
-3. Open the TUI (`codrift tui`), press `Ctrl+P` → **Integrations** to connect.
-4. Press `n` → pick a service from the source picker to import an issue as an initiative.
+3. In the Codrift app, click the **Integrations** button in the header to open the connection manager and authorize a service.
+4. Import an issue with the CLI (`codrift integration import <service> <item_id>`), or let a connected agent call the `import_from_integration` MCP tool.
+
+![Integrations connection manager](images/integrations.png)
 
 ---
 
@@ -215,8 +217,9 @@ For each Notion database you want Codrift to access, open the database in Notion
 
 ### Configure
 
-In the TUI: `Ctrl+P` → **Integrations** → select **Notion** → Enter → follow
-the prompts to paste your token. No env var needed for interactive use.
+In the app: open **Integrations** from the header → **Connect** next to
+**Notion** → follow the prompts to paste your token. No env var needed for
+interactive use.
 
 ### Env var fallback
 
@@ -263,7 +266,7 @@ any env vars.
 
 ## Revoking access
 
-From the TUI: `Ctrl+P` → **Integrations** → navigate to the service → press `r`.
+In the app: open **Integrations** from the header → **Disconnect** next to the service.
 
 From the CLI:
 ```sh

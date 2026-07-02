@@ -32,6 +32,10 @@ defmodule Codrift do
   alias Codrift.OAuth
   alias Codrift.OAuth.Config, as: OAuthConfig
 
+  # Reject browser-borne cross-origin / DNS-rebinding requests before any route
+  # runs. See Codrift.Plugs.LocalGuard.
+  plug(Codrift.Plugs.LocalGuard)
+
   @impl true
   def start(_type, _args) do
     if System.get_env("RELEASE_NAME") == "desktop" do
@@ -64,7 +68,7 @@ defmodule Codrift do
 
     # Codrift.ShutdownManager System.stop/0s the app if it stops receiving the
     # Tauri heartbeat — only safe when actually launched as the desktop sidecar
-    # (RELEASE_NAME=desktop). Gated so `mix codrift.tui`/`mix run` don't get
+    # (RELEASE_NAME=desktop). Gated so `mix run`/plain server boots don't get
     # killed ~1.5s after boot. Placed last (after Bandit) so it can use
     # Codrift.TaskSupervisor and its timeout baseline starts near port-up, and it
     # only enforces the timeout after the first heartbeat (see its moduledoc).
@@ -377,6 +381,8 @@ defmodule Codrift do
   end)
 
   defp oauth_success_html(service) do
+    service = html_escape(service)
+
     """
     <!DOCTYPE html>
     <html lang="en">
@@ -403,6 +409,7 @@ defmodule Codrift do
 
   defp oauth_error_html(service, reason) do
     safe_reason = html_escape(reason)
+    service = html_escape(service)
 
     """
     <!DOCTYPE html>

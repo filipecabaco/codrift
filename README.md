@@ -1,51 +1,54 @@
 # Codrift
 
-> Drive multiple AI coding agents across your projects from a single keyboard-driven terminal.
+> Drive multiple AI coding agents across your projects from one desktop app.
 
-Codrift is a TUI for running Claude Code, Codex, Opencode, Gemini, Copilot, and shell agents side-by-side. You group directories into **initiatives**, launch agents against each one, watch their output live, review diffs, and let them share knowledge through a built-in memory store — all without leaving the terminal.
+Codrift is a desktop app for running Claude Code, Codex, Opencode, Gemini, Copilot, and shell agents side-by-side. You group directories into **initiatives**, launch agents against each one, watch their output live in embedded terminals, review diffs, and let them share knowledge through a built-in memory store.
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ ● 1: Context  ○ 2: Diff  ○ 3: Tree                          │
-├─────────────────┬────────────────────────────────────────────┤
-│ Initiatives     │                                            │
-│  ● my-app       │  Initiative / dir / agent output           │
-│   ◈ context     │  (updates as cursor moves)                 │
-│   ▸ ~/repo [wt] │                                            │
-│     ◦ claude    │                                            │
-│     ◦ terminal  │                                            │
-├─────────────────┴────────────────────────────────────────────┤
-│ j/k:navigate  s:start  a:add-dir  d:delete  Ctrl+P:palette  │
-└──────────────────────────────────────────────────────────────┘
-```
+![Codrift — live agent terminal alongside the initiative sidebar](docs/images/agent-terminal.png)
+
+Codrift is a Tauri app: a native window wrapping a Svelte UI, backed by an Elixir
+(Francis) server that manages agents, worktrees, memory, and integrations.
 
 ---
 
 ## Features
 
-- **Full terminal UI** — sidebar + agent panes, keyboard-driven, mouse support, no browser needed
+- **Native desktop app** — sidebar + live agent terminals (xterm.js), keyboard-driven, on macOS and Linux
 - **Multiple agents per directory** — Claude Code, Codex, Opencode, Gemini, Copilot, and a raw terminal shell, all running simultaneously
 - **Git worktrees** — each directory gets an isolated branch; agents never touch your main checkout
 - **Live diff view** — colour-coded split/unified diff per initiative, updated as agents work
-- **Tree view** — mode `3` shows a file-tree browser with syntax-highlighted previews; `e` opens any file in your `$EDITOR` inside the TUI
+- **Tree view** — mode `3` shows a file-tree browser with syntax-highlighted previews and an in-app editor
 - **Shared memory** — FTS5 knowledge base per initiative; agents search it before starting, write to it when done
 - **MCP server** — Claude Code and other tools connect to Codrift and call its tools over SSE
 - **External integrations** — pull context from GitHub, Linear, GitLab, Jira, Notion, and more
-- **Session persistence** — Claude sessions survive TUI restarts; agents resume where they left off
+- **Session persistence** — Claude sessions survive restarts; agents resume where they left off
 - **Context folders** — each initiative has `~/.codrift/initiatives/{id}/` picked up automatically by `--add-dir`
-- **Quick-open** — `codrift <file…>` opens files in a temporary initiative; promote to a named one with `P`
 
 ---
 
 ## Quick start
 
-```bash
-# macOS / Linux — one-line install
-curl -fsSL https://codrift.sh/install.sh | sh
+Download the latest release for your platform from
+[GitHub Releases](https://github.com/filipecabaco/codrift/releases):
 
-# Or run from source
+| Platform | Bundle |
+|----------|--------|
+| macOS | `.dmg` |
+| Linux | `.AppImage` |
+
+Or use the installer, which also puts the headless `codrift` CLI on your `PATH`:
+
+```bash
+curl -fsSL https://codrift.sh/install.sh | sh
+```
+
+Or run from source:
+
+```bash
 mix deps.get
-mix codrift.tui
+cd assets && npm install && cd ..
+mix ex_tauri.install   # first time only — sets up the Tauri toolchain
+mix ex_tauri.dev       # launch the app with hot reload
 ```
 
 Then register the MCP server so Claude Code can talk to Codrift:
@@ -71,15 +74,9 @@ codrift initiative add-dir <id> ~/projects/frontend
 
 ### Git worktrees
 
-When adding a directory, Codrift can create a git worktree on a dedicated branch (`codrift/{id}/{slug}`). Agents operate there and their changes stay isolated until you're ready to merge.
+Codrift can create a git worktree on a dedicated branch (`codrift/{id}/{slug}`) for any directory in an initiative. Agents operate there and their changes stay isolated until you're ready to merge.
 
-Enable when adding a dir (`w` to toggle in the modal), or later with `W` on any dir entry. See [docs/worktrees.md](docs/worktrees.md).
-
-```
-  ▸ ~/projects/realtime  [wt]   1   ← clean worktree, 1 agent running
-  ▸ ~/projects/walrus    [wt*]  0   ← dirty (uncommitted changes)
-  ▸ ~/projects/other               ← no worktree
-```
+Enable a worktree from the CLI (`codrift initiative worktree-enable <id> <path>`), or set `worktree_default` on an initiative so new directories inherit it. See [docs/worktrees.md](docs/worktrees.md).
 
 ### Shared memory
 
@@ -95,7 +92,7 @@ Agents can also call these as MCP tools (`memory_search`, `memory_add`, …). Se
 
 ### MCP server
 
-While the TUI is running, an MCP server listens at `http://localhost:7437/mcp/sse`. Any connected agent can call:
+While Codrift is running, an MCP server listens at `http://localhost:7437/mcp/sse`. Any connected agent can call:
 
 | Category | Tools |
 |----------|-------|
@@ -112,53 +109,34 @@ While the TUI is running, an MCP server listens at `http://localhost:7437/mcp/ss
 
 | Key | Action |
 |-----|--------|
-| `j` / `k` / `↑` / `↓` | Navigate sidebar / scroll pane |
-| `1` | Context view |
-| `2` | Diff view |
-| `3` | Tree view |
+| `j` / `k` / `↑` / `↓` | Navigate sidebar |
+| `1` / `2` / `3` | Context / Diff / Tree view |
+| `r` | Refresh initiatives & agents |
 | `Ctrl+P` | Command palette |
-| `Ctrl+B` | Toggle sidebar |
-| `Ctrl+D` / `Ctrl+U` | Half-page scroll |
+| `Ctrl+B` | Collapse / expand sidebar |
 | `Ctrl+Q` | Quit |
 
 ### Initiatives & agents
 
 | Key | Action |
 |-----|--------|
-| `n` | New initiative (or new file/dir in tree mode) |
+| `n` | New initiative |
 | `a` | Add directory to initiative |
-| `s` | Start agent (Claude / Codex / Opencode / Gemini / Copilot / Terminal) |
+| `s` | Start a Claude agent in the directory under the cursor |
+| `t` | Start a raw `$SHELL` terminal in the directory under the cursor |
 | `d` | Delete or stop (context-sensitive) |
-| `W` | Toggle git worktree for current directory |
+| `o` | Start orchestration for the selected initiative |
 | `[` / `]` | Cycle initiative status |
-| `P` | Promote temp initiative to named |
 
-### Context & diff
+Use the **Launch** dropdown next to a directory (or the palette) to start Codex,
+Opencode, Gemini, or Copilot.
 
-| Key | Action |
-|-----|--------|
-| `c` | Create context file |
-| `e` | Open context file / tree file in `$EDITOR` |
-| `v` | Toggle unified ↔ split diff |
-| `r` | Refresh diff |
-| `*` | Reset diff to all files |
-
-### Tree view
+### Context, tree & editor
 
 | Key | Action |
 |-----|--------|
-| `Enter` / `Space` | Expand / collapse directory |
-| `→` / `←` | Expand / collapse directory |
-| `e` | Open file at cursor in `$EDITOR` |
-| `Tab` | Cycle focus between sidebar and preview pane |
-
-### Input
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+V` | Paste mode toggle (fallback for terminals without bracketed paste) |
-| `Shift+Enter` | Insert newline in input |
-| `Tab` | Insert tab character |
+| `e` | Open the selected file in the editor (Vim mode — `:w` / `⌘S` to save) |
+| `Tab` / `Shift+Tab` | Cycle focus between sidebar and terminal |
 
 All keys are configurable in `~/.codrift/keybindings.json`. See [docs/keyboard.md](docs/keyboard.md) for the full reference.
 
@@ -176,14 +154,16 @@ codrift integration list github       # list open issues
 codrift integration import github 42  # seed an initiative from issue #42
 ```
 
-Both OAuth (PKCE / device flow, fully TUI-driven) and personal API token fallbacks are supported. No secrets are stored in the binary. See [docs/integrations.md](docs/integrations.md).
+Both OAuth (PKCE / device flow, handled in-app) and personal API token fallbacks are supported. No secrets are stored in the binary. See [docs/integrations.md](docs/integrations.md).
 
 ---
 
 ## CLI reference
 
+The desktop app is the primary interface. A headless CLI ships alongside it for
+scripting and MCP registration:
+
 ```
-codrift tui
 codrift mcp install
 
 codrift initiative list
@@ -211,6 +191,16 @@ codrift integration tokens
 
 ---
 
+## Screens
+
+| Context | Diff | Tree |
+|---|---|---|
+| [![Context view](docs/images/context-overview.png)](docs/images/context-overview.png) | [![Diff view](docs/images/diff-view.png)](docs/images/diff-view.png) | [![Tree view](docs/images/tree-view.png)](docs/images/tree-view.png) |
+
+Also: the [command palette](docs/images/command-palette.png), [shared memory](docs/images/memory-view.png), and [integrations](docs/images/integrations.png).
+
+---
+
 ## Documentation
 
 [Architecture](docs/architecture.md) · [Keyboard reference](docs/keyboard.md) · [Tree view](docs/tree-view.md) · [Diff mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md)
@@ -220,16 +210,18 @@ codrift integration tokens
 ## Architecture
 
 ```
-Codrift (Application)
-  └── Codrift.Supervisor (:one_for_one)
-      ├── Registry (Codrift.AgentRegistry)    — agent ID → pid lookup
-      ├── Codrift.Initiative.Store            — GenServer, JSON persistence
-      ├── Codrift.SessionStore                — GenServer, SQLite session UUIDs
-      ├── Codrift.OAuth.StateStore            — GenServer, in-memory PKCE state
-      ├── Codrift.AgentSupervisor             — DynamicSupervisor, one child per agent
-      │   └── Codrift.AgentProcess            — GenServer + erlexec PTY → Claude / Codex / Opencode / Gemini / shell
-      ├── {Task.Supervisor, Codrift.TaskSupervisor}
-      └── Codrift (Francis / Bandit)          — HTTP + SSE on port 7437
+Tauri window (Rust)  ── spawns ──▶  Elixir sidecar ("desktop" release)
+   Svelte UI (xterm.js)                Codrift (Application)
+        │  HTTP + SSE  :7437             └── Codrift.Supervisor (:one_for_one)
+        └───────────────────────────────────┤ Registry (AgentRegistry)
+                                             ├── Codrift.Initiative.Store
+                                             ├── Codrift.SessionStore (SQLite)
+                                             ├── Codrift.OAuth.StateStore
+                                             ├── Codrift.AgentSupervisor
+                                             │     └── Codrift.AgentProcess (erlexec PTY)
+                                             ├── {Task.Supervisor, Codrift.TaskSupervisor}
+                                             ├── Codrift (Francis / Bandit) — HTTP + SSE
+                                             └── Codrift.ShutdownManager (desktop only)
 ```
 
 See [docs/architecture.md](docs/architecture.md) and [docs/modules.md](docs/modules.md).
@@ -243,9 +235,12 @@ mix deps.get
 unbuffer mix test        # full test suite
 mix credo --strict
 mix dialyzer
+
+mix ex_tauri.dev         # run the desktop app with hot reload
+mix ex_tauri.build       # produce a platform bundle
 ```
 
-**Stack:** Elixir · [Francis](https://github.com/nicholasgasior/francis) · [ex_ratatui](https://github.com/filipecabaco/ex_ratatui) · SQLite (Exqlite) · erlexec
+**Stack:** Elixir · [Francis](https://github.com/filipecabaco/francis) · [ex_tauri](https://github.com/filipecabaco/ex_tauri) · Svelte · xterm.js · SQLite (Exqlite) · erlexec
 
 ### Supported platforms
 
@@ -261,3 +256,4 @@ mix dialyzer
 ## License
 
 MIT
+</content>

@@ -93,7 +93,7 @@ defmodule Codrift.IntegrationTest do
     @tag :tmp_dir
     test "writes integration.json and integration.md under the given id", %{tmp_dir: _tmp_dir} do
       id = Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
-      base = Path.expand("~/.codrift/initiatives/#{id}")
+      base = Codrift.Paths.initiative_dir(id)
       context = "# My Issue\n\n**Status:** open\n"
 
       on_exit(fn -> File.rm_rf!(base) end)
@@ -109,7 +109,7 @@ defmodule Codrift.IntegrationTest do
     @tag :tmp_dir
     test "overwrites existing files on second call", %{tmp_dir: _tmp_dir} do
       id = Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
-      base = Path.expand("~/.codrift/initiatives/#{id}")
+      base = Codrift.Paths.initiative_dir(id)
       on_exit(fn -> File.rm_rf!(base) end)
 
       Integration.write_integration_files(id, "github", "repo#1", "old content")

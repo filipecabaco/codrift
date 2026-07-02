@@ -11,7 +11,6 @@ defmodule Codrift.CLI.Main do
       codrift initiative <subcommand>
       codrift session    <subcommand>
       codrift memory     <subcommand>
-      codrift tui
       codrift mcp        <subcommand>
   """
 
@@ -20,7 +19,6 @@ defmodule Codrift.CLI.Main do
   alias Codrift.CLI.MCP
   alias Codrift.CLI.Memory
   alias Codrift.CLI.Session
-  alias Codrift.CLI.TUI
   alias Codrift.CLI.Update
 
   @spec main([String.t()]) :: :ok
@@ -31,12 +29,8 @@ defmodule Codrift.CLI.Main do
   def run(["integration" | rest]), do: Integration.run(rest)
   def run(["session" | rest]), do: Session.run(rest)
   def run(["memory" | rest]), do: Memory.run(rest)
-  def run(["tui" | rest]), do: TUI.run(rest)
   def run(["mcp" | rest]), do: MCP.run(rest)
   def run(["update" | rest]), do: Update.run(rest)
-
-  # Positional file/dir arguments: open as a temporary initiative in the TUI.
-  def run(paths) when paths != [], do: TUI.run(paths)
 
   def run(_) do
     IO.puts("""
@@ -45,11 +39,11 @@ defmodule Codrift.CLI.Main do
       codrift integration <subcommand>
       codrift session     <subcommand>
       codrift memory      <subcommand>
-      codrift tui
       codrift mcp         <subcommand>
       codrift update
 
     Run `codrift <command>` with no arguments for per-command help.
+    The desktop app is the primary interface — launch the Codrift app.
     """)
   end
 end
