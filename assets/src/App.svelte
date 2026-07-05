@@ -447,6 +447,18 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
+    // Confirm modals: Esc cancels without consequence, Enter accepts (the
+    // default action). Other modals own inputs and handle their own keys.
+    if (modal?.kind === "confirm") {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        modal = null;
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        modal.onConfirm();
+      }
+      return;
+    }
     if (modal || editing) return; // modals / editor handle their own keys
     const spec = eventToSpec(e);
     if (!spec) return;
@@ -798,7 +810,8 @@
       onclick={(e) => e.stopPropagation()}
       role="presentation"
     >
-      <p class="mb-4 text-[13px] text-fg">{modal.message}</p>
+      <p class="mb-1 text-[13px] text-fg">{modal.message}</p>
+      <p class="mb-4 text-[11px] text-muted">Enter to confirm · Esc to cancel</p>
       <div class="flex justify-end gap-2">
         <button
           class="rounded-md px-3 py-1.5 text-xs text-muted hover:text-fg"
