@@ -63,8 +63,14 @@ defmodule Codrift.Web.TransportE2ETest do
 
     on_exit(fn -> rpc("stop_agent", %{"agent_id" => agent_id}) end)
 
-    assert eventually(fn -> agent_output(agent_id) != "" end),
-           "shell agent never produced startup output"
+    # Don't wait for a spontaneous PS1 prompt — minimal CI shells (bash without a
+    # profile) print none. Nudge the PTY with a marker command and wait until it
+    # echoes back, which proves the shell is live and accepting input.
+    marker = "READY_#{System.unique_integer([:positive])}"
+    _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo #{marker}"})
+
+    assert eventually(fn -> String.contains?(agent_output(agent_id), marker) end),
+           "shell agent never became ready (no echo of nudge command)"
 
     {id, agent_id}
   end

@@ -131,7 +131,7 @@ jobs:
         run: mix deps.get
 
       - name: Build release
-        run: mix release
+        run: mix release codrift
 
       - name: Smoke test – initiative list
         run: |

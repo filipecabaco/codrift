@@ -213,30 +213,28 @@ defmodule Codrift do
   #
   # The handler body is inlined: `ws/3` compiles it into a separate generated
   # module, so it can only call public functions (not `Codrift` privates).
-  ws("/ws/agent/:agent_id", fn
-    :join, _socket ->
-      :noreply
+  # Only `{:received, _}` is handled: `:join` and `{:close, _}` are no-ops here,
+  # and Francis silently succeeds when the handler doesn't match them. Spelling
+  # them out as dead clauses also confuses Dialyzer — the ws macro applies the
+  # handler inline only for received frames, so it infers those clauses can
+  # never match. See Francis.Websocket.call_join/call_close.
+  ws("/ws/agent/:agent_id", fn {:received, frame}, socket ->
+    with {:ok, pid} <- Codrift.AgentSupervisor.find_agent(socket.params["agent_id"]),
+         {:ok, msg} <- JSON.decode(frame) do
+      case msg do
+        %{"t" => "d", "d" => data} when is_binary(data) ->
+          Codrift.AgentProcess.send_raw(pid, data)
 
-    {:received, frame}, socket ->
-      with {:ok, pid} <- Codrift.AgentSupervisor.find_agent(socket.params["agent_id"]),
-           {:ok, msg} <- JSON.decode(frame) do
-        case msg do
-          %{"t" => "d", "d" => data} when is_binary(data) ->
-            Codrift.AgentProcess.send_raw(pid, data)
+        %{"t" => "r", "cols" => cols, "rows" => rows}
+        when is_integer(cols) and is_integer(rows) ->
+          Codrift.AgentProcess.resize(pid, cols, rows)
 
-          %{"t" => "r", "cols" => cols, "rows" => rows}
-          when is_integer(cols) and is_integer(rows) ->
-            Codrift.AgentProcess.resize(pid, cols, rows)
-
-          _ ->
-            :ok
-        end
+        _ ->
+          :ok
       end
+    end
 
-      :noreply
-
-    {:close, _reason}, _socket ->
-      :ok
+    :noreply
   end)
 
   sse("/events/initiative/:id", fn

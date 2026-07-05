@@ -10,6 +10,7 @@ defmodule Codrift.Core do
   transports above it only translate envelopes (JSON-RPC, REST, WebSocket).
   """
 
+  alias Codrift.Config.Keybindings
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.OAuth.Config, as: OAuthConfig
 
@@ -436,7 +437,7 @@ defmodule Codrift.Core do
   end
 
   def call("get_keybindings", _args) do
-    {:ok, Codrift.Config.Keybindings.load()}
+    {:ok, Keybindings.load()}
   end
 
   def call("list_context_files", %{"initiative_id" => id}) do

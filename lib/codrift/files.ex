@@ -91,16 +91,16 @@ defmodule Codrift.Files do
       {:ok, names} ->
         names
         |> Enum.reject(&(String.starts_with?(&1, ".") or &1 in @ignored_dirs))
-        |> Enum.flat_map(fn name ->
-          child = Path.join(path, name)
-
-          if File.dir?(child),
-            do: naive_walk(base, child),
-            else: [Path.relative_to(child, base)]
-        end)
+        |> Enum.flat_map(&walk_child(base, Path.join(path, &1)))
 
       {:error, _} ->
         []
     end
+  end
+
+  defp walk_child(base, child) do
+    if File.dir?(child),
+      do: naive_walk(base, child),
+      else: [Path.relative_to(child, base)]
   end
 end
