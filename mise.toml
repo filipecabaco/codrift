@@ -1,8 +1,10 @@
 [tools]
 rust = "1.95.0"
-# Pinned for ex_tauri / Burrito bundling. Burrito downloads a prebuilt ERTS for
-# the EXACT OTP version from beam-machine-universal.b-cdn.net. 29.0.2 is
-# published there (29.1/29.2 are not yet — they 404), so we lock to it to keep
-# production bundles reproducible. No OTP downgrade is required.
-erlang = "29.0.2"
+# Pinned to match CI (OTP 27 / Elixir 1.18) so local dev, CI, and the shipped
+# Burrito bundle all run the same BEAM. Burrito downloads a prebuilt ERTS for
+# the EXACT OTP version from beam-machine-universal.b-cdn.net; 27.3.4 is the
+# latest OTP 27 published there (27.3.5 404s), so we lock to it to keep
+# production bundles reproducible.
+erlang = "27.3.4"
+elixir = "1.18.4-otp-27"
 zig = "0.15.2"
