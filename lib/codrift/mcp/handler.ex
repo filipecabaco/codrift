@@ -205,18 +205,24 @@ defmodule Codrift.MCP.Handler do
       },
       %{
         "name" => "start_agent",
-        "description" => "Start an AI coding agent in a directory",
+        "description" =>
+          "Start an AI coding agent in a directory. Omit `dir` for a folderless " <>
+            "initiative — the agent runs in the initiative's own scratchpad (context) folder.",
         "inputSchema" => %{
           "type" => "object",
           "properties" => %{
             "initiative_id" => %{"type" => "string"},
-            "dir" => %{"type" => "string"},
+            "dir" => %{
+              "type" => "string",
+              "description" =>
+                "Working directory. Optional — defaults to the initiative's scratchpad folder."
+            },
             "adapter" => %{
               "type" => "string",
               "enum" => ["claude", "codex", "opencode", "gemini", "copilot"]
             }
           },
-          "required" => ["initiative_id", "dir", "adapter"]
+          "required" => ["initiative_id", "adapter"]
         }
       },
       %{

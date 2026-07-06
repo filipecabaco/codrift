@@ -279,14 +279,38 @@
     syncCursor((r) => r.kind === "dir" && r.initId === initId && r.path === path);
   }
 
+  function promptAddDir() {
+    const init = selectedInitiative;
+    if (!init) return;
+    openPrompt(
+      "Add directory (absolute path)",
+      async (dir) => {
+        modal = null;
+        try {
+          await rpc("add_dir", { initiative_id: init.id, dir });
+          await load();
+        } catch (e) {
+          toast((e as Error).message);
+        }
+      },
+      "/path/to/repo",
+    );
+  }
+
   async function startAgent(adapter: string) {
+    if (!selectedInitiative) return toast("Select an initiative first.");
     // Prefer the directory under the cursor (so you can start agents per dir),
-    // falling back to the initiative's first directory.
-    const dir = cursorDir ?? selectedInitiative?.dirs[0]?.path ?? null;
-    if (!selectedInitiative || !dir) return toast("Select an initiative with a directory first.");
+    // falling back to the initiative's first directory. When the initiative has
+    // no directory at all, omit `dir` — the backend runs the agent in the
+    // initiative's own scratchpad (context) folder.
+    const dir = cursorDir ?? selectedInitiative.dirs[0]?.path ?? null;
     try {
-      await rpc("start_agent", { initiative_id: selectedInitiative.id, dir, adapter });
-      toast(`Started ${adapter} in ${dir.split("/").pop()}`);
+      await rpc("start_agent", {
+        initiative_id: selectedInitiative.id,
+        adapter,
+        ...(dir ? { dir } : {}),
+      });
+      toast(dir ? `Started ${adapter} in ${dir.split("/").pop()}` : `Started ${adapter} in scratchpad`);
       await load();
     } catch (e) {
       toast((e as Error).message);
@@ -378,19 +402,7 @@
         break;
       case "add_dir":
         if (!selectedInitiative) return toast("Select an initiative first.");
-        openPrompt(
-          "Add directory (absolute path)",
-          async (dir) => {
-            modal = null;
-            try {
-              await rpc("add_dir", { initiative_id: selectedInitiative!.id, dir });
-              await load();
-            } catch (e) {
-              toast((e as Error).message);
-            }
-          },
-          "/path/to/repo",
-        );
+        promptAddDir();
         break;
       case "delete":
         await deleteSelection();
@@ -447,18 +459,9 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
-    // Confirm modals: Esc cancels without consequence, Enter accepts (the
-    // default action). Other modals own inputs and handle their own keys.
-    if (modal?.kind === "confirm") {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        modal = null;
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        modal.onConfirm();
-      }
-      return;
-    }
+    // Confirm modals are handled in the capture phase (onCaptureKeydown) so the
+    // agent terminal can't swallow Enter before we see it.
+    if (modal?.kind === "confirm") return;
     if (modal || editing) return; // modals / editor handle their own keys
     const spec = eventToSpec(e);
     if (!spec) return;
@@ -483,10 +486,25 @@
     runAction(action);
   }
 
-  // Tab / Shift+Tab cycle focus between the sidebar and the agent terminal.
-  // Capture-phase so xterm doesn't swallow Tab; only enters the terminal if one
-  // is visible. (Esc is left for the agent — Claude/vim need it.)
-  function onTabCapture(e: KeyboardEvent) {
+  // Capture-phase key handling so xterm can't swallow keys before we act on them.
+  // Handles: confirm-modal Enter/Esc, and Tab focus cycling between sidebar/terminal.
+  function onCaptureKeydown(e: KeyboardEvent) {
+    // Confirm modals: Enter accepts, Esc cancels. Runs ahead of xterm, which
+    // otherwise routes Enter (\r) to the PTY and stops propagation.
+    if (modal?.kind === "confirm") {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        modal.onConfirm();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        modal = null;
+      }
+      return;
+    }
+    // Tab / Shift+Tab cycle focus between the sidebar and the agent terminal.
+    // (Esc is left for the agent — Claude/vim need it.)
     if (e.key !== "Tab" || modal || editing) return;
     e.preventDefault();
     e.stopPropagation();
@@ -520,8 +538,8 @@
   });
 
   $effect(() => {
-    window.addEventListener("keydown", onTabCapture, true);
-    return () => window.removeEventListener("keydown", onTabCapture, true);
+    window.addEventListener("keydown", onCaptureKeydown, true);
+    return () => window.removeEventListener("keydown", onCaptureKeydown, true);
   });
 
   // When the server drops (conn.online flipped false by a failed rpc), poll the

@@ -327,6 +327,24 @@ defmodule Codrift.Web.E2ETest do
       # Stop cleanly.
       assert %{"stopped" => ^agent_id} = ok!("stop_agent", %{"agent_id" => agent_id})
     end
+
+    test "start_agent with no dir falls back to the initiative's scratchpad folder" do
+      # A folderless initiative — no dirs configured.
+      {id, init} = create_initiative!("e2e-scratch")
+      assert init["dirs"] == []
+
+      status = ok!("start_agent", %{"initiative_id" => id, "adapter" => "terminal"})
+      agent_id = status["id"]
+      on_exit(fn -> rpc("stop_agent", %{"agent_id" => agent_id}) end)
+
+      # The agent runs in the initiative's context folder, which is now
+      # registered as a directory so tree/diff/editor operate there too.
+      scratch = Codrift.Initiative.Store.context_path(id)
+      assert status["dir"] == scratch
+
+      assert %{"dirs" => [%{"path" => ^scratch}]} =
+               Enum.find(ok!("list_initiatives"), &(&1["id"] == id))
+    end
   end
 
   # Retries `fun` until it returns true or the deadline passes.

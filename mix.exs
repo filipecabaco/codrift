@@ -35,7 +35,7 @@ defmodule Codrift.MixProject do
       codrift: [
         include_erts: true,
         strip_beams: true,
-        steps: [:assemble, &add_cli_commands/1, :tar]
+        steps: [&build_assets/1, :assemble, &add_cli_commands/1, :tar]
       ],
       # The desktop release is the Tauri sidecar. In production it is
       # Burrito-wrapped into a single binary (burrito_out/desktop_<triple>),
@@ -45,7 +45,7 @@ defmodule Codrift.MixProject do
       # docs/decisions.md). CI sets BURRITO_TARGET to build only the runner's
       # native triple.
       desktop: [
-        steps: [:assemble] ++ desktop_wrap_steps(),
+        steps: [&build_assets/1, :assemble] ++ desktop_wrap_steps(),
         burrito: [
           targets: [
             "aarch64-apple-darwin": [os: :darwin, cpu: :aarch64],
@@ -59,6 +59,28 @@ defmodule Codrift.MixProject do
 
   defp desktop_wrap_steps do
     if System.get_env("BURRITO_SKIP") == "true", do: [], else: [&Burrito.wrap/1]
+  end
+
+  # Rebuild the Svelte SPA into priv/static before the release copies priv in.
+  # Runs on every release assemble — including the one `mix ex_tauri.dev` and
+  # `mix ex_tauri.build` trigger — so the desktop webview never serves a stale
+  # bundle. Uses build:fast (vite only, no svelte-check) to keep dev iteration
+  # quick; typechecking runs separately via `pnpm check` / CI.
+  defp build_assets(release) do
+    Mix.shell().info("==> Building frontend bundle (assets -> priv/static)")
+
+    {_out, status} =
+      System.cmd("pnpm", ["run", "build:fast"],
+        cd: "assets",
+        into: IO.stream(:stdio, :line),
+        stderr_to_stdout: true
+      )
+
+    if status != 0 do
+      Mix.raise("Frontend build failed: `pnpm run build:fast` exited with #{status}")
+    end
+
+    release
   end
 
   defp add_cli_commands(release) do

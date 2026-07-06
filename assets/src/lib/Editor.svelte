@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { EditorView, basicSetup } from "codemirror";
-  import { Compartment } from "@codemirror/state";
+  import { Compartment, Prec } from "@codemirror/state";
   import { keymap } from "@codemirror/view";
+  import { acceptCompletion, closeCompletion, completionStatus } from "@codemirror/autocomplete";
   import { LanguageDescription } from "@codemirror/language";
   import { languages } from "@codemirror/language-data";
   import { vim, Vim } from "@replit/codemirror-vim";
@@ -59,11 +60,35 @@
         { key: "Mod-s", preventDefault: true, run: () => (void save(), true) },
       ]);
 
+      // vim() grabs Enter/Escape before autocomplete can. When the completion
+      // popup is open, let Enter accept and Escape close it; otherwise fall
+      // through (return false) so vim keeps its normal behaviour.
+      const completionKeys = Prec.highest(
+        keymap.of([
+          {
+            key: "Enter",
+            run: (v) => (completionStatus(v.state) === "active" ? acceptCompletion(v) : false),
+          },
+          {
+            key: "Escape",
+            run: (v) => (completionStatus(v.state) != null ? closeCompletion(v) : false),
+          },
+        ]),
+      );
+
       const lang = new Compartment();
       // vim() must come first in the extension list.
       view = new EditorView({
         doc: initial,
-        extensions: [vim(), basicSetup, saveKey, githubDark, EditorView.lineWrapping, lang.of([])],
+        extensions: [
+          completionKeys,
+          vim(),
+          basicSetup,
+          saveKey,
+          githubDark,
+          EditorView.lineWrapping,
+          lang.of([]),
+        ],
         parent: host,
       });
       status = "vim · :w / ⌘S to save · :q to close";

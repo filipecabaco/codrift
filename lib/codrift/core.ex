@@ -82,22 +82,20 @@ defmodule Codrift.Core do
     end
   end
 
-  def call("start_agent", %{"initiative_id" => init_id, "dir" => dir, "adapter" => adapter}) do
+  def call("start_agent", %{"initiative_id" => init_id, "adapter" => adapter} = params) do
     module = adapter_module(adapter)
-    expanded_dir = Path.expand(dir)
 
-    case Codrift.AgentSupervisor.start_agent(init_id, expanded_dir, module) do
-      {:ok, pid} ->
-        status =
-          pid
-          |> Codrift.AgentProcess.status()
-          |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
-          |> Map.update!(:status, &Atom.to_string/1)
+    with {:ok, dir} <- resolve_agent_dir(init_id, Map.get(params, "dir")),
+         {:ok, pid} <- Codrift.AgentSupervisor.start_agent(init_id, dir, module) do
+      status =
+        pid
+        |> Codrift.AgentProcess.status()
+        |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
+        |> Map.update!(:status, &Atom.to_string/1)
 
-        {:ok, status}
-
-      {:error, reason} ->
-        {:error, inspect(reason)}
+      {:ok, status}
+    else
+      {:error, reason} -> {:error, inspect(reason)}
     end
   end
 
@@ -569,6 +567,21 @@ defmodule Codrift.Core do
 
   defp adapter_module(name) do
     Codrift.Agent.module_from_name(name) || raise("unknown adapter: #{name}")
+  end
+
+  # A concrete directory runs the agent there. A blank/absent one means a
+  # folderless ("scratch") initiative — fall back to its own context folder as
+  # the working dir (same as `add_context_workspace`), registering it so tree,
+  # diff and the editor operate there too. Agents no longer need a project
+  # directory configured up front.
+  defp resolve_agent_dir(_init_id, dir) when is_binary(dir) and dir != "" do
+    {:ok, Path.expand(dir)}
+  end
+
+  defp resolve_agent_dir(init_id, _blank) do
+    with {:ok, _initiative} <- Store.add_dir(init_id, Store.context_path(init_id)) do
+      {:ok, Store.context_path(init_id)}
+    end
   end
 
   # Clamps memory_recent limit to 1..100. Accepts integers only; any other
