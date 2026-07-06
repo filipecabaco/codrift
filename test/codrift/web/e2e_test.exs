@@ -19,6 +19,8 @@ defmodule Codrift.Web.E2ETest do
   import Plug.Test
   import Plug.Conn
 
+  alias Codrift.Initiative.Store
+
   @opts Codrift.init([])
 
   # ── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -339,7 +341,7 @@ defmodule Codrift.Web.E2ETest do
 
       # The agent runs in the initiative's context folder, which is now
       # registered as a directory so tree/diff/editor operate there too.
-      scratch = Codrift.Initiative.Store.context_path(id)
+      scratch = Store.context_path(id)
       assert status["dir"] == scratch
 
       assert %{"dirs" => [%{"path" => ^scratch}]} =
