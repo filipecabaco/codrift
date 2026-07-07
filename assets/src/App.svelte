@@ -19,37 +19,64 @@
   import TreeView from "$lib/TreeView.svelte";
   import CommandPalette from "$lib/CommandPalette.svelte";
   import Prompt from "$lib/Prompt.svelte";
+  import DirPicker from "$lib/DirPicker.svelte";
   import Editor from "$lib/Editor.svelte";
   import Integrations from "$lib/Integrations.svelte";
 
   let initiatives = $state<Initiative[]>([]);
   let agentsByInit = $state<Record<string, Agent[]>>({});
-  let activeInitiative = $state<string | null>(null);
-  let activeAgent = $state<string | null>(null);
-  let tab = $state<"context" | "diff" | "tree">("context");
+
+  // Each pane is an independent viewport onto an initiative — its own agent,
+  // tab, open context file and tree selection. The sidebar drives whichever
+  // pane is active. Max two panes (a single split, one level deep).
+  type PaneView = {
+    initiativeId: string | null;
+    agentId: string | null;
+    tab: "context" | "diff" | "tree";
+    wantFile: string | null;
+    treeSelectedPath: string | null;
+  };
+  const newView = (): PaneView => ({
+    initiativeId: null,
+    agentId: null,
+    tab: "context",
+    wantFile: null,
+    treeSelectedPath: null,
+  });
+  let panes = $state<PaneView[]>([newView()]);
+  let activePane = $state(0);
+  // Split divider: null = single pane; otherwise the orientation plus the first
+  // pane's size as a fraction (0..1) of the content area.
+  let split = $state<{ dir: "vertical" | "horizontal"; fraction: number } | null>(null);
+  // The pane the sidebar and keyboard actions currently target.
+  const active = $derived(panes[activePane] ?? panes[0]);
+
   let sidebarCollapsed = $state(false);
+  let sidebarWidth = $state(300);
   let cursor = $state(0);
   let error = $state<string | null>(null);
   let loading = $state(true);
   let status = $state<string | null>(null);
   let keymap = $state<Keymap>(DEFAULT_KEYMAP);
   let editing = $state<{ path: string } | null>(null);
-  let treeSelectedPath = $state<string | null>(null);
-  // Sidebar: which initiatives are expanded, their lazily-loaded context files,
-  // and the context file the Context view should open (set when clicked here).
+  // Sidebar: which initiatives are expanded and their lazily-loaded context files.
   let expanded = $state<Set<string>>(new Set());
   let contextFilesByInit = $state<Record<string, string[]>>({});
-  let wantFile = $state<string | null>(null);
   // Which pane has keyboard focus. Tab cycles; the terminal only receives keys
   // when "main" so sidebar nav (j/k/arrows) keeps working otherwise.
   let paneFocus = $state<"sidebar" | "main">("sidebar");
+
+  // Element refs for pointer-drag resizing (sidebar width and the split divider).
+  let bodyEl = $state<HTMLElement | null>(null);
+  let contentEl = $state<HTMLElement | null>(null);
 
   const base = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
   // Backend agent statuses are snake_case ("awaiting_input"); show them spaced.
   const humanStatus = (s: string) => s.replace(/_/g, " ");
 
   function termTextarea(): HTMLElement | null {
-    return document.querySelector(".xterm-helper-textarea");
+    // Scope to the active pane so focus lands on the right terminal when split.
+    return document.querySelector(`#pane-${activePane} .xterm-helper-textarea`);
   }
   function focusMain() {
     paneFocus = "main";
@@ -63,6 +90,7 @@
   type Modal =
     | { kind: "palette" }
     | { kind: "prompt"; title: string; placeholder?: string; submit: (v: string) => void }
+    | { kind: "dirpicker"; submit: (v: string) => void }
     | { kind: "confirm"; message: string; onConfirm: () => void }
     | { kind: "integrations" }
     | null;
@@ -85,7 +113,7 @@
   const STATUS_ORDER = ["planning", "ongoing", "done", "archived"];
 
   const reverse = $derived(buildReverse(keymap));
-  const selectedInitiative = $derived(initiatives.find((i) => i.id === activeInitiative) ?? null);
+  const selectedInitiative = $derived(initiatives.find((i) => i.id === active.initiativeId) ?? null);
 
   // Flat list of the currently-visible selectable sidebar rows, mirroring the
   // rendered tree, so j/k navigation matches what's on screen.
@@ -168,8 +196,9 @@
         ),
       );
       agentsByInit = Object.fromEntries(entries);
-      if (!activeInitiative && initiatives.length > 0) activeInitiative = initiatives[0].id;
-      if (activeInitiative) expand(activeInitiative);
+      const v = panes[activePane];
+      if (!v.initiativeId && initiatives.length > 0) v.initiativeId = initiatives[0].id;
+      if (v.initiativeId) expand(v.initiativeId);
     } catch (e) {
       error = (e as Error).message;
     } finally {
@@ -208,26 +237,27 @@
   // cursor. (The mouse-facing select* helpers below also syncCursor; calling
   // them here would snap the cursor back and break arrow navigation.)
   function applyRow(row: Row) {
+    const v = panes[activePane];
     switch (row.kind) {
       case "init":
       case "dir":
-        activeInitiative = row.initId;
-        activeAgent = null;
-        wantFile = null;
+        v.initiativeId = row.initId;
+        v.agentId = null;
+        v.wantFile = null;
         expand(row.initId);
         break;
       case "file":
-        activeInitiative = row.initId;
-        activeAgent = null;
-        wantFile = row.name;
-        tab = "context";
+        v.initiativeId = row.initId;
+        v.agentId = null;
+        v.wantFile = row.name;
+        v.tab = "context";
         expand(row.initId);
         break;
       case "agent":
-        activeInitiative = row.initId;
-        activeAgent = row.agentId;
-        wantFile = null;
-        tab = "context";
+        v.initiativeId = row.initId;
+        v.agentId = row.agentId;
+        v.wantFile = null;
+        v.tab = "context";
         break;
     }
   }
@@ -244,37 +274,41 @@
   }
 
   function selectInitiative(id: string) {
-    activeInitiative = id;
-    activeAgent = null;
-    wantFile = null;
+    const v = panes[activePane];
+    v.initiativeId = id;
+    v.agentId = null;
+    v.wantFile = null;
     paneFocus = "sidebar";
     expand(id);
     syncCursor((r) => r.kind === "init" && r.initId === id);
   }
 
   function openContextFile(initId: string, name: string) {
-    activeInitiative = initId;
-    activeAgent = null;
-    wantFile = name;
-    tab = "context";
+    const v = panes[activePane];
+    v.initiativeId = initId;
+    v.agentId = null;
+    v.wantFile = name;
+    v.tab = "context";
     paneFocus = "sidebar";
     expand(initId);
     syncCursor((r) => r.kind === "file" && r.initId === initId && r.name === name);
   }
 
   function selectAgent(initId: string, agentId: string) {
-    activeInitiative = initId;
-    activeAgent = agentId;
-    wantFile = null;
-    tab = "context";
+    const v = panes[activePane];
+    v.initiativeId = initId;
+    v.agentId = agentId;
+    v.wantFile = null;
+    v.tab = "context";
     syncCursor((r) => r.kind === "agent" && r.agentId === agentId);
     focusMain(); // explicit click on an agent → interact with its terminal
   }
 
   function selectDir(initId: string, path: string) {
-    activeInitiative = initId;
-    activeAgent = null;
-    wantFile = null;
+    const v = panes[activePane];
+    v.initiativeId = initId;
+    v.agentId = null;
+    v.wantFile = null;
     paneFocus = "sidebar";
     syncCursor((r) => r.kind === "dir" && r.initId === initId && r.path === path);
   }
@@ -282,9 +316,9 @@
   function promptAddDir() {
     const init = selectedInitiative;
     if (!init) return;
-    openPrompt(
-      "Add directory (absolute path)",
-      async (dir) => {
+    modal = {
+      kind: "dirpicker",
+      submit: async (dir) => {
         modal = null;
         try {
           await rpc("add_dir", { initiative_id: init.id, dir });
@@ -293,24 +327,34 @@
           toast((e as Error).message);
         }
       },
-      "/path/to/repo",
-    );
+    };
   }
 
   async function startAgent(adapter: string) {
     if (!selectedInitiative) return toast("Select an initiative first.");
-    // Prefer the directory under the cursor (so you can start agents per dir),
-    // falling back to the initiative's first directory. When the initiative has
-    // no directory at all, omit `dir` — the backend runs the agent in the
-    // initiative's own scratchpad (context) folder.
-    const dir = cursorDir ?? selectedInitiative.dirs[0]?.path ?? null;
+    // Prefer the directory under the cursor (so you can start agents per dir).
+    // With the cursor on the initiative itself — or one of its context files —
+    // run at the initiative root (its context folder), so the agent can edit
+    // initiative-wide files: orchestration.md, context docs, memory, etc.
+    // Otherwise fall back to the first project directory; with no directory at
+    // all, omit `dir` and the backend runs in the initiative's context folder.
+    const row = rows[cursor];
+    const atInitRoot = row?.kind === "init" || row?.kind === "file";
+    const rootDir = selectedInitiative.context_path ?? null;
+    const dir = cursorDir ?? (atInitRoot ? rootDir : null) ?? selectedInitiative.dirs[0]?.path ?? null;
     try {
       await rpc("start_agent", {
         initiative_id: selectedInitiative.id,
         adapter,
         ...(dir ? { dir } : {}),
       });
-      toast(dir ? `Started ${adapter} in ${dir.split("/").pop()}` : `Started ${adapter} in scratchpad`);
+      const where =
+        dir && dir === rootDir
+          ? "at initiative root"
+          : dir
+            ? `in ${base(dir)}`
+            : "in scratchpad";
+      toast(`Started ${adapter} ${where}`);
       await load();
     } catch (e) {
       toast((e as Error).message);
@@ -337,16 +381,16 @@
     if (modal) modal = null;
     switch (id) {
       case "context_mode":
-        tab = "context";
+        active.tab = "context";
         break;
       case "diff_mode":
-        tab = "diff";
+        active.tab = "diff";
         break;
       case "tree_mode":
-        tab = "tree";
+        active.tab = "tree";
         break;
       case "diff_all_files":
-        tab = "diff";
+        active.tab = "diff";
         break;
       case "navigate_down":
         moveCursor(1);
@@ -411,7 +455,7 @@
         toast("Quit is handled by the window — nothing to do here.");
         break;
       case "edit_context":
-        if (treeSelectedPath) editing = { path: treeSelectedPath };
+        if (active.treeSelectedPath) editing = { path: active.treeSelectedPath };
         else toast("Open a file in the Tree view to edit it.");
         break;
       case "new_context":
@@ -423,8 +467,8 @@
   function deleteSelection() {
     // Native confirm() is a no-op in Tauri's WebKit webview, so use an in-app
     // confirm modal instead.
-    if (activeAgent) {
-      const id = activeAgent;
+    if (active.agentId) {
+      const id = active.agentId;
       modal = {
         kind: "confirm",
         message: "Stop this agent?",
@@ -432,7 +476,7 @@
           modal = null;
           try {
             await rpc("stop_agent", { agent_id: id });
-            activeAgent = null;
+            active.agentId = null;
             await load();
           } catch (e) {
             toast((e as Error).message);
@@ -448,7 +492,7 @@
           modal = null;
           try {
             await rpc("delete_initiative", { initiative_id: init.id });
-            activeInitiative = null;
+            active.initiativeId = null;
             await load();
           } catch (e) {
             toast((e as Error).message);
@@ -458,11 +502,110 @@
     }
   }
 
+  // ── Panes: split / balance / collapse ─────────────────────────────────────────
+
+  function focusPane(idx: number) {
+    activePane = Math.max(0, Math.min(idx, panes.length - 1));
+  }
+
+  // Toggle a split in the given orientation. With no split, clone the active
+  // pane into a second one. Splitting again in the SAME orientation collapses
+  // back to the active pane; splitting in the other just re-orients.
+  function toggleSplit(dir: "vertical" | "horizontal") {
+    if (split) {
+      if (split.dir === dir) {
+        const keep = panes[activePane] ?? panes[0];
+        panes = [keep];
+        activePane = 0;
+        split = null;
+      } else {
+        split = { ...split, dir };
+      }
+      return;
+    }
+    panes = [panes[activePane], { ...panes[activePane] }];
+    activePane = 0;
+    split = { dir, fraction: 0.5 };
+  }
+
+  function balanceSplit() {
+    if (split) split = { ...split, fraction: 0.5 };
+  }
+
+  // Close one pane and keep the other; the survivor becomes the single view.
+  function closePane(idx: number) {
+    if (!split) return;
+    const keep = panes[idx === 0 ? 1 : 0];
+    panes = [keep];
+    activePane = 0;
+    split = null;
+  }
+
+  // Drag the divider between the two panes to resize them (fraction of content).
+  function startSplitDrag(e: PointerEvent) {
+    if (!split || !contentEl) return;
+    e.preventDefault();
+    const el = contentEl;
+    const move = (ev: PointerEvent) => {
+      const r = el.getBoundingClientRect();
+      const f =
+        split!.dir === "vertical"
+          ? (ev.clientX - r.left) / r.width
+          : (ev.clientY - r.top) / r.height;
+      split = { ...split!, fraction: Math.min(0.85, Math.max(0.15, f)) };
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  // Drag the divider between the sidebar and the content to resize the sidebar.
+  function startSidebarDrag(e: PointerEvent) {
+    if (!bodyEl) return;
+    e.preventDefault();
+    const el = bodyEl;
+    const move = (ev: PointerEvent) => {
+      const r = el.getBoundingClientRect();
+      sidebarWidth = Math.min(520, Math.max(200, ev.clientX - r.left));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  // Window-management shortcuts, handled as raw events (like Tab focus cycling)
+  // rather than through the remappable keymap: ⌘D / ⌘⇧D split, ⌘⌃= balances.
+  function paneShortcut(e: KeyboardEvent): (() => void) | null {
+    const primary = e.metaKey || e.ctrlKey;
+    if (!primary) return null;
+    const key = e.key.toLowerCase();
+    if (e.metaKey && e.ctrlKey && (key === "=" || key === "+")) return balanceSplit;
+    if (key === "d" && !(e.metaKey && e.ctrlKey))
+      return () => toggleSplit(e.shiftKey ? "horizontal" : "vertical");
+    return null;
+  }
+
   function onWindowKeydown(e: KeyboardEvent) {
     // Confirm modals are handled in the capture phase (onCaptureKeydown) so the
     // agent terminal can't swallow Enter before we see it.
     if (modal?.kind === "confirm") return;
     if (modal || editing) return; // modals / editor handle their own keys
+
+    // Pane shortcuts fire even when the terminal has focus (they're modifier
+    // combos), so check them before the keymap path bails on editable targets.
+    const pane = paneShortcut(e);
+    if (pane) {
+      e.preventDefault();
+      pane();
+      return;
+    }
+
     const spec = eventToSpec(e);
     if (!spec) return;
 
@@ -509,7 +652,7 @@
     e.preventDefault();
     e.stopPropagation();
     if (paneFocus === "main") focusSidebar();
-    else if (activeAgent && tab === "context") focusMain();
+    else if (active.agentId && active.tab === "context") focusMain();
   }
 
   const paletteItems = $derived(
@@ -526,13 +669,15 @@
     const k = (a: ActionId) => formatSpec(keymap[a]);
     const palette = { spec: k("palette"), label: "Commands" };
     // Terminal has the keyboard: only Tab (back) and the palette do anything here.
-    if (paneFocus === "main" && activeAgent) {
+    if (paneFocus === "main" && active.agentId) {
       return [{ spec: "⇥", label: "Sidebar" }, palette];
     }
     const hints = [{ spec: "↑↓", label: "Move" }];
-    if (activeAgent && tab === "context") hints.push({ spec: "⇥", label: "Terminal" });
+    if (active.agentId && active.tab === "context") hints.push({ spec: "⇥", label: "Terminal" });
     if (initiatives.length === 0) hints.push({ spec: k("new_initiative"), label: "New initiative" });
     else hints.push({ spec: k("start_agent"), label: "Start agent" }, { spec: k("add_dir"), label: "Add dir" });
+    if (selectedInitiative) hints.push({ spec: "⌘D", label: "Split" });
+    if (split) hints.push({ spec: "⌘⌃=", label: "Balance" });
     hints.push(palette);
     return hints;
   });
@@ -573,9 +718,9 @@
         <button
           class={[
             "rounded-md border px-2.5 py-1 text-xs",
-            tab === t.id ? "border-border bg-canvas text-fg" : "border-transparent text-muted hover:text-fg",
+            active.tab === t.id ? "border-border bg-canvas text-fg" : "border-transparent text-muted hover:text-fg",
           ]}
-          onclick={() => (tab = t.id)}
+          onclick={() => (active.tab = t.id)}
         >
           {t.label}
         </button>
@@ -584,7 +729,7 @@
     {#if status}
       <span class="text-[11px] text-muted">{status}</span>
     {/if}
-    {#if activeAgent && tab === "context"}
+    {#if active.agentId && active.tab === "context"}
       <span class="text-[11px] text-muted">⇥ focus: {paneFocus === "main" ? "terminal" : "sidebar"}</span>
     {/if}
     <button
@@ -619,14 +764,31 @@
     </div>
   {/if}
 
-  <div class="flex min-h-0 flex-1">
-    {#if !sidebarCollapsed}
+  <div class="flex min-h-0 flex-1" bind:this={bodyEl}>
+    {#if sidebarCollapsed}
+      <button
+        class="flex w-6 shrink-0 items-center justify-center border-r border-border bg-canvas text-muted hover:text-fg"
+        title="Expand sidebar ({formatSpec(keymap.toggle_sidebar)})"
+        aria-label="Expand sidebar"
+        onclick={() => (sidebarCollapsed = false)}
+      >›</button>
+    {:else}
       <aside
         class={[
-          "w-[30%] max-w-[360px] overflow-y-auto border-r bg-canvas p-2",
+          "shrink-0 overflow-y-auto border-r bg-canvas p-2",
           paneFocus === "sidebar" ? "border-accent/50" : "border-border",
         ]}
+        style="width: {sidebarWidth}px"
       >
+        <div class="mb-1 flex items-center justify-between pl-1">
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">Initiatives</span>
+          <button
+            class="rounded p-0.5 text-muted hover:text-fg"
+            title="Collapse sidebar ({formatSpec(keymap.toggle_sidebar)})"
+            aria-label="Collapse sidebar"
+            onclick={() => (sidebarCollapsed = true)}
+          >‹</button>
+        </div>
         {#if loading}
           <p class="p-1.5 text-xs text-muted">Loading…</p>
         {:else if error}
@@ -702,6 +864,7 @@
                       onclick={() => selectAgent(init.id, agent.id)}
                     >
                       ◦ {agent.adapter}
+                      {#if agent.profile}<span class="rounded border border-accent/40 px-1 text-[10px] text-accent/90">{agent.profile}</span>{/if}
                       <span class="ml-auto text-[11px] text-muted">{humanStatus(agent.status)}</span>
                     </button>
                   {/each}
@@ -717,6 +880,7 @@
                     onclick={() => selectAgent(init.id, agent.id)}
                   >
                     ◦ {agent.adapter}
+                    {#if agent.profile}<span class="rounded border border-accent/40 px-1 text-[10px] text-accent/90">{agent.profile}</span>{/if}
                     <span class="ml-auto text-[11px] text-muted">{agent.status}</span>
                   </button>
                 {/each}
@@ -725,17 +889,61 @@
           {/each}
         {/if}
       </aside>
+      <!-- Drag to resize the sidebar. -->
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        class="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/50"
+        onpointerdown={startSidebarDrag}
+      ></div>
     {/if}
 
+    <!-- Content area: one pane, or two split by a draggable divider. -->
+    <div
+      bind:this={contentEl}
+      class={["flex min-h-0 min-w-0 flex-1", split?.dir === "horizontal" ? "flex-col" : "flex-row"]}
+    >
+      {@render pane(panes[0], 0)}
+      {#if split}
+        <div
+          role="separator"
+          aria-orientation={split.dir === "vertical" ? "vertical" : "horizontal"}
+          aria-label="Resize split"
+          class={[
+            "shrink-0 bg-border hover:bg-accent/60",
+            split.dir === "vertical" ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize",
+          ]}
+          onpointerdown={startSplitDrag}
+        ></div>
+        {@render pane(panes[1], 1)}
+      {/if}
+    </div>
+  </div>
+
+  {#snippet pane(view: PaneView, idx: number)}
+    {@const init = initiatives.find((i) => i.id === view.initiativeId) ?? null}
     <main
+      id={"pane-" + idx}
       class={[
-        "min-w-0 flex-1 bg-canvas",
-        activeAgent && tab === "context" && paneFocus === "main"
-          ? "ring-1 ring-inset ring-accent/50"
+        "relative min-h-0 min-w-0 overflow-hidden bg-canvas",
+        split && activePane === idx ? "ring-1 ring-inset ring-accent/30" : "",
+        view.agentId && view.tab === "context" && paneFocus === "main" && activePane === idx
+          ? "ring-1 ring-inset ring-accent/60"
           : "",
       ]}
+      style={split ? (idx === 0 ? `flex: 0 0 ${split.fraction * 100}%` : "flex: 1 1 0%") : "flex: 1 1 0%"}
+      onpointerdowncapture={() => (activePane = idx)}
     >
-      {#if !selectedInitiative}
+      {#if split}
+        <button
+          class="absolute right-1 top-1 z-10 rounded bg-surface/80 px-1 text-[11px] text-muted hover:text-fg"
+          title="Close pane"
+          aria-label="Close pane"
+          onclick={() => closePane(idx)}
+        >✕</button>
+      {/if}
+      {#if !init}
         {#if !loading && initiatives.length === 0}
           <div class="flex h-full items-center justify-center p-8">
             <div class="max-w-md">
@@ -758,34 +966,37 @@
         {:else}
           <div class="p-6 text-[13px] text-muted">Select an initiative.</div>
         {/if}
-      {:else if tab === "context"}
-        {#if activeAgent}
-          <!-- No {#key} here: a single terminal persists and reconnects when the
-               agent changes, avoiding WebGL-context churn that broke the UI. -->
-          <AgentTerminal agentId={activeAgent} initiativeId={selectedInitiative.id} />
+      {:else if view.tab === "context"}
+        {#if view.agentId}
+          <!-- No {#key} here: a terminal persists and reconnects when the agent
+               changes, avoiding WebGL-context churn that broke the UI. -->
+          <AgentTerminal agentId={view.agentId} initiativeId={init.id} />
         {:else}
           <ContextOverview
-            initiative={selectedInitiative}
-            agents={agentsByInit[selectedInitiative.id] ?? []}
-            wantFile={activeInitiative === selectedInitiative.id ? wantFile : null}
+            initiative={init}
+            agents={agentsByInit[init.id] ?? []}
+            wantFile={view.wantFile}
             onChanged={load}
           />
         {/if}
-      {:else if tab === "diff"}
-        {#key selectedInitiative.id}
-          <DiffView initiativeId={selectedInitiative.id} />
+      {:else if view.tab === "diff"}
+        {#key init.id}
+          <DiffView initiativeId={init.id} />
         {/key}
       {:else}
-        {#key selectedInitiative.id}
+        {#key init.id}
           <TreeView
-            initiativeId={selectedInitiative.id}
-            bind:selectedPath={treeSelectedPath}
-            onEdit={(p) => (editing = { path: p })}
+            initiativeId={init.id}
+            bind:selectedPath={view.treeSelectedPath}
+            onEdit={(p) => {
+              activePane = idx;
+              editing = { path: p };
+            }}
           />
         {/key}
       {/if}
     </main>
-  </div>
+  {/snippet}
 
   <!-- Always-on contextual cheat row: keyboard-first discoverability without ceremony. -->
   <footer class="flex items-center gap-4 border-t border-border bg-surface px-4 py-1 text-[11px] text-muted">
@@ -817,6 +1028,8 @@
     onSubmit={modal.submit}
     onClose={() => (modal = null)}
   />
+{:else if modal?.kind === "dirpicker"}
+  <DirPicker onSubmit={modal.submit} onClose={() => (modal = null)} />
 {:else if modal?.kind === "confirm"}
   <div
     class="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[18vh]"

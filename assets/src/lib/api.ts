@@ -44,6 +44,7 @@ export type Agent = {
   dir: string;
   initiative_id: string;
   mode: string;
+  profile?: string | null;
 };
 
 export type DiffLine = { type: "add" | "remove" | "context"; content: string };
@@ -67,9 +68,17 @@ export type MemoryEntry = {
 // Adapters that can be launched from the UI (terminal is started internally only).
 export const ADAPTERS = ["claude", "codex", "opencode", "gemini", "copilot"] as const;
 
+// A launch profile: a named binding of a base adapter + env overrides (e.g.
+// CLAUDE_CONFIG_DIR) so the same tool can run under different accounts/folders.
+export type AgentProfile = { name: string; adapter: string | null };
+
+export function listAgentProfiles(): Promise<AgentProfile[]> {
+  return rpc<AgentProfile[]>("list_agent_profiles");
+}
+
 // ── Integrations / OAuth ────────────────────────────────────────────────────
 
-export type OAuthFlow = "pkce_browser" | "device_flow" | "guided_token";
+export type OAuthFlow = "pkce_browser" | "device_flow";
 
 export type OAuthService = {
   connected: boolean;
@@ -88,8 +97,7 @@ export type StartFlowResult =
       user_code: string;
       verification_uri: string;
       message: string;
-    }
-  | { flow: "guided_token"; service: string; instructions: string; message: string };
+    };
 
 export function oauthStatus(): Promise<OAuthStatus> {
   return rpc<OAuthStatus>("get_oauth_status");
@@ -97,10 +105,6 @@ export function oauthStatus(): Promise<OAuthStatus> {
 
 export function startOAuthFlow(service: string): Promise<StartFlowResult> {
   return rpc<StartFlowResult>("start_oauth_flow", { service });
-}
-
-export function saveGuidedToken(service: string, token: string): Promise<unknown> {
-  return rpc("save_guided_token", { service, token });
 }
 
 export function revokeOAuthToken(service: string): Promise<unknown> {
@@ -120,6 +124,4 @@ export const SERVICE_META: Record<string, { label: string; blurb: string }> = {
   github: { label: "GitHub", blurb: "Issues & pull requests" },
   github_projects: { label: "GitHub Projects", blurb: "Project boards" },
   gitlab: { label: "GitLab", blurb: "Issues & merge requests" },
-  jira: { label: "Jira", blurb: "Issues" },
-  notion: { label: "Notion", blurb: "Pages & databases" },
 };

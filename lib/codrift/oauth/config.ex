@@ -6,14 +6,11 @@ defmodule Codrift.OAuth.Config do
 
   - `:pkce_browser` — RFC 7636 PKCE + localhost redirect. No client secret
     needed or stored. `client_id` only (safe to ship in the binary).
-    Services: linear, linear_projects, gitlab, jira.
+    Services: linear, linear_projects, gitlab.
 
   - `:device_flow` — GitHub Device Flow (RFC 8628). No redirect URI, no secret.
     User visits github.com/login/device and enters a short code.
     Services: github, github_projects.
-
-  - `:guided_token` — No OAuth. The service issues a token through its web UI
-    and the user pastes it. Services: notion.
 
   ## Registering apps
 
@@ -70,31 +67,6 @@ defmodule Codrift.OAuth.Config do
       client_id: nil,
       scopes: "read_api read_user",
       token_format: :json
-    },
-    "jira" => %{
-      flow: :pkce_browser,
-      auth_url: "https://auth.atlassian.com/authorize",
-      token_url: "https://auth.atlassian.com/oauth/token",
-      client_id_env: "JIRA_CLIENT_ID",
-      client_id: nil,
-      scopes: "read:jira-work read:jira-user offline_access",
-      token_format: :json
-    },
-    "notion" => %{
-      flow: :guided_token,
-      setup_url: "https://www.notion.so/profile/integrations",
-      token_prefixes: ["secret_", "ntn_"],
-      instructions: """
-      Notion uses Internal Integrations — no OAuth app required.
-
-        1. Open https://www.notion.so/profile/integrations in your browser
-        2. Click "New integration", give it a name (e.g. Codrift), select your workspace
-        3. Copy the "Internal Integration Secret" shown on the integration page
-        4. In each Notion database you want Codrift to access:
-             open the database → ... menu → Connections → add your integration
-
-      Paste your Internal Integration Secret below (starts with "secret_" or "ntn_").
-      """
     }
   }
 
@@ -125,7 +97,7 @@ defmodule Codrift.OAuth.Config do
     |> Enum.sort()
   end
 
-  @doc "Returns all services that support any form of auth flow (PKCE or guided)."
+  @doc "Returns all services that support any form of auth flow (PKCE or device flow)."
   @spec supported_services() :: [String.t()]
   def supported_services, do: @services |> Map.keys() |> Enum.sort()
 
@@ -158,9 +130,6 @@ defmodule Codrift.OAuth.Config do
 
       {:ok, "#{config.auth_url}?#{params}"}
     else
-      {:ok, %{flow: :guided_token}} ->
-        {:error, "#{service} uses guided token setup, not browser OAuth"}
-
       {:error, _} = err ->
         err
     end
@@ -184,11 +153,6 @@ defmodule Codrift.OAuth.Config do
   # ── Private ──────────────────────────────────────────────────────────────────
 
   defp maybe_add_scopes(params, %{scopes: s}), do: Map.put(params, :scope, s)
-
-  # Jira requires audience=api.atlassian.com + prompt=consent
-  defp maybe_add_extras(params, "jira") do
-    Map.merge(params, %{audience: "api.atlassian.com", prompt: "consent"})
-  end
 
   defp maybe_add_extras(params, _), do: params
 end

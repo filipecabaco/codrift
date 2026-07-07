@@ -6,7 +6,16 @@ config :ex_tauri,
   app_name: "Codrift",
   host: "localhost",
   port: 7437,
-  version: "2.5.1"
+  version: "2.5.1",
+  # Launch windowed as a roomy "operating system for agents": the Rust setup
+  # hook (src-tauri/src/lib.rs) resizes to 80% of the primary monitor and
+  # centers. These width/height are only the pre-resize fallback if that hook
+  # can't read the monitor. Kept in sync with src-tauri/tauri.conf.json so
+  # re-running `mix ex_tauri.install` regenerates the same window (ex_tauri
+  # reads these keys, see helpers.ex).
+  fullscreen: false,
+  width: 1440,
+  height: 900
 
 # Serve priv/static app-relative (via :code.priv_dir) so it resolves inside a
 # release too — the default "priv/static" is cwd-relative and 404s in releases

@@ -9,10 +9,9 @@ defmodule Codrift.CLI.Integration do
 
   ## Auth flows
 
-  - PKCE (github, linear, gitlab, jira): delegates to the running web server
-    at localhost:7437, which holds the StateStore. The desktop app must be running.
-  - Guided token (notion): fully local — prompts the user to paste a token
-    created in Notion's web UI. No server needed.
+  - PKCE (linear, gitlab): delegates to the running web server at localhost:7437,
+    which holds the StateStore. The desktop app must be running.
+  - Device Flow (github): authorize from the desktop app's Integrations panel.
   - API key env var: fallback for CI or headless environments.
   """
 
@@ -50,8 +49,10 @@ defmodule Codrift.CLI.Integration do
       {:ok, %{flow: :pkce_browser}} ->
         pkce_auth_via_server(service)
 
-      {:ok, %{flow: :guided_token, instructions: instructions}} ->
-        guided_token_prompt(service, instructions)
+      {:ok, %{flow: :device_flow}} ->
+        fail(
+          "#{service} uses device flow — authorize it from the desktop app's Integrations panel."
+        )
 
       {:error, _} ->
         fail("Unknown service or no auth configured for: #{service}")
@@ -134,10 +135,9 @@ defmodule Codrift.CLI.Integration do
     Services: #{Integration.valid_services() |> Enum.join(", ")}
 
     Auth flows:
-      PKCE browser  (github, github_projects, linear, linear_projects, gitlab, jira)
+      PKCE browser  (linear, linear_projects, gitlab)
                     — requires the Codrift desktop app to be running
-      Guided token  (notion) — no server needed, just follow the prompts
-      API key only  (shortcut) — set SHORTCUT_TOKEN env var
+      Device flow   (github, github_projects) — authorize from the desktop app
     """)
   end
 
@@ -164,30 +164,12 @@ defmodule Codrift.CLI.Integration do
     end
   end
 
-  # Guided token: fully local, no server needed.
-  defp guided_token_prompt(service, instructions) do
-    IO.puts("\n#{String.trim(instructions)}\n")
-    token = IO.gets("Token: ") |> String.trim()
-
-    if token == "" do
-      fail("No token entered.")
-    end
-
-    case OAuth.save_guided_token(service, token) do
-      :ok ->
-        IO.puts("\nConnected to #{service}. Run `codrift integration list #{service}` to test.\n")
-
-      {:error, reason} ->
-        fail(reason)
-    end
-  end
-
   # ── Helpers ───────────────────────────────────────────────────────────────────
 
   defp service_auth_type(name) do
     case OAuthConfig.get(name) do
       {:ok, %{flow: :pkce_browser}} -> "pkce_browser"
-      {:ok, %{flow: :guided_token}} -> "guided_token"
+      {:ok, %{flow: :device_flow}} -> "device_flow"
       _ -> "api_key_only"
     end
   end

@@ -69,7 +69,7 @@ Codrift (Application)
 | `Codrift.Integration` | Behaviour for external service adapters |
 | `Codrift.Integration.HTTP` | Req wrapper — GET/POST/GraphQL with JSON, 15s timeout |
 | `Codrift.Integration.Sync` | Re-fetch item and rewrite `integration.md` |
-| `Codrift.OAuth` | Token acquisition: PKCE browser, device flow, guided token |
+| `Codrift.OAuth` | Token acquisition: PKCE browser, device flow |
 | `Codrift.OAuth.Config` | Per-service OAuth parameters, env var names, endpoints |
 | `Codrift.MCP.Handler` | JSON-RPC 2.0 dispatch |
 | `Codrift.Config.Keybindings` | Loads `~/.codrift/keybindings.json`, merges over defaults; served to the UI via the `get_keybindings` RPC |

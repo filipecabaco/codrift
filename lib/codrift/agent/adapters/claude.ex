@@ -22,13 +22,17 @@ defmodule Codrift.Agent.Adapters.Claude do
 
   @impl true
   def args(dir, opts) do
+    # A launch profile may relocate Claude's config dir via CLAUDE_CONFIG_DIR;
+    # sessions then live under it rather than the default ~/.claude.
+    config_dir = opts[:config_dir] || "~/.claude"
+
     resume_args =
       case opts[:session_id] do
         nil ->
           []
 
         uuid ->
-          if session_file_exists?(dir, uuid),
+          if session_file_exists?(config_dir, dir, uuid),
             do: ["--resume", uuid],
             else: ["--session-id", uuid]
       end
@@ -45,9 +49,9 @@ defmodule Codrift.Agent.Adapters.Claude do
     resume_args ++ dir_arg
   end
 
-  defp session_file_exists?(dir, uuid) do
+  defp session_file_exists?(config_dir, dir, uuid) do
     project_name = dir |> String.replace("/", "-") |> String.replace(".", "-")
-    path = Path.expand("~/.claude/projects/#{project_name}/#{uuid}.jsonl")
+    path = Path.expand("#{config_dir}/projects/#{project_name}/#{uuid}.jsonl")
     File.exists?(path)
   end
 

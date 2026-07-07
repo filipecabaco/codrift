@@ -48,6 +48,8 @@ defmodule Codrift.AgentProcess do
     :conversation_started,
     :raw_line_buf,
     :session_uuid,
+    :profile,
+    profile_env: [],
     last_size: nil
   ]
 
@@ -90,6 +92,8 @@ defmodule Codrift.AgentProcess do
     initiative_id = Keyword.fetch!(opts, :initiative_id)
     dir = Keyword.fetch!(opts, :dir)
     adapter = Keyword.fetch!(opts, :adapter)
+    profile = Keyword.get(opts, :profile)
+    profile_env = Keyword.get(opts, :profile_env, [])
     mode = adapter.mode()
 
     if Process.whereis(Codrift.AgentRegistry) do
@@ -109,7 +113,9 @@ defmodule Codrift.AgentProcess do
       buffer_size: 0,
       subscribers: %{},
       conversation_started: false,
-      raw_line_buf: ""
+      raw_line_buf: "",
+      profile: profile,
+      profile_env: profile_env
     }
 
     # Generate or retrieve a stable session UUID before launching the process.
@@ -121,11 +127,22 @@ defmodule Codrift.AgentProcess do
       if adapter.session_persistable?(),
         do: ensure_session_id(id, initiative_id, dir, adapter)
 
-    context_opts = [session_id: session_id] ++ initiative_context_opts(initiative_id)
+    # A profile may relocate an adapter's config dir (e.g. CLAUDE_CONFIG_DIR);
+    # pass it so session-file detection resolves under the right root.
+    config_dir =
+      case List.keyfind(profile_env, "CLAUDE_CONFIG_DIR", 0) do
+        {_, dir} -> dir
+        nil -> nil
+      end
+
+    context_opts =
+      [session_id: session_id, config_dir: config_dir] ++ initiative_context_opts(initiative_id)
 
     case mode do
       :pty ->
-        env = dedup_env([{"TERM", "xterm-256color"} | adapter.env(dir)])
+        # Profile env comes last so it overrides adapter defaults (dedup keeps
+        # the last occurrence per key).
+        env = dedup_env([{"TERM", "xterm-256color"} | adapter.env(dir)] ++ profile_env)
         args = adapter.args(dir, context_opts)
 
         # erlexec requires args to be passed as [executable | args] list rather
@@ -146,7 +163,7 @@ defmodule Codrift.AgentProcess do
          }}
 
       :interactive ->
-        port = open_port(adapter, dir, adapter.args(dir, context_opts))
+        port = open_port(adapter, dir, adapter.args(dir, context_opts), profile_env)
         {:ok, %{base | port: port, status: :starting}}
 
       :once ->
@@ -198,7 +215,7 @@ defmodule Codrift.AgentProcess do
 
   def handle_cast({:input, text}, %{mode: :once} = state) do
     args = once_args(state.adapter, state.dir, state.conversation_started) ++ [text]
-    port = open_port(state.adapter, state.dir, args)
+    port = open_port(state.adapter, state.dir, args, state.profile_env)
     {:noreply, %{state | port: port, status: :running}}
   end
 
@@ -211,7 +228,8 @@ defmodule Codrift.AgentProcess do
        dir: state.dir,
        adapter: state.adapter,
        status: state.status,
-       mode: state.mode
+       mode: state.mode,
+       profile: state.profile
      }, state}
   end
 
@@ -432,11 +450,11 @@ defmodule Codrift.AgentProcess do
     base ++ if(files == [], do: [], else: [context_files: files])
   end
 
-  defp open_port(adapter, dir, args) do
+  defp open_port(adapter, dir, args, extra_env) do
     env =
-      Enum.map(adapter.env(dir), fn {k, v} ->
-        {String.to_charlist(k), String.to_charlist(v)}
-      end)
+      (adapter.env(dir) ++ extra_env)
+      |> dedup_env()
+      |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
 
     port_opts = [
       :use_stdio,

@@ -220,10 +220,24 @@ defmodule Codrift.MCP.Handler do
             "adapter" => %{
               "type" => "string",
               "enum" => ["claude", "codex", "opencode", "gemini", "copilot"]
+            },
+            "profile" => %{
+              "type" => "string",
+              "description" =>
+                "Optional launch profile name (from settings.json) — runs the " <>
+                  "adapter under that profile's config folder/account, e.g. " <>
+                  "\"claude-work\". See list_agent_profiles."
             }
           },
           "required" => ["initiative_id", "adapter"]
         }
+      },
+      %{
+        "name" => "list_agent_profiles",
+        "description" =>
+          "List configured launch profiles (name + base adapter). Pass a name as " <>
+            "`profile` to start_agent to run under that profile's config folder/account.",
+        "inputSchema" => %{"type" => "object", "properties" => %{}}
       },
       %{
         "name" => "send_to_agent",
@@ -350,21 +364,6 @@ defmodule Codrift.MCP.Handler do
         }
       },
       %{
-        "name" => "save_guided_token",
-        "description" =>
-          "Saves a manually-obtained integration token for a service that uses guided " <>
-            "token setup (e.g. Notion). Call this after showing the user the instructions " <>
-            "from start_oauth_flow and receiving the token they pasted.",
-        "inputSchema" => %{
-          "type" => "object",
-          "properties" => %{
-            "service" => %{"type" => "string"},
-            "token" => %{"type" => "string", "description" => "The integration token to save"}
-          },
-          "required" => ["service", "token"]
-        }
-      },
-      %{
         "name" => "get_oauth_status",
         "description" => "Returns which external services have active OAuth2 tokens stored.",
         "inputSchema" => %{"type" => "object", "properties" => %{}}
@@ -387,8 +386,7 @@ defmodule Codrift.MCP.Handler do
               "type" => "string",
               "description" =>
                 "Service-specific filter: GitHub/GitLab state (open/closed/all), " <>
-                  "Linear team key, Jira JQL query, Notion database ID, " <>
-                  "GitHub Projects owner/number (e.g. acme/5), Asana project GID"
+                  "Linear team key, GitHub Projects owner/number (e.g. acme/5)"
             }
           },
           "required" => ["service"]
@@ -412,8 +410,7 @@ defmodule Codrift.MCP.Handler do
               "description" =>
                 "Service-specific item identifier: " <>
                   "GitHub owner/repo#number, Linear ENG-123 or UUID, " <>
-                  "GitLab project#iid, Jira ENG-42, Notion page ID, " <>
-                  "Shortcut story ID, Asana task GID"
+                  "GitLab project#iid"
             },
             "dir" => %{
               "type" => "string",

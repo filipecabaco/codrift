@@ -7,10 +7,13 @@
     "windows": [
       {
         "title": "Codrift",
-        "width": 800,
         "fullscreen": false,
-        "height": 600,
-        "resizable": true
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true
       }
     ]
   },

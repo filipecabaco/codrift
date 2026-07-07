@@ -153,7 +153,7 @@ Callbacks: `name/0`, `list_items/1`, `get_item/2`, `to_initiative_context/1`
 
 `%Item{}` fields: `id`, `title`, `description`, `url`, `labels`, `status`, `assignee`, `linked_prs`
 
-Adapters: `GitHub`, `GitHubProjects`, `Linear`, `LinearProjects`, `GitLab`, `Jira`, `Notion`, `Shortcut`, `Asana`
+Adapters: `GitHub`, `GitHubProjects`, `Linear`, `LinearProjects`, `GitLab`
 
 ## Codrift.Integration.HTTP
 
@@ -175,9 +175,8 @@ Pure module. Manages OAuth2 token acquisition and storage for external integrati
 
 | Flow | Services | Description |
 |------|----------|-------------|
-| PKCE browser | Linear, GitLab, Jira | RFC 7636; `start_flow/1` returns `auth_url`; `handle_callback/3` exchanges code + verifier |
-| Device flow | GitHub | RFC 8628; `start_flow/1` returns `user_code` + `verification_uri`; `poll_device_auth/5` polls in a supervised Task |
-| Guided token | Notion, Shortcut, Asana | The app shows a URL + token input field |
+| PKCE browser | Linear, LinearProjects, GitLab | RFC 7636; `start_flow/1` returns `auth_url`; `handle_callback/3` exchanges code + verifier |
+| Device flow | GitHub, GitHubProjects | RFC 8628; `start_flow/1` returns `user_code` + `verification_uri`; `poll_device_auth/5` polls in a supervised Task |
 
 Tokens stored at `~/.codrift/oauth_tokens.json` (mode 0600).
 

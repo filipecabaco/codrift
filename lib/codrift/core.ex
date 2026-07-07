@@ -11,6 +11,7 @@ defmodule Codrift.Core do
   """
 
   alias Codrift.Config.Keybindings
+  alias Codrift.Config.Settings
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.OAuth.Config, as: OAuthConfig
 
@@ -83,10 +84,14 @@ defmodule Codrift.Core do
   end
 
   def call("start_agent", %{"initiative_id" => init_id, "adapter" => adapter} = params) do
-    module = adapter_module(adapter)
-
-    with {:ok, dir} <- resolve_agent_dir(init_id, Map.get(params, "dir")),
-         {:ok, pid} <- Codrift.AgentSupervisor.start_agent(init_id, dir, module) do
+    with {:ok, module, profile_env, profile_name} <-
+           resolve_launch(adapter, Map.get(params, "profile")),
+         {:ok, dir} <- resolve_agent_dir(init_id, Map.get(params, "dir")),
+         {:ok, pid} <-
+           Codrift.AgentSupervisor.start_agent(init_id, dir, module,
+             profile: profile_name,
+             profile_env: profile_env
+           ) do
       status =
         pid
         |> Codrift.AgentProcess.status()
@@ -97,6 +102,15 @@ defmodule Codrift.Core do
     else
       {:error, reason} -> {:error, inspect(reason)}
     end
+  end
+
+  def call("list_agent_profiles", _args) do
+    profiles =
+      Settings.profiles()
+      |> Enum.map(fn {name, p} -> %{name: name, adapter: Map.get(p, "adapter")} end)
+      |> Enum.sort_by(& &1.name)
+
+    {:ok, profiles}
   end
 
   def call("send_to_agent", %{"agent_id" => agent_id, "input" => input}) do
@@ -137,6 +151,16 @@ defmodule Codrift.Core do
       {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
       {:error, reason} -> {:error, inspect(reason)}
     end
+  end
+
+  # Backs the "add directory" fuzzy picker: given a partially-typed path
+  # (defaulting to `~`), returns the directory being browsed plus its child
+  # directory names so the UI can autocomplete. Read-only listing of the host
+  # filesystem — acceptable since this is a local desktop app and `add_dir`
+  # already accepts arbitrary absolute paths.
+  def call("list_dirs", args) do
+    path = Map.get(args, "path", "~")
+    {:ok, Codrift.Files.list_subdirs(path)}
   end
 
   def call("add_dir", %{"initiative_id" => id, "dir" => dir}) do
@@ -260,17 +284,6 @@ defmodule Codrift.Core do
            message: "Visit #{verification_uri} and enter code #{user_code}"
          }}
 
-      {:ok, %{flow: :guided_token, instructions: instructions}} ->
-        {:ok,
-         %{
-           flow: "guided_token",
-           service: service,
-           instructions: instructions,
-           message:
-             "Show these instructions to the user, ask them to paste the token, " <>
-               "then call save_guided_token once you have it."
-         }}
-
       {:error, reason} ->
         {:error, to_string(reason)}
     end
@@ -282,13 +295,6 @@ defmodule Codrift.Core do
       {:ok, %{opened: true, url: url}}
     else
       {:error, "refusing to open non-http(s) URL"}
-    end
-  end
-
-  def call("save_guided_token", %{"service" => service, "token" => token}) do
-    case Codrift.OAuth.save_guided_token(service, token) do
-      :ok -> {:ok, %{connected: true, service: service}}
-      {:error, reason} -> {:error, to_string(reason)}
     end
   end
 
@@ -568,6 +574,33 @@ defmodule Codrift.Core do
   defp adapter_module(name) do
     Codrift.Agent.module_from_name(name) || raise("unknown adapter: #{name}")
   end
+
+  # Resolves a launch into `{adapter_module, env_overrides, profile_name}`.
+  # Without a profile, the bare adapter runs with no extra env. With one, the
+  # profile's base adapter (falling back to the requested one) and its env
+  # overrides apply — `~`-prefixed values are expanded to absolute paths.
+  defp resolve_launch(adapter, profile) when profile in [nil, ""],
+    do: {:ok, adapter_module(adapter), [], nil}
+
+  defp resolve_launch(adapter, profile_name) do
+    case Settings.profile(profile_name) do
+      {:ok, profile} ->
+        base = Map.get(profile, "adapter", adapter)
+        {:ok, adapter_module(base), expand_env(Map.get(profile, "env", %{})), profile_name}
+
+      {:error, :not_found} ->
+        {:error, "unknown launch profile: #{profile_name}"}
+    end
+  end
+
+  defp expand_env(env) when is_map(env) do
+    Enum.map(env, fn {k, v} -> {to_string(k), expand_value(to_string(v))} end)
+  end
+
+  defp expand_env(_), do: []
+
+  defp expand_value("~" <> _ = v), do: Path.expand(v)
+  defp expand_value(v), do: v
 
   # A concrete directory runs the agent there. A blank/absent one means a
   # folderless ("scratch") initiative — fall back to its own context folder as

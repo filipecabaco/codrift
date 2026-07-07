@@ -27,6 +27,51 @@ defmodule Codrift.Files do
   end
 
   @doc """
+  Lists immediate subdirectories for path autocompletion in the "add directory"
+  picker.
+
+  Expands a leading `~` to the user's home, then decides which directory to
+  enumerate: the input itself when it already points at a directory (or ends
+  with a separator), otherwise its parent — so a partially-typed trailing
+  fragment (e.g. `~/Doc`) lists the parent and lets the caller fuzzy-match.
+
+  Returns `%{base: absolute_dir, entries: [child_dir_name]}` with entries sorted.
+  Hidden dotfolders are included so users can navigate into them. Unreadable or
+  nonexistent directories yield an empty `entries` list rather than an error.
+  """
+  @spec list_subdirs(String.t()) :: %{base: String.t(), entries: [String.t()]}
+  def list_subdirs(input) when is_binary(input) do
+    expanded = expand_home(input)
+
+    base =
+      cond do
+        String.ends_with?(expanded, "/") -> expanded
+        File.dir?(expanded) -> expanded
+        true -> Path.dirname(expanded)
+      end
+
+    entries =
+      case File.ls(base) do
+        {:ok, names} ->
+          names
+          |> Enum.filter(&File.dir?(Path.join(base, &1)))
+          |> Enum.sort()
+
+        {:error, _} ->
+          []
+      end
+
+    %{base: Path.expand(base), entries: entries}
+  end
+
+  # Elixir's Path.expand does not perform tilde expansion, so handle a leading
+  # `~` explicitly; everything else is returned untouched (the caller may still
+  # be mid-typing a relative fragment).
+  defp expand_home("~"), do: System.user_home!()
+  defp expand_home("~/" <> rest), do: Path.join(System.user_home!(), rest)
+  defp expand_home(other), do: other
+
+  @doc """
   Reads `path` only if it resolves inside one of `allowed_dirs`.
 
   Returns `{:ok, content}` or `{:error, reason}` where reason is `:forbidden`

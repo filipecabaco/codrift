@@ -37,8 +37,8 @@ defmodule Codrift.IntegrationTest do
       assert "github" in services
       assert "linear" in services
       assert "gitlab" in services
-      assert "jira" in services
-      assert "notion" in services
+      refute "jira" in services
+      refute "notion" in services
       refute "shortcut" in services
     end
   end

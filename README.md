@@ -20,7 +20,7 @@ Codrift is a Tauri app: a native window wrapping a Svelte UI, backed by an Elixi
 - **Tree view** — mode `3` shows a file-tree browser with syntax-highlighted previews and an in-app editor
 - **Shared memory** — FTS5 knowledge base per initiative; agents search it before starting, write to it when done
 - **MCP server** — Claude Code and other tools connect to Codrift and call its tools over SSE
-- **External integrations** — pull context from GitHub, Linear, GitLab, Jira, Notion, and more
+- **External integrations** — pull context from GitHub, Linear, and GitLab
 - **Session persistence** — Claude sessions survive restarts; agents resume where they left off
 - **Context folders** — each initiative has `~/.codrift/initiatives/{id}/` picked up automatically by `--add-dir`
 
@@ -99,7 +99,7 @@ While Codrift is running, an MCP server listens at `http://localhost:7437/mcp/ss
 | Initiatives | `list_initiatives`, `create_initiative`, `add_dir`, `delete_initiative`, `set_initiative_status`, `get_diff` |
 | Agents | `list_agents`, `start_agent`, `send_to_agent`, `get_agent_output` |
 | Memory | `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list` |
-| Integrations | `start_oauth_flow`, `save_guided_token`, `get_oauth_status`, `list_integration_items`, `import_from_integration`, `sync_initiative_context` |
+| Integrations | `start_oauth_flow`, `get_oauth_status`, `list_integration_items`, `import_from_integration`, `sync_initiative_context` |
 
 ---
 
@@ -146,7 +146,7 @@ All keys are configurable in `~/.codrift/keybindings.json`. See [docs/keyboard.m
 
 Pull issue context directly into an initiative from:
 
-**GitHub Issues · GitHub Projects · Linear Issues · Linear Projects · GitLab · Jira · Notion · Shortcut · Asana**
+**GitHub Issues · GitHub Projects · Linear Issues · Linear Projects · GitLab**
 
 ```bash
 codrift integration auth github       # OAuth2 browser flow
@@ -203,7 +203,7 @@ Also: the [command palette](docs/images/command-palette.png), [shared memory](do
 
 ## Documentation
 
-[Architecture](docs/architecture.md) · [Keyboard reference](docs/keyboard.md) · [Tree view](docs/tree-view.md) · [Diff mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md)
+[Architecture](docs/architecture.md) · [Keyboard reference](docs/keyboard.md) · [Tree view](docs/tree-view.md) · [Diff mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md) · [Agent profiles](docs/agent-profiles.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md)
 
 ---
 

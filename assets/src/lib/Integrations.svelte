@@ -3,7 +3,6 @@
   import {
     oauthStatus,
     startOAuthFlow,
-    saveGuidedToken,
     revokeOAuthToken,
     openUrl,
     SERVICE_META,
@@ -23,7 +22,6 @@
     | { service: string; flow: OAuthFlow; authUrl?: string; userCode?: string; verifyUri?: string }
     | null
   >(null);
-  let guided = $state<{ service: string; instructions: string; token: string } | null>(null);
   let flowError = $state<string | null>(null);
 
   let poll: ReturnType<typeof setInterval> | undefined;
@@ -102,28 +100,10 @@
           };
           startPolling(service);
           break;
-        case "guided_token":
-          guided = { service, instructions: res.instructions, token: "" };
-          busy = null;
-          break;
       }
     } catch (e) {
       flowError = (e as Error).message;
       busy = null;
-    }
-  }
-
-  async function saveToken() {
-    if (!guided) return;
-    const token = guided.token.trim();
-    if (!token) return;
-    flowError = null;
-    try {
-      await saveGuidedToken(guided.service, token);
-      guided = null;
-      await refresh();
-    } catch (e) {
-      flowError = (e as Error).message;
     }
   }
 
@@ -140,7 +120,6 @@
   function cancelFlow() {
     stopPolling();
     waiting = null;
-    guided = null;
     busy = null;
     flowError = null;
   }
@@ -148,7 +127,7 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
-      if (waiting || guided) cancelFlow();
+      if (waiting) cancelFlow();
       else onClose();
     }
   }
@@ -212,7 +191,7 @@
               {:else}
                 <button
                   class="rounded-md bg-accent/20 px-2.5 py-1 text-[11px] text-accent hover:bg-accent/30 disabled:opacity-50"
-                  disabled={busy === svc || !!waiting || !!guided}
+                  disabled={busy === svc || !!waiting}
                   onclick={() => connect(svc)}
                 >
                   {busy === svc ? "Starting…" : "Connect"}
@@ -251,32 +230,6 @@
                   <span class="text-[11px] text-muted">Waiting for authorization…</span>
                   <button class="ml-auto text-[11px] text-muted hover:text-fg" onclick={cancelFlow}>
                     Cancel
-                  </button>
-                </div>
-              </div>
-            {/if}
-
-            <!-- Guided token entry for THIS service -->
-            {#if guided?.service === svc}
-              <div class="mt-2 ml-[18px] rounded-md border border-border bg-canvas p-2.5">
-                <pre class="mb-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-muted">{guided.instructions}</pre>
-                <input
-                  bind:value={guided.token}
-                  onkeydown={(e) => e.key === "Enter" && saveToken()}
-                  placeholder="Paste your token"
-                  type="password"
-                  class="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-fg outline-none focus:border-accent"
-                />
-                <div class="mt-2 flex justify-end gap-2">
-                  <button class="rounded-md px-2.5 py-1 text-[11px] text-muted hover:text-fg" onclick={cancelFlow}>
-                    Cancel
-                  </button>
-                  <button
-                    class="rounded-md bg-accent/20 px-2.5 py-1 text-[11px] text-accent hover:bg-accent/30 disabled:opacity-50"
-                    disabled={!guided.token.trim()}
-                    onclick={saveToken}
-                  >
-                    Save token
                   </button>
                 </div>
               </div>

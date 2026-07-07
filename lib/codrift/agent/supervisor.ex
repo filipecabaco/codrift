@@ -28,13 +28,23 @@ defmodule Codrift.AgentSupervisor do
   Accepts keyword opts:
   - `:id` — reuse a specific agent ID (e.g. from `SessionStore` on restart); defaults to a new random ID
   - `:server` — supervisor to start the child under; defaults to `__MODULE__`
+  - `:profile` — the launch profile name this agent runs under, or `nil`
+  - `:profile_env` — `[{"KEY", "VALUE"}]` env overrides injected at spawn
   """
   def start_agent(initiative_id, dir, adapter, opts \\ []) do
     id = Keyword.get(opts, :id, Base.encode16(:crypto.strong_rand_bytes(8), case: :lower))
     server = Keyword.get(opts, :server, __MODULE__)
 
     spec =
-      {Codrift.AgentProcess, [id: id, initiative_id: initiative_id, dir: dir, adapter: adapter]}
+      {Codrift.AgentProcess,
+       [
+         id: id,
+         initiative_id: initiative_id,
+         dir: dir,
+         adapter: adapter,
+         profile: Keyword.get(opts, :profile),
+         profile_env: Keyword.get(opts, :profile_env, [])
+       ]}
 
     DynamicSupervisor.start_child(server, spec)
   end

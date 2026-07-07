@@ -2,7 +2,7 @@
 
 **Stack:** Elixir · Francis · ex_tauri · Svelte · xterm.js · Git · SQLite (Exqlite)
 
-**Docs:** [Architecture](docs/architecture.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md) · [Keyboard](docs/keyboard.md) · [Tree View](docs/tree-view.md) · [Diff Mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md)
+**Docs:** [Architecture](docs/architecture.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md) · [Keyboard](docs/keyboard.md) · [Tree View](docs/tree-view.md) · [Diff Mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md) · [Agent profiles](docs/agent-profiles.md)
 
 ---
 
@@ -16,4 +16,5 @@ directories. See the docs above for the current shape of each subsystem.
 - Ship Tauri bundles (`.dmg`/`.AppImage`) from CI on tagged releases.
 - Bundle OAuth `client_id`s into the release so integrations work without env vars.
 - Deploy the `codrift.sh` landing page (built in `website/`, Francis + Tailwind, with per-platform download links and product screenshots).
+- In-app manager for [agent launch profiles](docs/agent-profiles.md) (add/edit/delete) — currently file-defined in `settings.json`, selectable from the Launch dropdown.
 </content>

@@ -25,6 +25,25 @@ terminal — there, bare keys pass through to the field/PTY and only modifier co
 | `Ctrl+B` | Collapse / expand sidebar | `toggle_sidebar` |
 | `Ctrl+Q` | Quit (handled by the native window) | `quit` |
 
+## Panes & layout
+
+The content area can be split into two independent panes (one level deep). Each
+pane is its own viewport — its own initiative, agent, and view — and the sidebar
+drives whichever pane is focused (click a pane to focus it). These are
+window-management shortcuts, handled directly rather than through the remappable
+keymap, so they are fixed.
+
+| Key | Action |
+|-----|--------|
+| `⌘D` | Split the content area side by side (press again to collapse the split) |
+| `⌘⇧D` | Split the content area stacked top/bottom |
+| `⌘⌃=` | Balance the split back to 50/50 |
+| `Ctrl+B` | Collapse / expand the sidebar |
+
+Drag the divider between the two panes to resize them, and the divider on the
+sidebar's edge to resize the sidebar. When split, each pane shows a `✕` to close
+it (the other pane takes over the whole area).
+
 ## Initiatives & agents
 
 | Key | Action | Action id |

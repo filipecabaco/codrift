@@ -1,6 +1,6 @@
 # Integrations
 
-Codrift can pull context from GitHub (Issues & Projects), Linear (Issues & Projects), GitLab, Jira, and Notion directly into an initiative. Each service supports two auth paths:
+Codrift can pull context from GitHub (Issues & Projects), Linear (Issues & Projects), and GitLab directly into an initiative. Each service supports two auth paths:
 
 - **OAuth (recommended)** — handled inside the app. Tokens are stored at `~/.codrift/oauth_tokens.json` (mode 0600). No secret is ever stored in or shipped with the binary.
 - **Env var fallback** — for CI, headless environments, or personal tokens. Set the variables listed under each service and Codrift will use them automatically.
@@ -139,97 +139,6 @@ with `read_api` scope.
 
 ---
 
-## Jira — Cloud Issues
-
-**Auth flow:** PKCE (RFC 7636). Redirect to `localhost:7437`. After the token
-exchange, Codrift automatically fetches your Atlassian **cloud ID** and site URL
-from the accessible-resources API and stores them alongside the token. No manual
-configuration of `JIRA_HOST` is needed when using OAuth.
-
-### Register an OAuth 2.0 Integration
-
-1. Go to **developer.atlassian.com → My Apps**
-   → [Create](https://developer.atlassian.com/console/myapps/create)
-   → **OAuth 2.0 integration**
-2. Fill in:
-   - **App name:** `Codrift`
-3. Under **Authorization**:
-   - Click **Add** next to **OAuth 2.0 (3LO)**
-   - Set **Callback URL:** `http://localhost:7437/oauth/callback/jira`
-4. Under **Permissions**:
-   - Add **Jira API** → `read:jira-work`, `read:jira-user`
-   - Also add **User identity API** → `read:account` (required for user lookups)
-5. Under **Distribution** → set **Sharing** to **Sharing** so other users can
-   authorize. Leave it as **Restricted** if this is only for your own account.
-6. Under **Settings** → copy the **Client ID**. Do **not** copy the secret —
-   PKCE does not use it.
-
-> **Note:** Atlassian requires `offline_access` scope for refresh tokens. This
-> is already included in Codrift's scope list. Atlassian may prompt you to
-> consent to offline access during the first authorization.
-
-**Atlassian docs:**
-- [OAuth 2.0 apps (3LO)](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/)
-- [Accessible resources](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/#3--get-the-cloudid-for-your-site)
-
-### Configure
-
-```sh
-export JIRA_CLIENT_ID="your-atlassian-client-id"
-```
-
-### Env var fallback
-
-```sh
-export JIRA_HOST="mycompany.atlassian.net"
-export JIRA_EMAIL="you@mycompany.com"
-export JIRA_TOKEN="..."   # API token, not your password
-```
-
-Generate an API token at
-[id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
-
----
-
-## Notion — Pages and Databases
-
-**Auth flow:** Guided token. No OAuth app registration required. Notion issues a
-permanent integration token through their web UI.
-
-### Create an Internal Integration
-
-1. Go to [notion.so/profile/integrations](https://www.notion.so/profile/integrations)
-   → **New integration**
-2. Fill in:
-   - **Name:** `Codrift`
-   - **Associated workspace:** select your workspace
-   - **Type:** **Internal** (not public)
-3. Under **Capabilities**: ensure **Read content** is checked.
-4. Copy the **Internal Integration Secret** (starts with `secret_` or `ntn_`).
-
-**Share databases with your integration:**
-For each Notion database you want Codrift to access, open the database in Notion
-→ `...` menu → **Connections** → find your integration and click **Confirm**.
-
-**Notion docs:**
-- [Create an integration](https://developers.notion.com/docs/create-a-notion-integration)
-- [Authorizing integrations](https://developers.notion.com/docs/authorization)
-
-### Configure
-
-In the app: open **Integrations** from the header → **Connect** next to
-**Notion** → follow the prompts to paste your token. No env var needed for
-interactive use.
-
-### Env var fallback
-
-```sh
-export NOTION_API_KEY="secret_..."
-export NOTION_DATABASE_ID="32-char-database-id"   # default database for list_items
-```
-
----
-
 ## Summary table
 
 | Service | Flow | Env var: client | Env var: fallback token |
@@ -239,8 +148,6 @@ export NOTION_DATABASE_ID="32-char-database-id"   # default database for list_it
 | Linear Issues | PKCE | `LINEAR_CLIENT_ID` | `LINEAR_API_KEY` |
 | Linear Projects | PKCE | `LINEAR_CLIENT_ID` | `LINEAR_API_KEY` |
 | GitLab Issues | PKCE | `GITLAB_CLIENT_ID` | `GITLAB_TOKEN` |
-| Jira Cloud | PKCE + cloudId | `JIRA_CLIENT_ID` | `JIRA_HOST` + `JIRA_EMAIL` + `JIRA_TOKEN` |
-| Notion | Guided token | — | `NOTION_API_KEY` |
 
 ---
 

@@ -1,6 +1,13 @@
 <script lang="ts">
   import { marked } from "marked";
-  import { rpc, ADAPTERS, type Initiative, type Agent } from "$lib/api";
+  import {
+    rpc,
+    ADAPTERS,
+    listAgentProfiles,
+    type Initiative,
+    type Agent,
+    type AgentProfile,
+  } from "$lib/api";
   import MemoryView from "$lib/MemoryView.svelte";
 
   let {
@@ -15,10 +22,25 @@
     onChanged: () => void;
   } = $props();
 
-  let adapter = $state<(typeof ADAPTERS)[number]>("claude");
+  // The selected launch choice: either a base adapter name or a profile name.
+  let choice = $state<string>("claude");
+  let profiles = $state<AgentProfile[]>([]);
   let starting = $state<string | null>(null);
   let addingScratch = $state(false);
   let error = $state<string | null>(null);
+
+  $effect(() => {
+    listAgentProfiles()
+      .then((p) => (profiles = p))
+      .catch(() => (profiles = []));
+  });
+
+  // Resolve the selected choice into start_agent params: a profile passes its
+  // base adapter plus its name; a bare adapter passes just itself.
+  function launchParams(): { adapter: string; profile?: string } {
+    const p = profiles.find((x) => x.name === choice);
+    return p ? { adapter: p.adapter ?? "claude", profile: p.name } : { adapter: choice };
+  }
 
   const dirLabel = (path: string) =>
     path === initiative.context_path ? "scratch" : (path.split("/").pop() ?? path);
@@ -46,7 +68,7 @@
     starting = dir;
     error = null;
     try {
-      await rpc("start_agent", { initiative_id: initiative.id, dir, adapter });
+      await rpc("start_agent", { initiative_id: initiative.id, dir, ...launchParams() });
       onChanged();
     } catch (e) {
       error = (e as Error).message;
@@ -122,12 +144,19 @@
         <label class="text-[11px] text-muted" for="adapter">Launch</label>
         <select
           id="adapter"
-          bind:value={adapter}
+          bind:value={choice}
           class="rounded-md border border-border bg-canvas px-2 py-1 text-xs text-fg"
         >
           {#each ADAPTERS as a}
             <option value={a}>{a}</option>
           {/each}
+          {#if profiles.length}
+            <optgroup label="Profiles">
+              {#each profiles as p (p.name)}
+                <option value={p.name}>{p.name}</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
       </div>
     </div>
@@ -147,7 +176,7 @@
             disabled={starting === dir.path}
             onclick={() => start(dir.path)}
           >
-            {starting === dir.path ? "starting…" : `start ${adapter}`}
+            {starting === dir.path ? "starting…" : `start ${choice}`}
           </button>
         </div>
       {:else}

@@ -1,7 +1,7 @@
 defmodule Codrift.Integration do
   @moduledoc """
   External integration layer for seeding Codrift initiatives from project
-  management services (GitHub, Linear, GitLab, Jira, Notion, Shortcut).
+  management services (GitHub, Linear, GitLab).
 
   ## Design principles
 
@@ -64,9 +64,7 @@ defmodule Codrift.Integration do
     Codrift.Integration.Adapters.GitHubProjects,
     Codrift.Integration.Adapters.Linear,
     Codrift.Integration.Adapters.LinearProjects,
-    Codrift.Integration.Adapters.GitLab,
-    Codrift.Integration.Adapters.Jira,
-    Codrift.Integration.Adapters.Notion
+    Codrift.Integration.Adapters.GitLab
   ]
 
   alias Codrift.Initiative.Store
@@ -147,8 +145,8 @@ defmodule Codrift.Integration do
   @doc """
   Maps a service-specific status string to a Codrift initiative status atom.
 
-  Covers the most common status names across GitHub, Linear, GitLab, Jira,
-  Notion, Shortcut, and GitHub Projects. Unknown values default to `:ongoing`.
+  Covers the most common status names across GitHub, Linear, GitLab, and
+  GitHub Projects. Unknown values default to `:ongoing`.
   """
   @spec map_item_status(String.t() | nil) :: Codrift.Initiative.status()
   def map_item_status(status) do

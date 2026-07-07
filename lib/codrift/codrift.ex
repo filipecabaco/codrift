@@ -320,14 +320,6 @@ defmodule Codrift do
           "message" => "Visit #{verification_uri} and enter code #{user_code}"
         }
 
-      {:ok, %{flow: :guided_token, instructions: instructions}} ->
-        %{
-          "flow" => "guided_token",
-          "service" => service,
-          "instructions" => instructions,
-          "message" => "Follow the instructions to create an integration token"
-        }
-
       {:error, reason} ->
         json(conn, 400, %{"error" => to_string(reason)})
     end

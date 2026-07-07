@@ -237,35 +237,10 @@ defmodule Codrift.Web.E2ETest do
 
     test "get_oauth_status lists every supported service" do
       %{"services" => services} = ok!("get_oauth_status")
-      assert Map.has_key?(services, "github")
-      assert Map.has_key?(services, "notion")
-      assert %{"connected" => false} = services["notion"]
-    end
-  end
-
-  # ── OAuth guided-token round trip (writes the sandbox token file) ────────────
-
-  describe "oauth guided token" do
-    test "save_guided_token → connected → revoke round trip for notion" do
-      # notion uses the guided_token flow; token must carry a recognised prefix.
-      assert %{"connected" => true, "service" => "notion"} =
-               ok!("save_guided_token", %{
-                 "service" => "notion",
-                 "token" => "secret_e2e_test_token"
-               })
-
-      %{"services" => services} = ok!("get_oauth_status")
-      assert %{"connected" => true} = services["notion"]
-
-      assert %{"connected" => false} = ok!("revoke_oauth_token", %{"service" => "notion"})
-      %{"services" => after_revoke} = ok!("get_oauth_status")
-      assert %{"connected" => false} = after_revoke["notion"]
-    end
-
-    test "start_oauth_flow returns guided instructions for notion" do
-      result = ok!("start_oauth_flow", %{"service" => "notion"})
-      assert result["flow"] == "guided_token"
-      assert is_binary(result["instructions"])
+      assert %{"connected" => false, "flow" => "device_flow"} = services["github"]
+      assert %{"connected" => false, "flow" => "pkce_browser"} = services["gitlab"]
+      refute Map.has_key?(services, "notion")
+      refute Map.has_key?(services, "jira")
     end
   end
 
