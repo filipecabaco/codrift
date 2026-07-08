@@ -163,8 +163,10 @@ defmodule Codrift.Updater do
         :ok
       else
         File.rm(tmp_path)
-        {:error, "checksum mismatch for #{Path.basename(tmp_path)}: " <>
-          "expected #{expected}, got #{actual}"}
+
+        {:error,
+         "checksum mismatch for #{Path.basename(tmp_path)}: " <>
+           "expected #{expected}, got #{actual}"}
       end
     else
       {:ok, %{status: s}} -> {:error, "checksum file unavailable (status #{s}): #{url}"}

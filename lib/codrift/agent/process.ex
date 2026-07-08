@@ -407,7 +407,10 @@ defmodule Codrift.AgentProcess do
         fd
 
       {:error, reason} ->
-        Logger.warning("Agent #{agent_id}: cannot open transcript log #{path}: #{inspect(reason)}")
+        Logger.warning(
+          "Agent #{agent_id}: cannot open transcript log #{path}: #{inspect(reason)}"
+        )
+
         nil
     end
   rescue
