@@ -39,11 +39,14 @@ defmodule Codrift.CLI.MCP do
   defp install(args) do
     port = parse_port(args)
     sse_url = "http://localhost:#{port}/mcp/sse"
+    # State-changing MCP calls must authenticate to the local server (see
+    # Codrift.Plugs.LocalGuard); registrations embed the stable local token.
+    token = Codrift.AuthToken.fetch()
 
     results = [
-      install_claude(sse_url),
-      install_gemini(port, sse_url),
-      install_opencode(port, sse_url),
+      install_claude(sse_url, token),
+      install_gemini(port, sse_url, token),
+      install_opencode(port, sse_url, token),
       install_codex(sse_url),
       install_copilot(sse_url)
     ]
@@ -55,13 +58,16 @@ defmodule Codrift.CLI.MCP do
       Point any MCP-compatible client at the SSE endpoint:
 
           #{sse_url}
+
+      and send the token from ~/.codrift/auth-token as an `X-Codrift-Token`
+      header on requests.
       """)
     end
   end
 
   # ── Per-client installers ────────────────────────────────────────────────────
 
-  defp install_claude(sse_url) do
+  defp install_claude(sse_url, token) do
     case System.find_executable("claude") do
       nil ->
         :skip
@@ -69,7 +75,18 @@ defmodule Codrift.CLI.MCP do
       _bin ->
         IO.puts("Claude Code: registering via `claude mcp add`...")
 
-        case System.cmd("claude", ["mcp", "add", @server_name, "--transport", "sse", sse_url],
+        case System.cmd(
+               "claude",
+               [
+                 "mcp",
+                 "add",
+                 @server_name,
+                 "--transport",
+                 "sse",
+                 sse_url,
+                 "--header",
+                 "X-Codrift-Token: #{token}"
+               ],
                stderr_to_stdout: true
              ) do
           {output, 0} ->
@@ -84,7 +101,7 @@ defmodule Codrift.CLI.MCP do
     end
   end
 
-  defp install_gemini(_port, sse_url) do
+  defp install_gemini(_port, sse_url, token) do
     case System.find_executable("gemini") do
       nil ->
         :skip
@@ -101,7 +118,8 @@ defmodule Codrift.CLI.MCP do
 
         mcp_entry = %{
           "type" => "sse",
-          "url" => sse_url
+          "url" => sse_url,
+          "headers" => %{"X-Codrift-Token" => token}
         }
 
         updated =
@@ -123,7 +141,7 @@ defmodule Codrift.CLI.MCP do
     end
   end
 
-  defp install_opencode(_port, sse_url) do
+  defp install_opencode(_port, sse_url, token) do
     case System.find_executable("opencode") do
       nil ->
         :skip
@@ -143,7 +161,8 @@ defmodule Codrift.CLI.MCP do
 
         mcp_entry = %{
           "type" => "sse",
-          "url" => sse_url
+          "url" => sse_url,
+          "headers" => %{"X-Codrift-Token" => token}
         }
 
         updated =

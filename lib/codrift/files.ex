@@ -74,34 +74,95 @@ defmodule Codrift.Files do
   @doc """
   Reads `path` only if it resolves inside one of `allowed_dirs`.
 
+  Symlinks are fully resolved before the containment check (see `realpath/1`),
+  so a link inside an allowed directory pointing outside it cannot be used to
+  read arbitrary host files.
+
   Returns `{:ok, content}` or `{:error, reason}` where reason is `:forbidden`
   (outside the allowed roots), `:too_large`, `:not_a_file`, or a posix error.
   """
   @spec read_within([String.t()], String.t()) :: {:ok, binary()} | {:error, atom()}
   def read_within(allowed_dirs, path) do
-    abs = Path.expand(path)
-
-    if Enum.any?(allowed_dirs, &inside?(abs, &1)) do
-      read_regular(abs)
-    else
-      {:error, :forbidden}
+    case resolve_within(allowed_dirs, path) do
+      {:ok, abs} -> read_regular(abs)
+      :error -> {:error, :forbidden}
     end
   end
 
   @doc """
   Writes `content` to `path` only if it resolves inside one of `allowed_dirs`.
 
+  Symlinks are fully resolved before the containment check, so a link inside
+  an allowed directory pointing outside it cannot be used to overwrite
+  arbitrary host files.
+
   Creates the file if absent (within an allowed root) or overwrites it. Returns
   `:ok` or `{:error, :forbidden | :not_a_file | posix}`.
   """
   @spec write_within([String.t()], String.t(), binary()) :: :ok | {:error, atom()}
   def write_within(allowed_dirs, path, content) when is_binary(content) do
-    abs = Path.expand(path)
+    case resolve_within(allowed_dirs, path) do
+      :error -> {:error, :forbidden}
+      {:ok, abs} -> if File.dir?(abs), do: {:error, :not_a_file}, else: File.write(abs, content)
+    end
+  end
 
-    cond do
-      not Enum.any?(allowed_dirs, &inside?(abs, &1)) -> {:error, :forbidden}
-      File.dir?(abs) -> {:error, :not_a_file}
-      true -> File.write(abs, content)
+  # Resolves `path` (following every symlink) and returns `{:ok, real_path}`
+  # when it lands inside one of the (equally resolved) allowed roots. Both
+  # sides are resolved so roots that live behind symlinks themselves — e.g.
+  # /tmp on macOS — still contain their own files.
+  defp resolve_within(allowed_dirs, path) do
+    with {:ok, abs} <- realpath(path),
+         true <- Enum.any?(allowed_dirs, &resolved_root_contains?(&1, abs)) do
+      {:ok, abs}
+    else
+      _ -> :error
+    end
+  end
+
+  defp resolved_root_contains?(dir, abs) do
+    case realpath(dir) do
+      {:ok, base} -> inside?(abs, base)
+      _ -> false
+    end
+  end
+
+  @max_symlink_hops 40
+
+  @doc """
+  Resolves every symlink in `path`, like `realpath(3)` — but trailing
+  components that do not exist yet are kept (so a target file may be created
+  afterwards). Returns `{:error, :eloop}` when symlink resolution does not
+  terminate within #{@max_symlink_hops} hops.
+  """
+  @spec realpath(String.t()) :: {:ok, String.t()} | {:error, :eloop}
+  def realpath(path) do
+    path |> Path.expand() |> Path.split() |> do_realpath("/", @max_symlink_hops)
+  end
+
+  defp do_realpath(_comps, _acc, hops) when hops < 0, do: {:error, :eloop}
+  defp do_realpath([], acc, _hops), do: {:ok, acc}
+  defp do_realpath(["/" | rest], _acc, hops), do: do_realpath(rest, "/", hops)
+  defp do_realpath(["." | rest], acc, hops), do: do_realpath(rest, acc, hops)
+  defp do_realpath([".." | rest], acc, hops), do: do_realpath(rest, Path.dirname(acc), hops)
+
+  defp do_realpath([comp | rest], acc, hops) do
+    candidate = Path.join(acc, comp)
+
+    case :file.read_link(candidate) do
+      {:ok, target} ->
+        # Splice the link target's components in and keep resolving — the
+        # target may itself contain symlinks, `..`, or point at another link.
+        target = IO.chardata_to_string(target)
+
+        case Path.type(target) do
+          :absolute -> do_realpath(Path.split(target) ++ rest, "/", hops - 1)
+          _ -> do_realpath(Path.split(target) ++ rest, acc, hops - 1)
+        end
+
+      {:error, _} ->
+        # Not a symlink (regular file/dir, or does not exist yet).
+        do_realpath(rest, candidate, hops)
     end
   end
 

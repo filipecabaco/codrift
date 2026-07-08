@@ -80,19 +80,65 @@ defmodule Codrift.Web.LocalGuardTest do
       assert conn.status == 403
     end
 
-    test "allows a request with no Origin (MCP client / OAuth redirect)" do
-      # No Origin header — e.g. the MCP client POSTing, or the OAuth provider's
-      # top-level redirect back to /oauth/callback.
+    test "allows a GET with no Origin (OAuth redirect, SSE, health)" do
+      # Top-level navigations and non-browser reads carry no Origin; reads
+      # stay open because responses are unreadable cross-origin anyway.
+      assert %{status: 200} = call(conn(:get, "http://localhost/api/health"))
+    end
+  end
+
+  describe "auth token on state-changing requests" do
+    defp mcp_post do
+      conn(
+        :post,
+        "http://localhost/mcp",
+        Jason.encode!(%{"jsonrpc" => "2.0", "method" => "tools/list", "id" => 1})
+      )
+      |> put_req_header("content-type", "application/json")
+    end
+
+    test "rejects a POST with neither Origin nor token (deny-by-default)" do
+      conn = call(mcp_post())
+
+      assert conn.status == 403
+      assert conn.resp_body =~ "missing auth"
+    end
+
+    test "allows a POST with the local token in X-Codrift-Token" do
       conn =
-        conn(
-          :post,
-          "http://localhost/mcp",
-          Jason.encode!(%{"jsonrpc" => "2.0", "method" => "tools/list", "id" => 1})
-        )
-        |> put_req_header("content-type", "application/json")
+        mcp_post()
+        |> put_req_header("x-codrift-token", Codrift.AuthToken.fetch())
         |> call()
 
       assert conn.status == 200
+    end
+
+    test "allows a POST with the local token as a Bearer authorization" do
+      conn =
+        mcp_post()
+        |> put_req_header("authorization", "Bearer #{Codrift.AuthToken.fetch()}")
+        |> call()
+
+      assert conn.status == 200
+    end
+
+    test "rejects a POST with a wrong token" do
+      conn =
+        mcp_post()
+        |> put_req_header("x-codrift-token", "not-the-token-000000000000000000")
+        |> call()
+
+      assert conn.status == 403
+    end
+
+    test "rejects a WebSocket upgrade with neither Origin nor token" do
+      conn =
+        conn(:get, "http://localhost/ws/agent/some-id")
+        |> put_req_header("upgrade", "websocket")
+        |> put_req_header("connection", "upgrade")
+        |> call()
+
+      assert conn.status == 403
     end
   end
 end
