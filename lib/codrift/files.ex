@@ -105,6 +105,19 @@ defmodule Codrift.Files do
     end
   end
 
+  @doc """
+  Writes `content` to `path` atomically: writes to a temp file next to the
+  target, then renames over it. A crash mid-write leaves the previous file
+  intact instead of a truncated one. Creates parent directories as needed.
+  """
+  @spec write_atomic!(String.t(), iodata()) :: :ok
+  def write_atomic!(path, content) do
+    path |> Path.dirname() |> File.mkdir_p!()
+    tmp = path <> ".tmp"
+    File.write!(tmp, content)
+    File.rename!(tmp, path)
+  end
+
   defp read_regular(abs) do
     case File.stat(abs) do
       {:ok, %{type: :regular, size: size}} when size <= @max_preview_bytes -> File.read(abs)

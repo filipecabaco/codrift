@@ -275,6 +275,53 @@ defmodule Codrift.Initiative.StoreTest do
       assert {:ok, content} = File.read(path)
       assert {:ok, %{"initiatives" => _}} = JSON.decode(content)
     end
+
+    test "leaves no temp file behind after persisting", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "initiatives.json")
+      store = start_store(tmp_dir)
+      Store.create("Atomic", [], store)
+
+      assert File.exists?(path)
+      refute File.exists?(path <> ".tmp")
+    end
+
+    test "backs up a corrupt file and starts empty", %{tmp_dir: tmp_dir} do
+      opts = store_opts(tmp_dir)
+      path = opts[:path]
+      File.write!(path, "{truncated")
+
+      store = start_supervised!({Store, opts})
+
+      assert [] = Store.list(store)
+      assert File.read!(path <> ".corrupt") == "{truncated"
+    end
+
+    test "does not prune context dirs when the file is corrupt", %{tmp_dir: tmp_dir} do
+      opts = store_opts(tmp_dir)
+      orphan = Path.join(opts[:context_dir_base], "would-be-orphan")
+      File.mkdir_p!(orphan)
+      File.write!(opts[:path], "not json at all")
+
+      start_supervised!({Store, opts})
+
+      assert File.dir?(orphan)
+    end
+
+    test "prunes orphaned context dirs when the file loads cleanly", %{tmp_dir: tmp_dir} do
+      opts = store_opts(tmp_dir)
+      orphan = Path.join(opts[:context_dir_base], "stale-initiative-id")
+      File.mkdir_p!(orphan)
+
+      store = start_supervised!({Store, opts}, id: :store1)
+      Store.create("Real", [], store)
+      stop_supervised!(:store1)
+
+      orphan2 = Path.join(opts[:context_dir_base], "stale-initiative-id")
+      File.mkdir_p!(orphan2)
+      start_supervised!({Store, opts}, id: :store2)
+
+      refute File.dir?(orphan2)
+    end
   end
 
   describe "set_worktree_default/3" do
