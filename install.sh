@@ -38,7 +38,29 @@ asset_url() {
     | grep '"browser_download_url"' \
     | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/' \
     | grep -iE "$1" \
+    | grep -v '\.sha256$' \
     | head -1
+}
+
+# Verify a downloaded file against the `.sha256` asset published next to it.
+# $1 = asset URL, $2 = local file path. Aborts the install on mismatch or
+# when the release carries no checksum for the asset.
+verify_sha() {
+  SUM_EXPECTED="$(curl -fsSL "$1.sha256" 2>/dev/null | awk '{print $1}')"
+  if [ -z "${SUM_EXPECTED}" ]; then
+    printf 'error: no .sha256 checksum published for %s\n' "$1" >&2
+    exit 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    SUM_ACTUAL="$(sha256sum "$2" | awk '{print $1}')"
+  else
+    SUM_ACTUAL="$(shasum -a 256 "$2" | awk '{print $1}')"
+  fi
+  if [ "${SUM_EXPECTED}" != "${SUM_ACTUAL}" ]; then
+    printf 'error: checksum mismatch for %s\n  expected %s\n  got      %s\n' \
+      "$2" "${SUM_EXPECTED}" "${SUM_ACTUAL}" >&2
+    exit 1
+  fi
 }
 
 # ── Install the desktop app ──────────────────────────────────────────────────
@@ -55,6 +77,7 @@ case "${OS}" in
     TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT INT TERM
     printf 'Downloading %s\n' "${URL}"
     curl -fsSL --progress-bar "${URL}" -o "${TMP}/codrift.dmg"
+    verify_sha "${URL}" "${TMP}/codrift.dmg"
 
     MNT="${TMP}/mnt"; mkdir -p "${MNT}"
     hdiutil attach "${TMP}/codrift.dmg" -nobrowse -quiet -mountpoint "${MNT}"
@@ -76,8 +99,11 @@ case "${OS}" in
 
     APP_DIR="${HOME}/.local/bin"
     mkdir -p "${APP_DIR}"
+    TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT INT TERM
     printf 'Downloading %s\n' "${URL}"
-    curl -fsSL --progress-bar "${URL}" -o "${APP_DIR}/codrift-app"
+    curl -fsSL --progress-bar "${URL}" -o "${TMP}/codrift-app"
+    verify_sha "${URL}" "${TMP}/codrift-app"
+    mv "${TMP}/codrift-app" "${APP_DIR}/codrift-app"
     chmod +x "${APP_DIR}/codrift-app"
     printf 'Codrift app installed to %s/codrift-app\n' "${APP_DIR}"
     ;;
@@ -103,6 +129,7 @@ install_cli() {
 
   printf '\nInstalling codrift CLI...\n'
   curl -fsSL --progress-bar "${CLI_URL}" -o "${CTMP}/codrift-cli.tar.gz"
+  verify_sha "${CLI_URL}" "${CTMP}/codrift-cli.tar.gz"
   rm -rf "${CLI_DIR}"; mkdir -p "${CLI_DIR}" "${BIN_DIR}"
   # The mix release :tar step does not wrap files in a top-level directory, so
   # extract straight into CLI_DIR (bin/, lib/, erts-*, releases/ at the root).

@@ -183,7 +183,12 @@ defmodule Codrift do
         %{"output" => Enum.map(Codrift.AgentProcess.recent_output(pid, n), &Base.encode64/1)}
 
       {:error, :not_found} ->
-        json(conn, 404, %{"error" => "agent not found"})
+        # No live process — fall back to the durable transcript log so the
+        # scrollback of stopped/crashed agents survives restarts.
+        case Codrift.AgentLogs.tail(conn.params["id"]) do
+          {:ok, data} -> %{"output" => [Base.encode64(data)], "source" => "log"}
+          {:error, :not_found} -> json(conn, 404, %{"error" => "agent not found"})
+        end
     end
   end)
 

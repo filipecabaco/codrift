@@ -196,10 +196,8 @@ defmodule Codrift.CLI.Integration do
   end
 
   defp persist(initiative) do
-    path = initiatives_file()
     data = Map.put(load_raw(), initiative.id, Initiative.to_map(initiative))
-    path |> Path.dirname() |> File.mkdir_p!()
-    File.write!(path, JSON.encode!(%{"initiatives" => data}))
+    Codrift.Files.write_atomic!(initiatives_file(), JSON.encode!(%{"initiatives" => data}))
   end
 
   defp load_raw do

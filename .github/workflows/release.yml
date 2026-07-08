@@ -104,6 +104,17 @@ jobs:
           mv _build/prod/codrift-*.tar.gz \
              "codrift-cli-${VERSION}-${{ matrix.cli_suffix }}.tar.gz"
 
+      # Emit `<asset>.sha256` next to every published asset. install.sh and
+      # Codrift.Updater verify downloads against these before installing.
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          for f in src-tauri/target/${{ matrix.target }}/release/bundle/**/*.{dmg,AppImage,deb} \
+                   codrift-cli-*.tar.gz; do
+            (cd "$(dirname "$f")" && shasum -a 256 "$(basename "$f")" > "$(basename "$f").sha256")
+          done
+
       # ── Publish ──────────────────────────────────────────────────────────────
       - name: Upload artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -112,5 +123,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sha256
             codrift-cli-*.tar.gz
+            codrift-cli-*.tar.gz.sha256
           generate_release_notes: true

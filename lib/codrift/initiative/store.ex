@@ -118,7 +118,7 @@ defmodule Codrift.Initiative.Store do
     default_path = Path.join(Codrift.Paths.config_dir(), "initiatives.json")
     path = Path.expand(Keyword.get(opts, :path, default_path))
     ctx_base = Path.expand(Keyword.get(opts, :context_dir_base, Codrift.Paths.initiatives_base()))
-    initiatives = load(path)
+    {initiatives, intact?} = load(path)
     # Ensure context dirs, CLAUDE.md symlinks, and git repos exist for all
     # previously-created initiatives (backfills anything created before these
     # features were added, and recreates dirs that were accidentally deleted).
@@ -130,7 +130,11 @@ defmodule Codrift.Initiative.Store do
       write_orchestration_md(ctx, initiative)
     end)
 
-    clean_orphaned_context_dirs(initiatives, ctx_base)
+    # Prune only when the file loaded cleanly. After a failed or partial load
+    # the missing initiatives are a symptom of the unreadable file, not of
+    # deletion — pruning would destroy their context dirs (memory DBs,
+    # worktrees) based on corrupt input.
+    if intact?, do: clean_orphaned_context_dirs(initiatives, ctx_base)
 
     {:ok, %{initiatives: initiatives, path: path, context_dir_base: ctx_base}}
   end
@@ -353,6 +357,10 @@ defmodule Codrift.Initiative.Store do
     unless File.dir?(Path.join(path, ".git")) do
       System.cmd("git", ["init"], cd: path, stderr_to_stdout: true)
     end
+
+    # Keep agent transcript logs out of the context repo's diff/status.
+    gitignore = Path.join(path, ".gitignore")
+    unless File.exists?(gitignore), do: File.write!(gitignore, ".agent-logs/\n")
   end
 
   defp safe_rm_context_dir!(path, base) do
@@ -624,34 +632,63 @@ defmodule Codrift.Initiative.Store do
     "<!-- codrift:dirs:start -->\n## Directories\n\n#{body}\n<!-- codrift:dirs:end -->"
   end
 
+  # Atomic write: a crash or power loss mid-write leaves the previous
+  # initiatives.json intact instead of a truncated file that would load as
+  # "no initiatives".
   defp persist(%{initiatives: initiatives, path: path}) do
     data = Map.new(initiatives, fn {id, i} -> {id, Initiative.to_map(i)} end)
-    json = JSON.encode!(%{"initiatives" => data})
-    path |> Path.dirname() |> File.mkdir_p!()
-    File.write!(path, json)
+    Codrift.Files.write_atomic!(path, JSON.encode!(%{"initiatives" => data}))
   end
 
+  # Returns `{initiatives, intact?}`. `intact?` is false when the file existed
+  # but could not be fully loaded — the caller must then treat absent entries
+  # as unknown rather than deleted (see the orphan-pruning guard in init/1).
   defp load(path) do
-    with true <- File.exists?(path),
-         {:ok, content} <- File.read(path),
-         {:ok, %{"initiatives" => raw}} <- JSON.decode(content) do
-      raw
-      |> Enum.flat_map(&parse_raw_initiative/1)
-      |> Map.new()
-    else
-      false ->
-        %{}
+    case File.read(path) do
+      {:error, :enoent} ->
+        {%{}, true}
 
       {:error, reason} ->
-        Logger.error("Codrift.Initiative.Store: failed to load #{path}: #{inspect(reason)}")
-        %{}
+        Logger.error("Codrift.Initiative.Store: failed to read #{path}: #{inspect(reason)}")
+        {%{}, false}
+
+      {:ok, content} ->
+        parse_loaded(path, content)
+    end
+  end
+
+  defp parse_loaded(path, content) do
+    case JSON.decode(content) do
+      {:ok, %{"initiatives" => raw}} when is_map(raw) ->
+        parsed = raw |> Enum.flat_map(&parse_raw_initiative/1) |> Map.new()
+        {parsed, map_size(parsed) == map_size(raw)}
 
       {:ok, _} ->
         Logger.error(
-          "Codrift.Initiative.Store: #{path} has unexpected structure — starting empty"
+          "Codrift.Initiative.Store: #{path} has unexpected structure — " <>
+            "starting empty (backup at #{backup_corrupt(path)})"
         )
 
-        %{}
+        {%{}, false}
+
+      {:error, reason} ->
+        Logger.error(
+          "Codrift.Initiative.Store: failed to decode #{path}: #{inspect(reason)} — " <>
+            "starting empty (backup at #{backup_corrupt(path)})"
+        )
+
+        {%{}, false}
+    end
+  end
+
+  # Preserves an unreadable initiatives.json before the next persist/1
+  # overwrites it, so the user can recover initiatives by hand.
+  defp backup_corrupt(path) do
+    backup = path <> ".corrupt"
+
+    case File.cp(path, backup) do
+      :ok -> backup
+      {:error, reason} -> "<backup failed: #{inspect(reason)}>"
     end
   end
 

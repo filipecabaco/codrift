@@ -219,10 +219,8 @@ defmodule Codrift.CLI.Initiative do
   end
 
   defp persist(initiatives_map) do
-    path = initiatives_path()
-    path |> Path.dirname() |> File.mkdir_p!()
     data = Map.new(initiatives_map, fn {id, i} -> {id, Initiative.to_map(i)} end)
-    File.write!(path, JSON.encode!(%{"initiatives" => data}))
+    Codrift.Files.write_atomic!(initiatives_path(), JSON.encode!(%{"initiatives" => data}))
   end
 
   defp context_path(id), do: Paths.initiative_dir(id)
