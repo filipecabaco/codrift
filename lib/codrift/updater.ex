@@ -81,15 +81,35 @@ defmodule Codrift.Updater do
   Downloads and installs the given version for the current platform.
   Replaces `~/.local/share/codrift` in-place. The `~/.local/bin/codrift`
   symlink remains valid since it already points to that directory.
+
+  The tarball's SHA-256 is verified against the `.sha256` asset published
+  next to it before anything is extracted.
   """
   @spec install(version) :: :ok | {:error, String.t()}
   def install(version) do
     with {:ok, target} <- detect_target(),
          {:ok, tmp_path} <- download(version, target),
+         :ok <- verify_checksum(tmp_path, version, target),
          :ok <- extract(tmp_path) do
       File.rm(tmp_path)
       :ok
     end
+  end
+
+  @doc """
+  CLI tarball asset name for a release, e.g.
+  `codrift-cli-0.1.0-x86_64-linux-gnu.tar.gz`.
+
+  Must match the asset naming in `.github/workflows/release.yml` (the
+  "Rename CLI tarball" step) and the pattern `install.sh` greps for.
+  """
+  @spec cli_asset(version, String.t()) :: String.t()
+  def cli_asset(version, target), do: "codrift-cli-#{version}-#{target}.tar.gz"
+
+  @doc "Download URL for the CLI tarball of a released version."
+  @spec cli_asset_url(version, String.t()) :: String.t()
+  def cli_asset_url(version, target) do
+    "https://github.com/#{@repo}/releases/download/v#{version}/#{cli_asset(version, target)}"
   end
 
   # ── Private ────────────────────────────────────────────────────────────────
@@ -115,15 +135,41 @@ defmodule Codrift.Updater do
   end
 
   defp download(version, target) do
-    tarball = "codrift-#{version}-#{target}.tar.gz"
-    url = "https://github.com/#{@repo}/releases/download/v#{version}/#{tarball}"
-    tmp = Path.join(System.tmp_dir!(), tarball)
+    url = cli_asset_url(version, target)
+    tmp = Path.join(System.tmp_dir!(), cli_asset(version, target))
 
     case Req.get(url, into: File.stream!(tmp)) do
       {:ok, %{status: 200}} -> {:ok, tmp}
       {:ok, %{status: 404}} -> {:error, "release not found: #{url}"}
       {:ok, %{status: s}} -> {:error, "download failed with status #{s}"}
       {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  # Fetches the published `<asset>.sha256` and compares it to the local
+  # file's digest. The checksum file contains `<hex>  <filename>` (the
+  # `shasum`/`sha256sum` format emitted by release.yml).
+  defp verify_checksum(tmp_path, version, target) do
+    url = cli_asset_url(version, target) <> ".sha256"
+
+    with {:ok, %{status: 200, body: body}} <- Req.get(url),
+         [expected | _] <- body |> to_string() |> String.split() do
+      actual =
+        :sha256
+        |> :crypto.hash(File.read!(tmp_path))
+        |> Base.encode16(case: :lower)
+
+      if actual == String.downcase(expected) do
+        :ok
+      else
+        File.rm(tmp_path)
+        {:error, "checksum mismatch for #{Path.basename(tmp_path)}: " <>
+          "expected #{expected}, got #{actual}"}
+      end
+    else
+      {:ok, %{status: s}} -> {:error, "checksum file unavailable (status #{s}): #{url}"}
+      {:error, reason} -> {:error, inspect(reason)}
+      [] -> {:error, "checksum file is empty: #{url}"}
     end
   end
 
