@@ -121,4 +121,46 @@ defmodule Codrift.AgentProcessTest do
     assert length(output) <= 1_000
     assert output != []
   end
+
+  describe "exit status" do
+    test "clean exit sets status to :stopped" do
+      pid = start_agent(adapter: Codrift.Test.CleanExitAdapter)
+      assert await_status(pid, :stopped)
+    end
+
+    test "non-zero exit sets status to :crashed" do
+      pid = start_agent(adapter: Codrift.Test.CrashExitAdapter)
+      assert await_status(pid, :crashed)
+    end
+  end
+
+  describe "transcript log" do
+    test "output is appended to the durable per-agent log" do
+      id = "log-test-#{:erlang.unique_integer([:positive])}"
+      pid = start_agent(id: id)
+      :ok = AgentProcess.subscribe(pid)
+
+      AgentProcess.send_input(pid, "transcript-ping")
+      assert_receive {:agent_output, _, _}, 1_000
+
+      assert File.read!(Codrift.Paths.agent_log("test-init", id)) =~ "transcript-ping"
+    end
+
+    test "exit marker is written to the log on a crash" do
+      id = "log-crash-#{:erlang.unique_integer([:positive])}"
+      pid = start_agent(id: id, adapter: Codrift.Test.CrashExitAdapter)
+      assert await_status(pid, :crashed)
+
+      assert File.read!(Codrift.Paths.agent_log("test-init", id)) =~
+               "[agent exited with code 3]"
+    end
+  end
+
+  defp await_status(pid, status, tries \\ 100) do
+    cond do
+      AgentProcess.status(pid).status == status -> true
+      tries == 0 -> AgentProcess.status(pid).status
+      true -> Process.sleep(20) && await_status(pid, status, tries - 1)
+    end
+  end
 end

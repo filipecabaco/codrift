@@ -31,6 +31,14 @@ defmodule Codrift.Paths do
   def initiatives_base, do: Path.join(data_dir(), "initiatives")
 
   @doc """
+  Append-only transcript log for an agent, under its initiative's context
+  folder. Dot-prefixed so it is never picked up as an initiative context file,
+  and removed together with the context folder when the initiative is deleted.
+  """
+  def agent_log(initiative_id, agent_id),
+    do: Path.join([initiative_dir(initiative_id), ".agent-logs", "#{agent_id}.log"])
+
+  @doc """
   Replaces the user's home directory prefix with `~`.
 
   Returns the path unchanged when it does not live under the home directory.

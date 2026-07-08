@@ -357,6 +357,10 @@ defmodule Codrift.Initiative.Store do
     unless File.dir?(Path.join(path, ".git")) do
       System.cmd("git", ["init"], cd: path, stderr_to_stdout: true)
     end
+
+    # Keep agent transcript logs out of the context repo's diff/status.
+    gitignore = Path.join(path, ".gitignore")
+    unless File.exists?(gitignore), do: File.write!(gitignore, ".agent-logs/\n")
   end
 
   defp safe_rm_context_dir!(path, base) do

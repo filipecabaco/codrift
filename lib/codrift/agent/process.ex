@@ -17,7 +17,16 @@ defmodule Codrift.AgentProcess do
   ## Output buffering
 
   Chunks are stored newest-first (cap: 1 000 entries). `recent_output/2`
-  reverses before returning.
+  reverses before returning. Every chunk is also appended to a durable
+  transcript log at `<context>/.agent-logs/<agent_id>.log` (see
+  `Codrift.AgentLogs`), so output survives agent and Codrift restarts.
+
+  ## Exit status
+
+  When the underlying CLI exits, the GenServer stays alive so the transcript
+  remains queryable: status becomes `:stopped` on a clean exit (code 0) and
+  `:crashed` on a non-zero exit, so supervisors can tell a finished agent
+  from a dead one.
 
   ## Subscriptions
 
@@ -49,6 +58,7 @@ defmodule Codrift.AgentProcess do
     :raw_line_buf,
     :session_uuid,
     :profile,
+    :log_fd,
     profile_env: [],
     last_size: nil
   ]
@@ -115,7 +125,8 @@ defmodule Codrift.AgentProcess do
       conversation_started: false,
       raw_line_buf: "",
       profile: profile,
-      profile_env: profile_env
+      profile_env: profile_env,
+      log_fd: open_log(initiative_id, id)
     }
 
     # Generate or retrieve a stable session UUID before launching the process.
@@ -272,7 +283,7 @@ defmodule Codrift.AgentProcess do
       "Agent #{state.id} (#{state.adapter}) PTY process #{ospid} exited: #{inspect(reason)}, code=#{exit_code}"
     )
 
-    handle_exit(state, exit_code, :stopped)
+    handle_exit(state, exit_code)
   end
 
   # Port output (interactive / once modes)
@@ -295,7 +306,7 @@ defmodule Codrift.AgentProcess do
 
   # Port exit in :interactive mode
   def handle_info({port, {:exit_status, code}}, %{port: port, mode: :interactive} = state) do
-    handle_exit(state, code, :stopped)
+    handle_exit(state, code)
   end
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
@@ -305,19 +316,17 @@ defmodule Codrift.AgentProcess do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_reason, %{exec_pid: pid} = _state) when not is_nil(pid) do
-    :exec.stop(pid)
+  def terminate(_reason, state) do
+    if state.log_fd, do: :file.close(state.log_fd)
+
+    cond do
+      state.exec_pid -> :exec.stop(state.exec_pid)
+      state.port -> Port.close(state.port)
+      true -> :ok
+    end
   rescue
     _ -> :ok
   end
-
-  def terminate(_reason, %{port: port} = _state) when not is_nil(port) do
-    Port.close(port)
-  rescue
-    _ -> :ok
-  end
-
-  def terminate(_reason, _state), do: :ok
 
   defp process_output(%{mode: :once} = state, data) do
     # Claude stream-json: accumulate incomplete lines, extract text deltas
@@ -362,7 +371,10 @@ defmodule Codrift.AgentProcess do
     end
   end
 
-  defp handle_exit(state, code, final_status) do
+  # Keeps the GenServer alive after the CLI exits so the buffer and status
+  # stay queryable. A non-zero exit is surfaced as :crashed (distinct from a
+  # clean :stopped) so orchestrators and the UI can tell them apart.
+  defp handle_exit(state, code) do
     state =
       if code != 0,
         do: push_buffer(state, "\n[agent exited with code #{code}]\n"),
@@ -370,15 +382,45 @@ defmodule Codrift.AgentProcess do
 
     for {sub, _} <- state.subscribers, do: send(sub, {:agent_stopped, state.id, code})
 
+    final_status = if code == 0, do: :stopped, else: :crashed
     {:noreply, %{state | exec_pid: nil, exec_ospid: nil, port: nil, status: final_status}}
   end
 
   defp push_buffer(state, data) do
+    log_write(state.log_fd, data)
+
     if state.buffer_size >= 1_000 do
       %{state | buffer: [data | Enum.take(state.buffer, 999)]}
     else
       %{state | buffer: [data | state.buffer], buffer_size: state.buffer_size + 1}
     end
+  end
+
+  # Opens the durable transcript log (see Codrift.AgentLogs). Best-effort: a
+  # failure to open degrades to in-memory-only buffering, never a dead agent.
+  defp open_log(initiative_id, agent_id) do
+    path = Codrift.Paths.agent_log(initiative_id, agent_id)
+    File.mkdir_p!(Path.dirname(path))
+
+    case File.open(path, [:append, :raw, :binary]) do
+      {:ok, fd} ->
+        fd
+
+      {:error, reason} ->
+        Logger.warning("Agent #{agent_id}: cannot open transcript log #{path}: #{inspect(reason)}")
+        nil
+    end
+  rescue
+    e ->
+      Logger.warning("Agent #{agent_id}: cannot create transcript log dir: #{inspect(e)}")
+      nil
+  end
+
+  defp log_write(nil, _data), do: :ok
+
+  defp log_write(fd, data) do
+    :file.write(fd, data)
+    :ok
   end
 
   defp dedup_env(env) do
