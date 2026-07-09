@@ -28,21 +28,34 @@ Codrift is a Tauri app: a native window wrapping a Svelte UI, backed by an Elixi
 
 ## Quick start
 
-Download the latest release for your platform from
+### Homebrew (macOS)
+
+This repo is its own Homebrew tap. Because the repo isn't named
+`homebrew-codrift`, tap it once with its URL, then install the cask:
+
+```bash
+brew tap filipecabaco/codrift https://github.com/filipecabaco/codrift
+brew install --cask codrift
+```
+
+Upgrades come through `brew upgrade --cask codrift`.
+
+> **Note:** Codrift is not yet code-signed or notarized. The cask strips the
+> download quarantine on install so the app opens normally; if macOS still
+> objects, right-click the app → **Open** once, or run
+> `xattr -dr com.apple.quarantine /Applications/Codrift.app`.
+
+### Direct download
+
+Grab the latest bundle for your platform from
 [GitHub Releases](https://github.com/filipecabaco/codrift/releases):
 
 | Platform | Bundle |
 |----------|--------|
 | macOS | `.dmg` |
-| Linux | `.AppImage` |
+| Linux | `.AppImage` / `.deb` |
 
-Or use the installer, which also puts the headless `codrift` CLI on your `PATH`:
-
-```bash
-curl -fsSL https://codrift.sh/install.sh | sh
-```
-
-Or run from source:
+### From source
 
 ```bash
 mix deps.get
@@ -254,6 +267,26 @@ mix ex_tauri.build       # produce a platform bundle
 | macOS (Intel) | `x86_64-apple-darwin` |
 | Linux x86\_64 | `x86_64-linux-gnu` |
 | Linux arm64 | `aarch64-linux-gnu` |
+
+### Releasing
+
+Releases are fully automated from [Conventional Commit](https://www.conventionalcommits.org)
+prefixes — there is nothing to tag by hand. On every merge to `main`,
+[`auto-release.yml`](.github/workflows/auto-release.yml) inspects the commits
+since the last `v*` tag and bumps semver accordingly:
+
+| Commit prefix | Bump | From `0.0.0` |
+|---|---|---|
+| `fix:` | patch | `0.0.1` |
+| `feat:` | minor | `0.1.0` |
+| `feat!:` / `major:` / `BREAKING CHANGE` | major | `1.0.0` |
+
+The highest-priority prefix in the range wins; commits with no `fix`/`feat`/breaking
+prefix (`chore:`, `docs:`, …) don't release. The computed version drives the
+reusable [`release.yml`](.github/workflows/release.yml), which builds the macOS
+`.dmg`s + Linux bundles + CLI, cuts the `v<version>` tag and GitHub Release, and
+rewrites `Casks/codrift.rb` with the new version and checksums. To cut a specific
+version by hand, run **release.yml** via *Run workflow* with the version.
 
 ---
 

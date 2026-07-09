@@ -1,9 +1,23 @@
 name: Release
 
+# Reusable + manually dispatchable. `auto-release.yml` computes the next semver
+# from Conventional Commit prefixes and calls this workflow; a maintainer can
+# also cut a specific version by hand via "Run workflow". The version is the
+# single source of truth — it names the DMG, the CLI tarball, the git tag, the
+# GitHub Release, and the Homebrew cask.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to release, without a leading v (e.g. 1.2.3)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without a leading v (e.g. 1.2.3)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -79,6 +93,21 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
+      # ── Version sync ─────────────────────────────────────────────────────────
+      # Tauri names the DMG `Codrift_<version>_<arch>.dmg` from the version in
+      # tauri.conf.json — NOT any git ref. Stamp the release version in before
+      # the build so the produced asset name matches the URL the Homebrew cask
+      # expects (Casks/codrift.rb). Without this every build would ship a
+      # `Codrift_0.0.1_*.dmg` and the cask URL would 404.
+      - name: Sync app version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          tmp="$(mktemp)"
+          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > "$tmp"
+          mv "$tmp" src-tauri/tauri.conf.json
+          echo "tauri.conf.json version set to $VERSION"
+
       # ── Desktop bundle ───────────────────────────────────────────────────────
       # `mix ex_tauri.build` assembles the :desktop release, Burrito-wraps it as
       # the Tauri sidecar (burrito_out/desktop-<triple>), and bundles the app.
@@ -100,7 +129,7 @@ jobs:
       - name: Rename CLI tarball
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ inputs.version }}"
           mv _build/prod/codrift-*.tar.gz \
              "codrift-cli-${VERSION}-${{ matrix.cli_suffix }}.tar.gz"
 
@@ -116,9 +145,15 @@ jobs:
           done
 
       # ── Publish ──────────────────────────────────────────────────────────────
+      # No tag exists yet (this workflow is called on a branch push), so the
+      # action creates the `v<version>` tag at the current SHA and the Release in
+      # one shot. Runs on every matrix leg; softprops is idempotent — the first
+      # creates the release, the rest append their assets.
       - name: Upload artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ inputs.version }}
+          name: v${{ inputs.version }}
           files: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
@@ -127,3 +162,67 @@ jobs:
             codrift-cli-*.tar.gz
             codrift-cli-*.tar.gz.sha256
           generate_release_notes: true
+
+  # ── Homebrew cask bump ───────────────────────────────────────────────────────
+  # This repo doubles as its own Homebrew tap (Casks/codrift.rb). After both
+  # macOS DMGs are published to the release, pull them back down, hash them, and
+  # rewrite the cask's version + per-arch checksums, then push to main so
+  # `brew upgrade` sees the new version immediately.
+  #
+  # NOTE: this pushes a commit to `main`. If main is protected against direct
+  # pushes, swap the "Commit and push" step for a `gh pr create` on a branch.
+  update-cask:
+    name: Bump Homebrew cask
+    needs: bundle
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download macOS DMGs from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "v${{ inputs.version }}" \
+            --pattern 'Codrift_*_aarch64.dmg' \
+            --pattern 'Codrift_*_x64.dmg' \
+            --dir dmgs
+
+      - name: Rewrite cask version + checksums
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          ARM_SHA="$(shasum -a 256 dmgs/Codrift_"${VERSION}"_aarch64.dmg | awk '{print $1}')"
+          INTEL_SHA="$(shasum -a 256 dmgs/Codrift_"${VERSION}"_x64.dmg | awk '{print $1}')"
+          echo "version=$VERSION arm=$ARM_SHA intel=$INTEL_SHA"
+
+          # The arm block precedes the intel block in the cask, so replacing the
+          # two sha256 lines in order maps arm -> intel correctly.
+          VERSION="$VERSION" ARM_SHA="$ARM_SHA" INTEL_SHA="$INTEL_SHA" python3 - <<'PY'
+          import os, re
+          f = "Casks/codrift.rb"
+          s = open(f).read()
+          s = re.sub(r'version "[^"]*"', f'version "{os.environ["VERSION"]}"', s, count=1)
+          shas = iter([os.environ["ARM_SHA"], os.environ["INTEL_SHA"]])
+          s = re.sub(r'sha256 "[^"]*"', lambda m: f'sha256 "{next(shas)}"', s, count=2)
+          open(f, "w").write(s)
+          PY
+
+      - name: Commit and push
+        run: |
+          VERSION="${{ inputs.version }}"
+          if git diff --quiet Casks/codrift.rb; then
+            echo "Cask already up to date; nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/codrift.rb
+          git commit -m "chore(cask): codrift ${VERSION} [skip ci]"
+          # main may have advanced while the bundles built; rebase before pushing.
+          git pull --rebase origin main
+          git push origin main

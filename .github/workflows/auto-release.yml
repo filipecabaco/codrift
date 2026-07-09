@@ -1,0 +1,111 @@
+name: Auto Release
+
+# Fully automated semantic versioning. On every push to `main` (i.e. a merged
+# PR), scan the Conventional Commit prefixes of the commits since the last
+# `v*` tag and pick the highest-priority bump:
+#
+#   fix:      -> patch   (0.0.X)
+#   feat:     -> minor   (0.X.0)
+#   <type>!:  -> major   (X.0.0)   also: "BREAKING CHANGE" in body, or major:
+#
+# Starting from 0.0.0 this yields exactly 0.0.1 / 0.1.0 / 1.0.0 for the first
+# fix / feat / breaking change. If no fix/feat/breaking commit landed, nothing
+# is released. The computed version is handed to the reusable release workflow,
+# which builds the bundles, cuts the `v<version>` tag + GitHub Release, and
+# bumps the Homebrew cask.
+#
+# Why call release.yml directly instead of pushing a tag: a tag pushed with the
+# built-in GITHUB_TOKEN does NOT trigger tag-listening workflows, so a
+# tag-and-forget approach would silently never build. Chaining via workflow_call
+# keeps it token-only — no PAT required.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Compute next version
+    runs-on: ubuntu-22.04
+    outputs:
+      release: ${{ steps.bump.outputs.release }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          LAST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n1 || true)"
+          if [ -z "$LAST_TAG" ]; then
+            RANGE=""
+            BASE="0.0.0"
+          else
+            RANGE="${LAST_TAG}..HEAD"
+            BASE="${LAST_TAG#v}"
+          fi
+          echo "Last tag: ${LAST_TAG:-<none>} (base ${BASE})"
+
+          # One record per commit: subject on its own line, then the body.
+          LOG="$(git log ${RANGE:+$RANGE} --pretty=format:'%s%n%b%n---COMMIT---')"
+
+          BUMP=""
+          # Breaking: `type!:` / `type(scope)!:` subject, a bare `major:` prefix,
+          # or a `BREAKING CHANGE` footer anywhere in a body.
+          if printf '%s\n' "$LOG" | grep -qE '^[a-zA-Z]+(\([^)]*\))?!:' \
+             || printf '%s\n' "$LOG" | grep -qiE '^[[:space:]]*major(\([^)]*\))?!?:' \
+             || printf '%s\n' "$LOG" | grep -qE 'BREAKING[ -]CHANGE'; then
+            BUMP="major"
+          elif printf '%s\n' "$LOG" | grep -qiE '^[[:space:]]*feat(\([^)]*\))?:'; then
+            BUMP="minor"
+          elif printf '%s\n' "$LOG" | grep -qiE '^[[:space:]]*fix(\([^)]*\))?:'; then
+            BUMP="patch"
+          fi
+
+          if [ -z "$BUMP" ]; then
+            echo "No fix/feat/breaking commits since ${LAST_TAG:-start}; nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+          NEXT="${MAJOR}.${MINOR}.${PATCH}"
+
+          if git rev-parse "v${NEXT}" >/dev/null 2>&1; then
+            echo "Tag v${NEXT} already exists; skipping."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Bump: ${BUMP}  ${BASE} -> ${NEXT}"
+          {
+            echo "release=true"
+            echo "version=${NEXT}"
+          } >> "$GITHUB_OUTPUT"
+          echo "### Releasing v${NEXT} (${BUMP} bump from ${BASE})" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+    secrets: inherit
