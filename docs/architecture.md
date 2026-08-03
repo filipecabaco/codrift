@@ -26,7 +26,7 @@ Codrift (Application)
       ├── Codrift.Scheduler
       │     Quantum — runs Codrift.Integration.Sync every 5 minutes
       ├── Codrift (Francis / Bandit)
-      │     HTTP + SSE + WebSocket server on port 7437
+      │     HTTP + WebSocket server on port 7437 (SSE only for the MCP transport)
       └── Codrift.ShutdownManager        (desktop release only)
             Unix-socket heartbeat from the Tauri shell; stops the backend when the app closes
 ```
@@ -42,8 +42,7 @@ Codrift (Application)
 | `GET` | `/api/diff/:id` | Diff for an initiative (JSON) |
 | `GET` | `/api/agent/:id` | Agent status (JSON) |
 | `GET` | `/api/agent/:id/output` | Recent PTY output, Base64, oldest-first (`?n=`, ≤1000) — terminal scrollback replay |
-| `WS` | `/ws/agent/:agent_id` | Bidirectional PTY input: `{t:"d",d}` keystrokes, `{t:"r",cols,rows}` resize |
-| `SSE` | `/events/initiative/:id` | Live output stream (`output`, `stopped`, `conductor_*` events, Base64) |
+| `WS` | `/ws/initiative/:id` | The live surface, both ways: `output` / `status` / `stopped` / `conductor_*` frames down (Base64 payloads); `{t:"d",agent_id,d}` keystrokes and `{t:"r",agent_id,cols,rows}` resizes up |
 | `POST` | `/mcp` | MCP JSON-RPC (HTTP transport) |
 | `SSE` | `/mcp/sse` | MCP server-sent events endpoint |
 | `GET` | `/oauth/start/:service` | Begin OAuth2 flow |
@@ -51,8 +50,8 @@ Codrift (Application)
 | `GET` | `/oauth/status` | Token status for all services |
 | `Static` | `/` | The Vite-built Svelte SPA from `priv/static` (`index.html`, `assets/…`) |
 
-> Agent **output** flows to the UI over SSE; agent **input** flows back over the
-> WebSocket. `POST /api/rpc` handles everything else. `priv/static` also carries
+> Agent output and input both ride `/ws/initiative/:id`, one socket per
+> initiative. `POST /api/rpc` handles everything else. `priv/static` also carries
 > two standalone HTML prototypes (`diff.html`, `term.html`) kept for local
 > experimentation; they are not part of the app shell.
 
@@ -84,9 +83,10 @@ output in embedded **xterm.js** terminals (WebGL renderer, Canvas/DOM fallback),
 highlights code with **Shiki**, and edits files in a **CodeMirror 6** pane with
 Vim mode.
 
-It talks to the backend through three channels: `POST /api/rpc` for all
-request/response operations (`assets/src/lib/api.ts`), SSE for live agent output,
-and a per-agent WebSocket for terminal input. See `src-tauri/` (Rust shell) and
+It talks to the backend through two channels: `POST /api/rpc` for all
+request/response operations (`assets/src/lib/api.ts`), and one WebSocket per
+initiative for live agent output, status and terminal input
+(`assets/src/lib/stream.ts`). See `src-tauri/` (Rust shell) and
 `assets/src/` (Svelte UI).
 
 ![Context view — initiative sidebar, directories, and rendered context](images/context-overview.png)
@@ -103,11 +103,11 @@ User action (Svelte UI)
       → Codrift.AgentProcess (GenServer)
         → erlexec PTY → claude / codex / opencode / gemini / $SHELL
           → {:agent_output, id, data}
-            → SSE /events/initiative/:id  → xterm.js (live update)
+            → Codrift.Web.EventRelay → WS /ws/initiative/:id → xterm.js
             → MCP SSE subscribers (connected agents)
 
 Keystrokes / resize (xterm.js)
-  → WS /ws/agent/:agent_id
+  → WS /ws/initiative/:id  (same socket, framed with agent_id)
     → AgentProcess.send_raw / .resize → PTY
 ```
 

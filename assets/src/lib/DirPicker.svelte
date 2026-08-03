@@ -1,5 +1,6 @@
 <script lang="ts">
   import { rpc } from "$lib/api";
+  import Overlay from "$lib/Overlay.svelte";
 
   let {
     onSubmit,
@@ -47,8 +48,13 @@
     return qi === q.length ? bonus - target.length : null;
   }
 
+  // `.git` is never a project directory — offering it invites adding a repo's
+  // internals as a workspace.
+  const HIDDEN = new Set([".git"]);
+
   const matches = $derived(
     entries
+      .filter((name) => !HIDDEN.has(name))
       .map((name) => ({ name, s: score(fragment, name) }))
       .filter((m): m is { name: string; s: number } => m.s !== null)
       .sort((a, b) => b.s - a.s)
@@ -92,10 +98,7 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
-    } else if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown") {
       e.preventDefault();
       cursor = Math.min(cursor + 1, matches.length - 1);
     } else if (e.key === "ArrowUp") {
@@ -114,52 +117,42 @@
   }
 </script>
 
-<div
-  class="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[12vh]"
-  onclick={onClose}
-  role="presentation"
->
-  <div
-    class="w-[520px] max-w-[90vw] overflow-hidden rounded-lg border border-border bg-surface shadow-2xl"
-    onclick={(e) => e.stopPropagation()}
-    role="presentation"
-  >
-    <div class="border-b border-border px-3 pt-3">
-      <h3 class="mb-2 text-[13px] font-semibold text-fg">Add directory</h3>
-      <input
-        bind:this={input}
-        bind:value
-        {onkeydown}
-        name="dir"
-        aria-label="Directory path"
-        placeholder="~/path/to/repo"
-        autocomplete="off"
-        spellcheck="false"
-        class="w-full rounded-md border border-border bg-canvas px-3 py-2 font-mono text-sm text-fg outline-none focus:border-accent"
-      />
-    </div>
-    <ul class="max-h-72 overflow-y-auto py-1">
-      {#each matches as name, i (name)}
-        <li>
-          <button
-            class={["flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px]", i === cursor ? "bg-accent/20 text-white" : "text-fg/90"]}
-            onmouseenter={() => (cursor = i)}
-            onclick={() => {
-              cursor = i;
-              complete();
-              input?.focus();
-            }}
-          >
-            <span class="text-muted">📁</span>
-            <span class="truncate font-mono">{name}</span>
-          </button>
-        </li>
-      {:else}
-        <li class="px-3 py-2 text-[13px] text-muted">No matching directories.</li>
-      {/each}
-    </ul>
-    <p class="border-t border-border px-3 py-2 text-[11px] text-muted">
-      Tab to complete · ↑↓ to navigate · Enter to add · Esc to cancel
-    </p>
+<Overlay label="Add directory" width="520px" top="12vh" padded={false} {onClose}>
+  <div class="border-b border-border px-3 pt-3">
+    <h3 class="mb-2 text-[13px] font-semibold text-fg">Add directory</h3>
+    <input
+      bind:this={input}
+      bind:value
+      {onkeydown}
+      name="dir"
+      aria-label="Directory path"
+      placeholder="~/path/to/repo"
+      autocomplete="off"
+      spellcheck="false"
+      class="w-full rounded-md border border-border bg-canvas px-3 py-2 font-mono text-sm text-fg outline-none focus:border-accent"
+    />
   </div>
-</div>
+  <ul class="max-h-72 overflow-y-auto py-1">
+    {#each matches as name, i (name)}
+      <li>
+        <button
+          class={["flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px]", i === cursor ? "bg-accent/20 text-white" : "text-fg/90"]}
+          onmouseenter={() => (cursor = i)}
+          onclick={() => {
+            cursor = i;
+            complete();
+            input?.focus();
+          }}
+        >
+          <span class="text-muted">📁</span>
+          <span class="truncate font-mono">{name}</span>
+        </button>
+      </li>
+    {:else}
+      <li class="px-3 py-2 text-[13px] text-muted">No matching directories.</li>
+    {/each}
+  </ul>
+  <p class="border-t border-border px-3 py-2 text-[11px] text-muted">
+    Tab to complete · ↑↓ to navigate · Enter to add · Esc to cancel
+  </p>
+</Overlay>

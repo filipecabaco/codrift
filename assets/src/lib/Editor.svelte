@@ -9,6 +9,7 @@
   import { vim, Vim } from "@replit/codemirror-vim";
   import { githubDark } from "@uiw/codemirror-theme-github";
   import { rpc } from "$lib/api";
+  import Confirm from "$lib/Confirm.svelte";
 
   let {
     initiativeId,
@@ -19,6 +20,13 @@
   let host: HTMLDivElement;
   let view: EditorView | undefined;
   let status = $state<string>("loading…");
+  // What's on disk, as far as this editor knows.
+  let savedDoc = "";
+  let confirmingClose = $state(false);
+  // CodeMirror's doc isn't reactive, so mirror the dirty flag into a rune.
+  let dirty = $state(false);
+
+  const isDirty = () => !!view && view.state.doc.toString() !== savedDoc;
 
   async function save() {
     if (!view) return;
@@ -29,10 +37,19 @@
         path,
         content,
       });
+      savedDoc = content;
+      dirty = isDirty();
       status = `saved · ${res.bytes} B`;
     } catch (e) {
       status = (e as Error).message;
     }
+  }
+
+  // Vim's own contract: `:q` refuses to discard, `:q!` forces it.
+  function requestClose(force = false) {
+    if (force || !isDirty()) return onClose();
+    confirmingClose = true;
+    status = "unsaved changes — :w to save, :q! to discard";
   }
 
   onMount(() => {
@@ -52,10 +69,14 @@
       }
       if (destroyed) return;
 
-      // :w / :wq / :q from vim, plus ⌘S / Ctrl+S.
+      savedDoc = initial;
+
+      // :w / :wq / :q / :q! from vim, plus ⌘S / Ctrl+S.
       Vim.defineEx("write", "w", () => void save());
       Vim.defineEx("wq", "wq", () => void save().then(onClose));
-      Vim.defineEx("quit", "q", () => onClose());
+      Vim.defineEx("quit", "q", (_cm: unknown, params: { argString?: string }) =>
+        requestClose(params?.argString?.trim() === "!"),
+      );
       const saveKey = keymap.of([
         { key: "Mod-s", preventDefault: true, run: () => (void save(), true) },
       ]);
@@ -87,6 +108,9 @@
           saveKey,
           githubDark,
           EditorView.lineWrapping,
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged) dirty = isDirty();
+          }),
           lang.of([]),
         ],
         parent: host,
@@ -111,11 +135,31 @@
 <div class="fixed inset-0 z-50 flex flex-col bg-canvas">
   <div class="flex items-center gap-3 border-b border-border bg-surface px-4 py-2">
     <span class="text-[13px] text-accent">{path}</span>
+    {#if dirty}
+      <span class="text-[11px] text-accent" title="Unsaved changes">●</span>
+    {/if}
     <span class="text-[11px] text-muted">{status}</span>
     <button class="ml-auto rounded-md px-2 py-1 text-xs text-muted hover:text-fg" onclick={() => void save()}>
       Save
     </button>
-    <button class="rounded-md px-2 py-1 text-xs text-muted hover:text-fg" onclick={onClose}>Close</button>
+    <button class="rounded-md px-2 py-1 text-xs text-muted hover:text-fg" onclick={() => requestClose()}>
+      Close
+    </button>
   </div>
   <div class="min-h-0 flex-1 overflow-hidden text-[13px]" bind:this={host}></div>
 </div>
+
+{#if confirmingClose}
+  <Confirm
+    message="Discard unsaved changes to {path.split('/').pop()}?"
+    confirmLabel="Discard"
+    onConfirm={() => {
+      confirmingClose = false;
+      onClose();
+    }}
+    onClose={() => {
+      confirmingClose = false;
+      view?.focus();
+    }}
+  />
+{/if}

@@ -6,7 +6,10 @@
   --color-canvas: oklch(11% 0.01 265);
   --color-surface: oklch(15% 0.012 265);
   --color-border: oklch(22% 0.012 265);
-  --color-muted: oklch(52% 0.01 265);
+  /* Secondary text sits at 5.6:1 on canvas — the old 52% measured 3.72:1 and
+     failed WCAG AA (4.5:1) at the 11–12px sizes it's used at. `border` keeps the
+     darker value for non-text separators, where the 3:1 rule applies instead. */
+  --color-muted: oklch(63% 0.012 265);
   --color-fg: oklch(93% 0.008 265);
   --color-accent: oklch(72% 0.18 65);
   --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
@@ -23,4 +26,14 @@ body {
   background: var(--color-canvas);
   color: var(--color-fg);
   font-family: var(--font-mono);
+}
+
+/* One focus indicator for the whole app. Without this the browser draws its own
+   (Chrome's blue ring measures 3.4:1 here and reads as foreign in an amber/near
+   black product; WebKit differs again), so keyboard focus looked different per
+   platform. Amber at 7.9:1 matches the active-pane ring. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+  border-radius: 6px;
 }

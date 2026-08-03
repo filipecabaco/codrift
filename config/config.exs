@@ -15,7 +15,12 @@ config :ex_tauri,
   # reads these keys, see helpers.ex).
   fullscreen: false,
   width: 1440,
-  height: 900
+  height: 900,
+  # ex_tauri 0.2.0 defaults to Phoenix; Codrift is a Francis app. The dev sidecar
+  # runs `mix francis.server` (mix run --no-halt) instead of `mix phx.server`, and
+  # the prod sidecar gets no PHX_SERVER/PHX_HOST (PORT is always injected).
+  dev_command: ~w(mix francis.server),
+  sidecar_env: []
 
 # Serve priv/static app-relative (via :code.priv_dir) so it resolves inside a
 # release too — the default "priv/static" is cwd-relative and 404s in releases

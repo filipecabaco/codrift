@@ -6,7 +6,7 @@ defmodule Codrift.Plugs.LocalGuard do
   malicious web page the user visits (cross-origin `fetch` / DNS rebinding)
   nor other local processes from scripting requests at
   `http://localhost:<port>/…` — and those routes can write files and spawn
-  agents (`POST /api/rpc`, `POST /mcp`, `ws /ws/agent/:id`).
+  agents (`POST /api/rpc`, `POST /mcp`, `ws /ws/initiative/:id`).
 
   Three checks close that gap:
 
@@ -28,7 +28,7 @@ defmodule Codrift.Plugs.LocalGuard do
        so a missing header can never downgrade the guard.
 
   Reads (`GET` without upgrade, e.g. the OAuth provider's top-level redirect
-  to `/oauth/callback/*` and the SSE streams) pass on checks 1–2 alone:
+  to `/oauth/callback/*` and the MCP SSE stream) pass on checks 1–2 alone:
   browsers cannot read cross-origin responses without CORS headers, which
   this server never sends.
 

@@ -402,8 +402,14 @@ defmodule Codrift.Initiative.Store do
   Reads `orchestration.md` for an initiative.
 
   Returns `{:ok, content}` when the file exists, or `{:error, reason}` otherwise.
+
+  Context files are seeded from a `handle_continue` after `create/2` replies, so
+  a read straight after creating an initiative would race the seeding. The
+  `get/1` is a barrier: the GenServer runs pending continuations before the next
+  call.
   """
   def read_orchestration_md(id) do
+    _ = get(id)
     File.read(orchestration_md_path(id))
   end
 
@@ -565,6 +571,7 @@ defmodule Codrift.Initiative.Store do
 
     #{dirs_block(initiative.dirs)}
 
+    <!-- codrift:agent-notes:start -->
     ## Memory Store
 
     Shared knowledge base for all agents on this initiative.
@@ -589,6 +596,7 @@ defmodule Codrift.Initiative.Store do
         codrift memory list   #{initiative.id} decision
 
     Results include an `id` field — use it with `memory delete` to remove outdated entries.
+    <!-- codrift:agent-notes:end -->
 
     ## Goal
 
@@ -624,7 +632,7 @@ defmodule Codrift.Initiative.Store do
   defp cleanup_worktree(%DirEntry{path: src, worktree_path: wt}), do: Worktree.remove(src, wt)
 
   defp dirs_block([]) do
-    "<!-- codrift:dirs:start -->\n## Directories\n\n(no project directories configured yet — use 'a' in the TUI to add one)\n<!-- codrift:dirs:end -->"
+    "<!-- codrift:dirs:start -->\n## Directories\n\n(no project directories yet — press `a` to add one)\n<!-- codrift:dirs:end -->"
   end
 
   defp dirs_block(dirs) do

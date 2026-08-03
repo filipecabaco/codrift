@@ -350,8 +350,13 @@ defmodule Codrift.AgentProcess do
     state = push_buffer(state, data)
     for {sub, _} <- state.subscribers, do: send(sub, {:agent_output, state.id, data})
 
-    if new_status == :awaiting_input and state.status != :awaiting_input do
-      for {sub, _} <- state.subscribers, do: send(sub, {:agent_ready, state.id})
+    if new_status != state.status do
+      for {sub, _} <- state.subscribers,
+          do: send(sub, {:agent_status, state.id, new_status})
+
+      if new_status == :awaiting_input do
+        for {sub, _} <- state.subscribers, do: send(sub, {:agent_ready, state.id})
+      end
     end
 
     %{state | status: new_status}

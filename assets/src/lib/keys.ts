@@ -48,6 +48,31 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   start_orchestration: "Start orchestration",
 };
 
+// Actions the desktop UI actually performs. The keymap itself is wider — it is
+// shared with the TUI and the backend owns it — but the palette must only offer
+// commands that do something, so listing them here is the single gate.
+export const PALETTE_ACTIONS: ActionId[] = [
+  "navigate_down",
+  "navigate_up",
+  "new_initiative",
+  "add_dir",
+  "start_agent",
+  "start_terminal",
+  "start_orchestration",
+  "delete",
+  "edit_context",
+  "refresh",
+  "status_prev",
+  "status_next",
+  "context_mode",
+  "diff_mode",
+  "tree_mode",
+  "diff_all_files",
+  "toggle_sidebar",
+  "palette",
+  "quit",
+];
+
 export type Keymap = Partial<Record<ActionId, string>>;
 
 // Fallback mirroring Codrift.Config.Keybindings defaults, used if the backend
@@ -94,6 +119,8 @@ export function eventToSpec(e: KeyboardEvent): string | null {
   let key: string;
   if (k === "ArrowDown") key = "down";
   else if (k === "ArrowUp") key = "up";
+  else if (k === "ArrowLeft") key = "left";
+  else if (k === "ArrowRight") key = "right";
   else if (k === "Escape") key = "esc";
   else if (k.length === 1) key = k.toLowerCase();
   else key = k.toLowerCase();

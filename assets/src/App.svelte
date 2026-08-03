@@ -2,11 +2,13 @@
   import { onMount } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
   import { ArrowPath, CommandLine, Link } from "@steeze-ui/heroicons";
-  import { rpc, type Initiative, type Agent } from "$lib/api";
+  import { rpc } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
+  import { workspace as ws, type Row } from "$lib/workspace.svelte";
   import {
     ACTION_LABELS,
     DEFAULT_KEYMAP,
+    PALETTE_ACTIONS,
     buildReverse,
     eventToSpec,
     formatSpec,
@@ -17,14 +19,13 @@
   import DiffView from "$lib/DiffView.svelte";
   import ContextOverview from "$lib/ContextOverview.svelte";
   import TreeView from "$lib/TreeView.svelte";
+  import Sidebar from "$lib/Sidebar.svelte";
   import CommandPalette from "$lib/CommandPalette.svelte";
   import Prompt from "$lib/Prompt.svelte";
   import DirPicker from "$lib/DirPicker.svelte";
+  import Confirm from "$lib/Confirm.svelte";
   import Editor from "$lib/Editor.svelte";
   import Integrations from "$lib/Integrations.svelte";
-
-  let initiatives = $state<Initiative[]>([]);
-  let agentsByInit = $state<Record<string, Agent[]>>({});
 
   // Each pane is an independent viewport onto an initiative — its own agent,
   // tab, open context file and tree selection. The sidebar drives whichever
@@ -53,15 +54,9 @@
 
   let sidebarCollapsed = $state(false);
   let sidebarWidth = $state(300);
-  let cursor = $state(0);
-  let error = $state<string | null>(null);
-  let loading = $state(true);
   let status = $state<string | null>(null);
   let keymap = $state<Keymap>(DEFAULT_KEYMAP);
   let editing = $state<{ path: string } | null>(null);
-  // Sidebar: which initiatives are expanded and their lazily-loaded context files.
-  let expanded = $state<Set<string>>(new Set());
-  let contextFilesByInit = $state<Record<string, string[]>>({});
   // Which pane has keyboard focus. Tab cycles; the terminal only receives keys
   // when "main" so sidebar nav (j/k/arrows) keeps working otherwise.
   let paneFocus = $state<"sidebar" | "main">("sidebar");
@@ -71,8 +66,6 @@
   let contentEl = $state<HTMLElement | null>(null);
 
   const base = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
-  // Backend agent statuses are snake_case ("awaiting_input"); show them spaced.
-  const humanStatus = (s: string) => s.replace(/_/g, " ");
 
   function termTextarea(): HTMLElement | null {
     // Scope to the active pane so focus lands on the right terminal when split.
@@ -102,80 +95,10 @@
     { id: "tree", label: "3 Tree" },
   ] as const;
 
-  // Status hues are deliberately off the amber accent (accent = focus/selection,
-  // not state): green = running, sky = planning, violet = done, muted = archived.
-  const statusDot: Record<string, string> = {
-    ongoing: "bg-green-500",
-    planning: "bg-sky-500",
-    done: "bg-violet-500",
-    archived: "bg-muted",
-  };
   const STATUS_ORDER = ["planning", "ongoing", "done", "archived"];
 
   const reverse = $derived(buildReverse(keymap));
-  const selectedInitiative = $derived(initiatives.find((i) => i.id === active.initiativeId) ?? null);
-
-  // Flat list of the currently-visible selectable sidebar rows, mirroring the
-  // rendered tree, so j/k navigation matches what's on screen.
-  type Row =
-    | { kind: "init"; initId: string }
-    | { kind: "file"; initId: string; name: string }
-    | { kind: "dir"; initId: string; path: string }
-    | { kind: "agent"; initId: string; agentId: string };
-
-  function agentsForDir(initId: string, path: string): Agent[] {
-    return (agentsByInit[initId] ?? []).filter((a) => a.dir === path);
-  }
-
-  // Agents whose dir isn't one of the initiative's project dirs (e.g. started in
-  // the context folder) — shown directly under the initiative.
-  function looseAgents(init: Initiative): Agent[] {
-    const dirs = new Set(init.dirs.map((d) => d.path));
-    return (agentsByInit[init.id] ?? []).filter((a) => !dirs.has(a.dir));
-  }
-
-  const rows = $derived.by<Row[]>(() => {
-    const out: Row[] = [];
-    for (const i of initiatives) {
-      out.push({ kind: "init", initId: i.id });
-      if (!expanded.has(i.id)) continue;
-      for (const f of contextFilesByInit[i.id] ?? []) out.push({ kind: "file", initId: i.id, name: f });
-      for (const d of i.dirs) {
-        out.push({ kind: "dir", initId: i.id, path: d.path });
-        for (const a of agentsForDir(i.id, d.path)) out.push({ kind: "agent", initId: i.id, agentId: a.id });
-      }
-      for (const a of looseAgents(i)) out.push({ kind: "agent", initId: i.id, agentId: a.id });
-    }
-    return out;
-  });
-
-  // Stable key per row so the keyboard cursor can be highlighted on ANY row
-  // type (init / file / dir / agent), not just the ones with a semantic state.
-  function rowKey(r: Row): string {
-    switch (r.kind) {
-      case "init":
-        return `i:${r.initId}`;
-      case "file":
-        return `f:${r.initId}:${r.name}`;
-      case "dir":
-        return `d:${r.initId}:${r.path}`;
-      case "agent":
-        return `a:${r.agentId}`;
-    }
-  }
-
-  const cursorKey = $derived(rows[cursor] ? rowKey(rows[cursor]) : null);
-
-  // The directory the cursor is "in" — a dir row, or the dir of an agent row —
-  // so `s`/`t` start an agent in the highlighted directory.
-  const cursorDir = $derived.by<string | null>(() => {
-    const r = rows[cursor];
-    if (!r) return null;
-    if (r.kind === "dir") return r.path;
-    if (r.kind === "agent")
-      return (agentsByInit[r.initId] ?? []).find((a) => a.id === r.agentId)?.dir ?? null;
-    return null;
-  });
+  const selectedInitiative = $derived(ws.initiatives.find((i) => i.id === active.initiativeId) ?? null);
 
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
   function toast(msg: string) {
@@ -185,57 +108,15 @@
   }
 
   async function load() {
-    loading = true;
-    error = null;
-    try {
-      initiatives = await rpc<Initiative[]>("list_initiatives");
-      const entries = await Promise.all(
-        initiatives.map(
-          async (i) =>
-            [i.id, await rpc<Agent[]>("get_initiative_agents", { initiative_id: i.id })] as const,
-        ),
-      );
-      agentsByInit = Object.fromEntries(entries);
-      const v = panes[activePane];
-      if (!v.initiativeId && initiatives.length > 0) v.initiativeId = initiatives[0].id;
-      if (v.initiativeId) expand(v.initiativeId);
-    } catch (e) {
-      error = (e as Error).message;
-    } finally {
-      loading = false;
-    }
+    await ws.load();
+    const v = panes[activePane];
+    if (!v.initiativeId && ws.initiatives.length > 0) v.initiativeId = ws.initiatives[0].id;
+    if (v.initiativeId) ws.expand(v.initiativeId);
   }
 
-  async function ensureContextFiles(id: string) {
-    if (contextFilesByInit[id]) return;
-    try {
-      const res = await rpc<{ files: string[] }>("list_context_files", { initiative_id: id });
-      contextFilesByInit = { ...contextFilesByInit, [id]: res.files };
-    } catch {
-      contextFilesByInit = { ...contextFilesByInit, [id]: [] };
-    }
-  }
-
-  function expand(id: string) {
-    if (!expanded.has(id)) {
-      expanded = new Set(expanded).add(id);
-      void ensureContextFiles(id);
-    }
-  }
-
-  function toggleExpand(id: string) {
-    if (expanded.has(id)) {
-      const next = new Set(expanded);
-      next.delete(id);
-      expanded = next;
-    } else {
-      expand(id);
-    }
-  }
-
-  // Apply a row's selection WITHOUT touching the cursor — moveCursor owns the
-  // cursor. (The mouse-facing select* helpers below also syncCursor; calling
-  // them here would snap the cursor back and break arrow navigation.)
+  // Apply a row's selection WITHOUT touching the cursor — the cursor is owned by
+  // workspace.moveCursor. (The mouse-facing select* helpers below also sync the
+  // cursor; calling them here would snap it back and break arrow navigation.)
   function applyRow(row: Row) {
     const v = panes[activePane];
     switch (row.kind) {
@@ -244,14 +125,14 @@
         v.initiativeId = row.initId;
         v.agentId = null;
         v.wantFile = null;
-        expand(row.initId);
+        ws.expand(row.initId);
         break;
       case "file":
         v.initiativeId = row.initId;
         v.agentId = null;
         v.wantFile = row.name;
         v.tab = "context";
-        expand(row.initId);
+        ws.expand(row.initId);
         break;
       case "agent":
         v.initiativeId = row.initId;
@@ -263,14 +144,15 @@
   }
 
   function moveCursor(delta: number) {
-    if (rows.length === 0) return;
-    cursor = Math.max(0, Math.min(cursor + delta, rows.length - 1));
-    applyRow(rows[cursor]);
+    const row = ws.moveCursor(delta);
+    if (row) applyRow(row);
   }
 
-  function syncCursor(pred: (r: Row) => boolean) {
-    const i = rows.findIndex(pred);
-    if (i >= 0) cursor = i;
+  // Tree convention: close/open the node, else step out to the parent or into
+  // the first child. Structural navigation, so not part of the remappable keymap.
+  function treeHorizontal(dir: "left" | "right") {
+    const row = dir === "left" ? ws.collapseOrParent() : ws.expandOrChild();
+    if (row) applyRow(row);
   }
 
   function selectInitiative(id: string) {
@@ -279,8 +161,8 @@
     v.agentId = null;
     v.wantFile = null;
     paneFocus = "sidebar";
-    expand(id);
-    syncCursor((r) => r.kind === "init" && r.initId === id);
+    ws.expand(id);
+    ws.syncCursor((r) => r.kind === "init" && r.initId === id);
   }
 
   function openContextFile(initId: string, name: string) {
@@ -290,8 +172,8 @@
     v.wantFile = name;
     v.tab = "context";
     paneFocus = "sidebar";
-    expand(initId);
-    syncCursor((r) => r.kind === "file" && r.initId === initId && r.name === name);
+    ws.expand(initId);
+    ws.syncCursor((r) => r.kind === "file" && r.initId === initId && r.name === name);
   }
 
   function selectAgent(initId: string, agentId: string) {
@@ -300,7 +182,7 @@
     v.agentId = agentId;
     v.wantFile = null;
     v.tab = "context";
-    syncCursor((r) => r.kind === "agent" && r.agentId === agentId);
+    ws.syncCursor((r) => r.kind === "agent" && r.agentId === agentId);
     focusMain(); // explicit click on an agent → interact with its terminal
   }
 
@@ -310,7 +192,7 @@
     v.agentId = null;
     v.wantFile = null;
     paneFocus = "sidebar";
-    syncCursor((r) => r.kind === "dir" && r.initId === initId && r.path === path);
+    ws.syncCursor((r) => r.kind === "dir" && r.initId === initId && r.path === path);
   }
 
   function promptAddDir() {
@@ -338,10 +220,11 @@
     // initiative-wide files: orchestration.md, context docs, memory, etc.
     // Otherwise fall back to the first project directory; with no directory at
     // all, omit `dir` and the backend runs in the initiative's context folder.
-    const row = rows[cursor];
+    const row = ws.rows[ws.cursor];
     const atInitRoot = row?.kind === "init" || row?.kind === "file";
     const rootDir = selectedInitiative.context_path ?? null;
-    const dir = cursorDir ?? (atInitRoot ? rootDir : null) ?? selectedInitiative.dirs[0]?.path ?? null;
+    const dir =
+      ws.cursorDir ?? (atInitRoot ? rootDir : null) ?? selectedInitiative.dirs[0]?.path ?? null;
     try {
       await rpc("start_agent", {
         initiative_id: selectedInitiative.id,
@@ -349,11 +232,7 @@
         ...(dir ? { dir } : {}),
       });
       const where =
-        dir && dir === rootDir
-          ? "at initiative root"
-          : dir
-            ? `in ${base(dir)}`
-            : "in scratchpad";
+        dir && dir === rootDir ? "at initiative root" : dir ? `in ${base(dir)}` : "in scratchpad";
       toast(`Started ${adapter} ${where}`);
       await load();
     } catch (e) {
@@ -384,13 +263,11 @@
         active.tab = "context";
         break;
       case "diff_mode":
+      case "diff_all_files":
         active.tab = "diff";
         break;
       case "tree_mode":
         active.tab = "tree";
-        break;
-      case "diff_all_files":
-        active.tab = "diff";
         break;
       case "navigate_down":
         moveCursor(1);
@@ -449,17 +326,14 @@
         promptAddDir();
         break;
       case "delete":
-        await deleteSelection();
-        break;
-      case "quit":
-        toast("Quit is handled by the window — nothing to do here.");
+        deleteSelection();
         break;
       case "edit_context":
         if (active.treeSelectedPath) editing = { path: active.treeSelectedPath };
         else toast("Open a file in the Tree view to edit it.");
         break;
-      case "new_context":
-        toast("Context-file management is coming soon.");
+      case "quit":
+        toast("Quit is handled by the window — nothing to do here.");
         break;
     }
   }
@@ -504,10 +378,6 @@
 
   // ── Panes: split / balance / collapse ─────────────────────────────────────────
 
-  function focusPane(idx: number) {
-    activePane = Math.max(0, Math.min(idx, panes.length - 1));
-  }
-
   // Toggle a split in the given orientation. With no split, clone the active
   // pane into a second one. Splitting again in the SAME orientation collapses
   // back to the active pane; splitting in the other just re-orients.
@@ -535,52 +405,41 @@
   // Close one pane and keep the other; the survivor becomes the single view.
   function closePane(idx: number) {
     if (!split) return;
-    const keep = panes[idx === 0 ? 1 : 0];
-    panes = [keep];
+    panes = [panes[idx === 0 ? 1 : 0]];
     activePane = 0;
     split = null;
   }
 
-  // Drag the divider between the two panes to resize them (fraction of content).
-  function startSplitDrag(e: PointerEvent) {
+  // Shared drag handler for both dividers: the sidebar's (width in px) and the
+  // split's (fraction of the content box).
+  function startDrag(onMove: (e: PointerEvent) => void) {
+    return (e: PointerEvent) => {
+      e.preventDefault();
+      const up = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", up);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", up);
+    };
+  }
+
+  const startSplitDrag = startDrag((ev) => {
     if (!split || !contentEl) return;
-    e.preventDefault();
-    const el = contentEl;
-    const move = (ev: PointerEvent) => {
-      const r = el.getBoundingClientRect();
-      const f =
-        split!.dir === "vertical"
-          ? (ev.clientX - r.left) / r.width
-          : (ev.clientY - r.top) / r.height;
-      split = { ...split!, fraction: Math.min(0.85, Math.max(0.15, f)) };
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  }
+    const r = contentEl.getBoundingClientRect();
+    const f =
+      split.dir === "vertical" ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height;
+    split = { ...split, fraction: Math.min(0.85, Math.max(0.15, f)) };
+  });
 
-  // Drag the divider between the sidebar and the content to resize the sidebar.
-  function startSidebarDrag(e: PointerEvent) {
+  const startSidebarDrag = startDrag((ev) => {
     if (!bodyEl) return;
-    e.preventDefault();
-    const el = bodyEl;
-    const move = (ev: PointerEvent) => {
-      const r = el.getBoundingClientRect();
-      sidebarWidth = Math.min(520, Math.max(200, ev.clientX - r.left));
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  }
+    const r = bodyEl.getBoundingClientRect();
+    sidebarWidth = Math.min(520, Math.max(200, ev.clientX - r.left));
+  });
 
-  // Window-management shortcuts, handled as raw events (like Tab focus cycling)
-  // rather than through the remappable keymap: ⌘D / ⌘⇧D split, ⌘⌃= balances.
+  // Window-management shortcuts, handled as raw events rather than through the
+  // remappable keymap: ⌘D / ⌘⇧D split, ⌘⌃= balances.
   function paneShortcut(e: KeyboardEvent): (() => void) | null {
     const primary = e.metaKey || e.ctrlKey;
     if (!primary) return null;
@@ -591,26 +450,20 @@
     return null;
   }
 
-  function onWindowKeydown(e: KeyboardEvent) {
-    // Confirm modals are handled in the capture phase (onCaptureKeydown) so the
-    // agent terminal can't swallow Enter before we see it.
-    if (modal?.kind === "confirm") return;
-    if (modal || editing) return; // modals / editor handle their own keys
+  function actionFor(spec: string): ActionId | undefined {
+    return (
+      reverse[spec] ??
+      (spec === "down" ? "navigate_down" : spec === "up" ? "navigate_up" : undefined)
+    );
+  }
 
-    // Pane shortcuts fire even when the terminal has focus (they're modifier
-    // combos), so check them before the keymap path bails on editable targets.
-    const pane = paneShortcut(e);
-    if (pane) {
-      e.preventDefault();
-      pane();
-      return;
-    }
+  // Bare keys, bubble phase: they must reach an input or the PTY first.
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (modal || editing) return; // overlays and the editor own their keys
 
     const spec = eventToSpec(e);
-    if (!spec) return;
+    if (!spec || spec.includes("+")) return; // modifier combos: see onCaptureKeydown
 
-    // When focus is in the terminal or a form field, only intercept modifier
-    // combos so bare keystrokes still reach the PTY / inputs.
     const ae = document.activeElement as HTMLElement | null;
     const editable =
       !!ae &&
@@ -618,49 +471,52 @@
         ae.tagName === "TEXTAREA" ||
         ae.tagName === "SELECT" ||
         ae.isContentEditable);
+    if (editable) return;
 
-    const action =
-      reverse[spec] ??
-      (spec === "down" ? "navigate_down" : spec === "up" ? "navigate_up" : undefined);
+    if (spec === "left" || spec === "right") {
+      e.preventDefault();
+      treeHorizontal(spec);
+      return;
+    }
+
+    const action = actionFor(spec);
     if (!action) return;
-    if (editable && !spec.includes("+")) return;
-
     e.preventDefault();
     runAction(action);
   }
 
-  // Capture-phase key handling so xterm can't swallow keys before we act on them.
-  // Handles: confirm-modal Enter/Esc, and Tab focus cycling between sidebar/terminal.
+  // Capture phase so xterm can't swallow them: Tab, pane shortcuts, and every
+  // modifier combo (⌃P, ⌃B…), which the terminal would otherwise eat.
   function onCaptureKeydown(e: KeyboardEvent) {
-    // Confirm modals: Enter accepts, Esc cancels. Runs ahead of xterm, which
-    // otherwise routes Enter (\r) to the PTY and stops propagation.
-    if (modal?.kind === "confirm") {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        e.stopPropagation();
-        modal.onConfirm();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        modal = null;
-      }
+    if (modal || editing) return; // overlays install their own capture handlers
+
+    if (e.key === "Tab") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (paneFocus === "main") focusSidebar();
+      else if (active.agentId && active.tab === "context") focusMain();
       return;
     }
-    // Tab / Shift+Tab cycle focus between the sidebar and the agent terminal.
-    // (Esc is left for the agent — Claude/vim need it.)
-    if (e.key !== "Tab" || modal || editing) return;
+
+    const pane = paneShortcut(e);
+    if (pane) {
+      e.preventDefault();
+      e.stopPropagation();
+      pane();
+      return;
+    }
+
+    const spec = eventToSpec(e);
+    if (!spec || !spec.includes("+")) return;
+    const action = actionFor(spec);
+    if (!action) return;
     e.preventDefault();
     e.stopPropagation();
-    if (paneFocus === "main") focusSidebar();
-    else if (active.agentId && active.tab === "context") focusMain();
+    runAction(action);
   }
 
   const paletteItems = $derived(
-    (Object.keys(ACTION_LABELS) as ActionId[]).map((id) => ({
-      id,
-      label: ACTION_LABELS[id],
-      spec: formatSpec(keymap[id]),
-    })),
+    PALETTE_ACTIONS.map((id) => ({ id, label: ACTION_LABELS[id], spec: formatSpec(keymap[id]) })),
   );
 
   // Contextual shortcut hints for the footer — a quiet, always-on cheat row that
@@ -674,7 +530,7 @@
     }
     const hints = [{ spec: "↑↓", label: "Move" }];
     if (active.agentId && active.tab === "context") hints.push({ spec: "⇥", label: "Terminal" });
-    if (initiatives.length === 0) hints.push({ spec: k("new_initiative"), label: "New initiative" });
+    if (ws.initiatives.length === 0) hints.push({ spec: k("new_initiative"), label: "New initiative" });
     else hints.push({ spec: k("start_agent"), label: "Start agent" }, { spec: k("add_dir"), label: "Add dir" });
     if (selectedInitiative) hints.push({ spec: "⌘D", label: "Split" });
     if (split) hints.push({ spec: "⌘⌃=", label: "Balance" });
@@ -720,17 +576,17 @@
             "rounded-md border px-2.5 py-1 text-xs",
             active.tab === t.id ? "border-border bg-canvas text-fg" : "border-transparent text-muted hover:text-fg",
           ]}
+          aria-current={active.tab === t.id ? "page" : undefined}
           onclick={() => (active.tab = t.id)}
         >
           {t.label}
         </button>
       {/each}
     </nav>
-    {#if status}
-      <span class="text-[11px] text-muted">{status}</span>
-    {/if}
+    <!-- Announced, so feedback isn't purely visual. -->
+    <span class="text-[11px] text-fg/70" role="status" aria-live="polite">{status ?? ""}</span>
     {#if active.agentId && active.tab === "context"}
-      <span class="text-[11px] text-muted">⇥ focus: {paneFocus === "main" ? "terminal" : "sidebar"}</span>
+      <span class="text-[11px] text-fg/70">⇥ focus: {paneFocus === "main" ? "terminal" : "sidebar"}</span>
     {/if}
     <button
       class="ml-auto rounded-md p-1 text-muted hover:text-fg"
@@ -773,122 +629,17 @@
         onclick={() => (sidebarCollapsed = false)}
       >›</button>
     {:else}
-      <aside
-        class={[
-          "shrink-0 overflow-y-auto border-r bg-canvas p-2",
-          paneFocus === "sidebar" ? "border-accent/50" : "border-border",
-        ]}
-        style="width: {sidebarWidth}px"
-      >
-        <div class="mb-1 flex items-center justify-between pl-1">
-          <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">Initiatives</span>
-          <button
-            class="rounded p-0.5 text-muted hover:text-fg"
-            title="Collapse sidebar ({formatSpec(keymap.toggle_sidebar)})"
-            aria-label="Collapse sidebar"
-            onclick={() => (sidebarCollapsed = true)}
-          >‹</button>
-        </div>
-        {#if loading}
-          <p class="p-1.5 text-xs text-muted">Loading…</p>
-        {:else if error}
-          <p class="p-1.5 text-xs text-red-400">{error}</p>
-        {:else if initiatives.length === 0}
-          <p class="p-1.5 text-xs text-muted">No initiatives yet. Press {formatSpec(keymap.new_initiative)} to create one.</p>
-        {:else}
-          {#each initiatives as init (init.id)}
-            {@const isOpen = expanded.has(init.id)}
-            <div class="mb-1">
-              <div class="flex items-center">
-                <button
-                  class="px-1 text-[10px] text-muted hover:text-fg"
-                  onclick={() => toggleExpand(init.id)}
-                  aria-label={isOpen ? "Collapse" : "Expand"}
-                >
-                  {isOpen ? "▾" : "▸"}
-                </button>
-                <button
-                  class={[
-                    "flex flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs font-semibold",
-                    cursorKey === `i:${init.id}` ? "bg-accent/20 text-white" : "text-fg hover:bg-surface",
-                  ]}
-                  onclick={() => selectInitiative(init.id)}
-                >
-                  <span class={["size-2 rounded-full", statusDot[init.status] ?? "bg-muted"]}></span>
-                  <span class="truncate">{init.name}</span>
-                  {#if (agentsByInit[init.id] ?? []).length}
-                    <span class="ml-auto text-[11px] text-muted">{(agentsByInit[init.id] ?? []).length}</span>
-                  {/if}
-                </button>
-              </div>
-
-              {#if isOpen}
-                <!-- context files -->
-                {#each contextFilesByInit[init.id] ?? [] as f (f)}
-                  <button
-                    class={[
-                      "flex w-full items-center gap-1.5 rounded-md py-0.5 pr-1.5 pl-6 text-left text-xs",
-                      cursorKey === `f:${init.id}:${f}`
-                        ? "bg-accent/20 text-white"
-                        : "text-fg/70 hover:bg-surface",
-                    ]}
-                    onclick={() => openContextFile(init.id, f)}
-                  >
-                    <span class="text-muted">◈</span>{f}
-                  </button>
-                {/each}
-
-                <!-- directories, each with its agents -->
-                {#each init.dirs as dir (dir.path)}
-                  <button
-                    class={[
-                      "flex w-full items-center gap-1.5 rounded-md py-0.5 pr-1.5 pl-6 text-left text-xs",
-                      cursorKey === `d:${init.id}:${dir.path}`
-                        ? "bg-accent/20 text-white"
-                        : "text-fg/80 hover:bg-surface",
-                    ]}
-                    onclick={() => selectDir(init.id, dir.path)}
-                    title={dir.path}
-                  >
-                    <span class="text-muted">▸</span><span class="truncate"
-                      >{dir.path === init.context_path ? "scratch" : base(dir.path)}</span
-                    >
-                    {#if dir.worktree_enabled}<span class="rounded border border-border px-1 text-[10px] text-muted">wt</span>{/if}
-                  </button>
-                  {#each agentsForDir(init.id, dir.path) as agent (agent.id)}
-                    <button
-                      class={[
-                        "flex w-full items-center gap-2 rounded-md py-0.5 pr-1.5 pl-10 text-left text-xs",
-                        cursorKey === `a:${agent.id}` ? "bg-accent/20 text-white" : "text-fg/70 hover:bg-surface",
-                      ]}
-                      onclick={() => selectAgent(init.id, agent.id)}
-                    >
-                      ◦ {agent.adapter}
-                      {#if agent.profile}<span class="rounded border border-accent/40 px-1 text-[10px] text-accent/90">{agent.profile}</span>{/if}
-                      <span class="ml-auto text-[11px] text-muted">{humanStatus(agent.status)}</span>
-                    </button>
-                  {/each}
-                {/each}
-
-                <!-- agents not tied to a project dir -->
-                {#each looseAgents(init) as agent (agent.id)}
-                  <button
-                    class={[
-                      "flex w-full items-center gap-2 rounded-md py-0.5 pr-1.5 pl-6 text-left text-xs",
-                      cursorKey === `a:${agent.id}` ? "bg-accent/20 text-white" : "text-fg/70 hover:bg-surface",
-                    ]}
-                    onclick={() => selectAgent(init.id, agent.id)}
-                  >
-                    ◦ {agent.adapter}
-                    {#if agent.profile}<span class="rounded border border-accent/40 px-1 text-[10px] text-accent/90">{agent.profile}</span>{/if}
-                    <span class="ml-auto text-[11px] text-muted">{agent.status}</span>
-                  </button>
-                {/each}
-              {/if}
-            </div>
-          {/each}
-        {/if}
-      </aside>
+      <Sidebar
+        focused={paneFocus === "sidebar"}
+        width={sidebarWidth}
+        newInitiativeKey={formatSpec(keymap.new_initiative)}
+        collapseKey={formatSpec(keymap.toggle_sidebar)}
+        onSelectInitiative={selectInitiative}
+        onSelectDir={selectDir}
+        onSelectAgent={selectAgent}
+        onOpenContextFile={openContextFile}
+        onCollapse={() => (sidebarCollapsed = true)}
+      />
       <!-- Drag to resize the sidebar. -->
       <div
         role="separator"
@@ -922,7 +673,7 @@
   </div>
 
   {#snippet pane(view: PaneView, idx: number)}
-    {@const init = initiatives.find((i) => i.id === view.initiativeId) ?? null}
+    {@const init = ws.initiatives.find((i) => i.id === view.initiativeId) ?? null}
     <main
       id={"pane-" + idx}
       class={[
@@ -944,16 +695,16 @@
         >✕</button>
       {/if}
       {#if !init}
-        {#if !loading && initiatives.length === 0}
+        {#if !ws.loading && ws.initiatives.length === 0}
           <div class="flex h-full items-center justify-center p-8">
             <div class="max-w-md">
               <h2 class="text-base font-semibold text-fg">Start your first initiative</h2>
-              <p class="mt-2 text-[13px] leading-6 text-muted">
+              <p class="mt-2 text-[13px] leading-6 text-fg/70">
                 An initiative groups the project directories you work across. Codrift runs an AI
                 coding agent in each one and streams its terminal live, so you can supervise
                 several at once.
               </p>
-              <p class="mt-4 flex flex-wrap items-center gap-x-1.5 gap-y-2 text-[13px] text-muted">
+              <p class="mt-4 flex flex-wrap items-center gap-x-1.5 gap-y-2 text-[13px] text-fg/70">
                 <kbd class="rounded border border-border bg-surface px-1.5 py-px text-[11px] text-fg/80">{formatSpec(keymap.new_initiative)}</kbd>
                 <span>create one,</span>
                 <kbd class="rounded border border-border bg-surface px-1.5 py-px text-[11px] text-fg/80">{formatSpec(keymap.add_dir)}</kbd>
@@ -964,7 +715,7 @@
             </div>
           </div>
         {:else}
-          <div class="p-6 text-[13px] text-muted">Select an initiative.</div>
+          <div class="p-6 text-[13px] text-fg/70">Select an initiative.</div>
         {/if}
       {:else if view.tab === "context"}
         {#if view.agentId}
@@ -974,7 +725,7 @@
         {:else}
           <ContextOverview
             initiative={init}
-            agents={agentsByInit[init.id] ?? []}
+            agents={ws.agentsFor(init.id)}
             wantFile={view.wantFile}
             onChanged={load}
           />
@@ -999,7 +750,7 @@
   {/snippet}
 
   <!-- Always-on contextual cheat row: keyboard-first discoverability without ceremony. -->
-  <footer class="flex items-center gap-4 border-t border-border bg-surface px-4 py-1 text-[11px] text-muted">
+  <footer class="flex items-center gap-4 border-t border-border bg-surface px-4 py-1 text-[11px] text-fg/70">
     {#each keyHints as h (h.label)}
       <span class="flex items-center gap-1.5">
         <kbd class="rounded border border-border bg-canvas px-1.5 py-px text-[10px] text-fg/80">{h.spec}</kbd>
@@ -1031,32 +782,5 @@
 {:else if modal?.kind === "dirpicker"}
   <DirPicker onSubmit={modal.submit} onClose={() => (modal = null)} />
 {:else if modal?.kind === "confirm"}
-  <div
-    class="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[18vh]"
-    onclick={() => (modal = null)}
-    role="presentation"
-  >
-    <div
-      class="w-[420px] max-w-[90vw] rounded-lg border border-border bg-surface p-4 shadow-2xl"
-      onclick={(e) => e.stopPropagation()}
-      role="presentation"
-    >
-      <p class="mb-1 text-[13px] text-fg">{modal.message}</p>
-      <p class="mb-4 text-[11px] text-muted">Enter to confirm · Esc to cancel</p>
-      <div class="flex justify-end gap-2">
-        <button
-          class="rounded-md px-3 py-1.5 text-xs text-muted hover:text-fg"
-          onclick={() => (modal = null)}
-        >
-          Cancel
-        </button>
-        <button
-          class="rounded-md bg-red-500/20 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/30"
-          onclick={modal.onConfirm}
-        >
-          Confirm
-        </button>
-      </div>
-    </div>
-  </div>
+  <Confirm message={modal.message} onConfirm={modal.onConfirm} onClose={() => (modal = null)} />
 {/if}

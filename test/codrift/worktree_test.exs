@@ -6,16 +6,7 @@ defmodule Codrift.WorktreeTest do
 
   @moduletag :tmp_dir
 
-  defp init_git_repo(path) do
-    System.cmd("git", ["init"], cd: path, stderr_to_stdout: true)
-    System.cmd("git", ["config", "user.email", "test@test.com"], cd: path, stderr_to_stdout: true)
-    System.cmd("git", ["config", "user.name", "Test"], cd: path, stderr_to_stdout: true)
-
-    System.cmd("git", ["commit", "--allow-empty", "-m", "initial"],
-      cd: path,
-      stderr_to_stdout: true
-    )
-  end
+  defp init_git_repo(path), do: Codrift.Test.GitRepo.init!(path)
 
   describe "git_repo?/1" do
     test "returns true for a git repository", %{tmp_dir: tmp_dir} do

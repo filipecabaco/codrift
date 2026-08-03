@@ -229,7 +229,7 @@ Also: the [command palette](docs/images/command-palette.png), [shared memory](do
 ```
 Tauri window (Rust)  ── spawns ──▶  Elixir sidecar ("desktop" release)
    Svelte UI (xterm.js)                Codrift (Application)
-        │  HTTP + SSE  :7437             └── Codrift.Supervisor (:one_for_one)
+        │  HTTP + WS  :7437              └── Codrift.Supervisor (:one_for_one)
         └───────────────────────────────────┤ Registry (AgentRegistry)
                                              ├── Codrift.Initiative.Store
                                              ├── Codrift.SessionStore (SQLite)
@@ -237,7 +237,7 @@ Tauri window (Rust)  ── spawns ──▶  Elixir sidecar ("desktop" release)
                                              ├── Codrift.AgentSupervisor
                                              │     └── Codrift.AgentProcess (erlexec PTY)
                                              ├── {Task.Supervisor, Codrift.TaskSupervisor}
-                                             ├── Codrift (Francis / Bandit) — HTTP + SSE
+                                             ├── Codrift (Francis / Bandit) — HTTP + WS
                                              └── Codrift.ShutdownManager (desktop only)
 ```
 

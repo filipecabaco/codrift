@@ -66,7 +66,13 @@ defmodule Codrift.ConductorSupervisor do
     end
   end
 
-  @doc "Terminates the Conductor for `initiative_id`, if one is running."
+  @doc """
+  Terminates the Conductor for `initiative_id`, if one is running.
+
+  Always `:ok`: "make sure nothing is running" is the contract. The lookup can
+  return a pid that has already died (unregistration waits on the DOWN message),
+  so `terminate_child/2` reporting `:not_found` means the job is already done.
+  """
   def stop_conductor(initiative_id, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     registry = Keyword.get(opts, :registry, Codrift.ConductorRegistry)
@@ -75,6 +81,8 @@ defmodule Codrift.ConductorSupervisor do
       {:ok, pid} -> DynamicSupervisor.terminate_child(server, pid)
       {:error, :not_found} -> :ok
     end
+
+    :ok
   end
 
   @doc "Returns PIDs of all running conductors."

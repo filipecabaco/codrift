@@ -207,15 +207,11 @@ defmodule Codrift.Web.E2ETest do
   describe "diff" do
     @tag :tmp_dir
     test "get_diff surfaces an uncommitted change in a tracked file", %{tmp_dir: tmp_dir} do
-      repo = Path.join(tmp_dir, "repo")
-      File.mkdir_p!(repo)
-      git = fn args -> System.cmd("git", args, cd: repo, stderr_to_stdout: true) end
-      git.(["init"])
-      git.(["config", "user.email", "test@test.com"])
-      git.(["config", "user.name", "Test"])
-      File.write!(Path.join(repo, "app.ex"), "defmodule App do\nend\n")
-      git.(["add", "-A"])
-      git.(["commit", "-m", "init"])
+      repo =
+        Codrift.Test.GitRepo.init_with!(Path.join(tmp_dir, "repo"), %{
+          "app.ex" => "defmodule App do\nend\n"
+        })
+
       # Uncommitted modification.
       File.write!(Path.join(repo, "app.ex"), "defmodule App do\n  def run, do: :ok\nend\n")
 

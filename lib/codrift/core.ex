@@ -39,7 +39,12 @@ defmodule Codrift.Core do
     case Store.get(initiative_id) do
       {:ok, initiative} ->
         {:ok,
-         Enum.flat_map(initiative.dirs, fn entry -> dir_diffs(DirEntry.effective_path(entry)) end)}
+         Enum.flat_map(initiative.dirs, fn entry ->
+           entry
+           |> DirEntry.effective_path()
+           |> dir_diffs()
+           |> Enum.map(&Map.put(&1, "dir", entry.path))
+         end)}
 
       {:error, :not_found} ->
         {:error, "initiative not found: #{initiative_id}"}
@@ -174,8 +179,12 @@ defmodule Codrift.Core do
 
   def call("delete_initiative", %{"initiative_id" => id}) do
     case Store.delete(id) do
-      :ok -> {:ok, %{"deleted" => id}}
-      {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+      :ok ->
+        :ok = Codrift.ConductorSupervisor.stop_conductor(id)
+        {:ok, %{"deleted" => id}}
+
+      {:error, :not_found} ->
+        {:error, "initiative not found: #{id}"}
     end
   end
 
@@ -389,41 +398,46 @@ defmodule Codrift.Core do
     end
   end
 
+  def call("stop_orchestration", %{"initiative_id" => id}) do
+    # Liveness, not just a registry hit: unregistration waits on the DOWN
+    # message, so a lookup can still resolve a conductor that has already died.
+    running? =
+      case Codrift.ConductorSupervisor.find_conductor(id) do
+        {:ok, pid} -> Process.alive?(pid)
+        {:error, :not_found} -> false
+      end
+
+    :ok = Codrift.ConductorSupervisor.stop_conductor(id)
+    {:ok, %{"initiative_id" => id, "stopped" => running?}}
+  end
+
   def call("get_conductor_status", %{"initiative_id" => id}) do
-    case Codrift.ConductorSupervisor.find_conductor(id) do
-      {:ok, pid} ->
-        statuses =
-          pid
-          |> Codrift.Conductor.agent_status()
-          |> Map.new(fn {agent_id, info} ->
-            {agent_id,
-             %{
-               dir: info.dir,
-               status: Atom.to_string(info.status),
-               role: Atom.to_string(info.role)
-             }}
-          end)
+    with_conductor(id, fn pid ->
+      statuses =
+        pid
+        |> Codrift.Conductor.agent_status()
+        |> Map.new(fn {agent_id, info} ->
+          {agent_id,
+           %{
+             dir: info.dir,
+             status: Atom.to_string(info.status),
+             role: Atom.to_string(info.role)
+           }}
+        end)
 
-        {:ok, %{"initiative_id" => id, "agents" => statuses}}
-
-      {:error, :not_found} ->
-        {:error, "no conductor running for initiative: #{id}"}
-    end
+      %{"initiative_id" => id, "agents" => statuses}
+    end)
   end
 
   def call("get_conductor_results", %{"initiative_id" => id}) do
-    case Codrift.ConductorSupervisor.find_conductor(id) do
-      {:ok, pid} ->
-        results =
-          pid
-          |> Codrift.Conductor.results()
-          |> Map.new(fn {agent_id, chunks} -> {agent_id, Enum.join(chunks)} end)
+    with_conductor(id, fn pid ->
+      results =
+        pid
+        |> Codrift.Conductor.results()
+        |> Map.new(fn {agent_id, chunks} -> {agent_id, Enum.join(chunks)} end)
 
-        {:ok, %{"initiative_id" => id, "results" => results}}
-
-      {:error, :not_found} ->
-        {:error, "no conductor running for initiative: #{id}"}
-    end
+      %{"initiative_id" => id, "results" => results}
+    end)
   end
 
   def call("read_orchestration_md", %{"initiative_id" => id}) do
@@ -530,7 +544,13 @@ defmodule Codrift.Core do
     end
   end
 
-  def call(name, _args), do: {:error, "unknown tool: #{name}"}
+  def call(name, args) do
+    if name in Codrift.MCP.Handler.tool_names() do
+      {:error, "wrong arguments for #{name}: got #{inspect(Map.keys(args))}"}
+    else
+      {:error, "unknown tool: #{name}"}
+    end
+  end
 
   defp integration_item_to_map(%Codrift.Integration.Item{} = item) do
     %{
@@ -541,6 +561,22 @@ defmodule Codrift.Core do
       assignee: item.assignee,
       labels: item.labels || []
     }
+  end
+
+  # A successful lookup is not proof the process is alive: unregistration waits
+  # on the DOWN message.
+  defp with_conductor(id, fun) do
+    case Codrift.ConductorSupervisor.find_conductor(id) do
+      {:ok, pid} ->
+        try do
+          {:ok, fun.(pid)}
+        catch
+          :exit, _ -> {:error, "no conductor running for initiative: #{id}"}
+        end
+
+      {:error, :not_found} ->
+        {:error, "no conductor running for initiative: #{id}"}
+    end
   end
 
   defp dir_diffs(dir) do

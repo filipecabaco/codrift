@@ -133,7 +133,7 @@ defmodule Codrift.Web.LocalGuardTest do
 
     test "rejects a WebSocket upgrade with neither Origin nor token" do
       conn =
-        conn(:get, "http://localhost/ws/agent/some-id")
+        conn(:get, "http://localhost/ws")
         |> put_req_header("upgrade", "websocket")
         |> put_req_header("connection", "upgrade")
         |> call()

@@ -46,7 +46,28 @@ defmodule Codrift.AgentSupervisor do
          profile_env: Keyword.get(opts, :profile_env, [])
        ]}
 
-    DynamicSupervisor.start_child(server, spec)
+    case DynamicSupervisor.start_child(server, spec) do
+      {:ok, pid} = ok ->
+        announce_to_watchers(pid)
+        ok
+
+      other ->
+        other
+    end
+  end
+
+  # Watchers subscribe to the agents present when they connect, so later agents
+  # must be wired up and announced here — otherwise an agent spawned by an
+  # orchestrator or the CLI never reaches an open window.
+  defp announce_to_watchers(agent_pid) do
+    Registry.dispatch(Codrift.AgentWatchers, :all, fn watchers ->
+      Enum.each(watchers, fn {watcher, _} ->
+        Codrift.AgentProcess.subscribe(agent_pid, watcher)
+        send(watcher, {:agent_started, Codrift.Web.EventRelay.describe(agent_pid)})
+      end)
+    end)
+  rescue
+    ArgumentError -> :ok
   end
 
   @doc "Terminates a running agent by PID."

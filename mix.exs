@@ -113,7 +113,7 @@ defmodule Codrift.MixProject do
       {:erlexec, "~> 2.0"},
       {:exqlite, "~> 0.23"},
       {:quantum, "~> 3.0"},
-      {:ex_tauri, github: "filipecabaco/ex_tauri", branch: "main"},
+      {:ex_tauri, "~> 0.2"},
       # Code quality
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},

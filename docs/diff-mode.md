@@ -35,7 +35,8 @@ the diff is taken against that worktree's branch.
 
 ## Live updates
 
-While agents run, their output streams over SSE at `/events/initiative/:id`.
+While agents run, their output streams over the initiative WebSocket at
+`/ws/initiative/:id`.
 Hit `r` (refresh) after an agent finishes a batch of edits to pull the latest
 `git diff`.
 

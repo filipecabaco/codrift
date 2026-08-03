@@ -79,4 +79,45 @@ defmodule Codrift.AgentSupervisorTest do
     assert %{initiative_id: "init-a"} = AgentProcess.status(pid1)
     assert %{initiative_id: "init-b"} = AgentProcess.status(pid2)
   end
+
+  # A socket subscribes to the agents that exist when it connects; later agents
+  # must be wired to already-open watchers or they never reach an open window.
+  describe "agent watchers" do
+    # AgentWatchers is already running in the app's supervision tree.
+    test "an agent started after a watcher registers still streams to it", %{sup: sup} do
+      {:ok, _} = Registry.register(Codrift.AgentWatchers, :all, nil)
+
+      {:ok, pid} =
+        AgentSupervisor.start_agent("init-watch", System.tmp_dir!(), EchoAdapter, server: sup)
+
+      %{id: id} = AgentProcess.status(pid)
+      AgentProcess.send_input(pid, "hello from a late agent\n")
+
+      assert_receive {:agent_output, ^id, _data}, 2_000
+    end
+
+    test "announces the new agent to watchers so they can render it", %{sup: sup} do
+      {:ok, _} = Registry.register(Codrift.AgentWatchers, :all, nil)
+
+      {:ok, pid} =
+        AgentSupervisor.start_agent("init-announce", System.tmp_dir!(), EchoAdapter, server: sup)
+
+      %{id: id} = AgentProcess.status(pid)
+
+      assert_receive {:agent_started,
+                      %{
+                        id: ^id,
+                        adapter: adapter,
+                        status: status,
+                        dir: dir,
+                        initiative_id: "init-announce"
+                      }},
+                     2_000
+
+      # Same shape `list_agents` returns.
+      assert is_binary(adapter)
+      assert is_binary(status)
+      assert is_binary(dir)
+    end
+  end
 end

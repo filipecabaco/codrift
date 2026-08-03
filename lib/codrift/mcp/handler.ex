@@ -108,6 +108,10 @@ defmodule Codrift.MCP.Handler do
     })
   end
 
+  @doc "Names of every tool this server advertises."
+  @spec tool_names() :: [String.t()]
+  def tool_names, do: Enum.map(tool_definitions(), & &1["name"])
+
   defp tool_definitions do
     [
       %{
@@ -476,6 +480,17 @@ defmodule Codrift.MCP.Handler do
             }
           },
           "required" => ["initiative_id", "task"]
+        }
+      },
+      %{
+        "name" => "stop_orchestration",
+        "description" =>
+          "Stop the conductor running for an initiative, terminating the orchestrator and every " <>
+            "sub-agent it spawned. Returns `stopped: false` when nothing was running.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{"initiative_id" => %{"type" => "string"}},
+          "required" => ["initiative_id"]
         }
       },
       %{

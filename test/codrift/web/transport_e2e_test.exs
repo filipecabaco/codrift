@@ -1,15 +1,10 @@
 defmodule Codrift.Web.TransportE2ETest do
   @moduledoc """
-  End-to-end coverage of the real-time transports over an actual socket:
+  End-to-end coverage of `ws /ws` over a real socket.
 
-    - `GET /events/initiative/:id` (SSE) — the "watch agents live" output stream
-    - `ws /ws/agent/:agent_id`      (WS)  — the keystroke/resize input channel
-
-  Plug.Test can't exercise these (Bandit performs the SSE chunking and the WS
-  upgrade below the plug seam), so this spins up a dedicated loopback Bandit on
-  an ephemeral port and speaks raw HTTP/WS to it with `:gen_tcp`. A live PTY
-  agent (`terminal` adapter) provides the output that should flow over SSE and
-  the process that should receive WS input.
+  Plug.Test can't exercise this (Bandit performs the WS upgrade below the plug
+  seam), so this runs a loopback Bandit on an ephemeral port and speaks raw
+  HTTP/WS with `:gen_tcp`, against a live PTY agent.
 
   Not `async`: uses the global agent supervisor and a real listening socket.
   """
@@ -119,13 +114,27 @@ defmodule Codrift.Web.TransportE2ETest do
     end)
   end
 
-  # Minimal RFC 6455 client text frame (FIN + text opcode, masked as clients must).
+  defp ws_handshake(path) do
+    key = Base.encode64(:crypto.strong_rand_bytes(16))
+
+    "GET #{path} HTTP/1.1\r\n" <>
+      "Host: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" <>
+      "Sec-WebSocket-Key: #{key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+  end
+
+  # RFC 6455 client text frame, masked, with extended length forms.
   defp ws_text_frame(payload) do
-    len = byte_size(payload)
-    true = len < 126
     mask = :crypto.strong_rand_bytes(4)
     masked = mask_payload(payload, mask)
-    <<0x81, 0x80 ||| len>> <> mask <> masked
+
+    header =
+      case byte_size(payload) do
+        len when len < 126 -> <<0x81, 0x80 ||| len>>
+        len when len < 65_536 -> <<0x81, 0x80 ||| 126, len::16>>
+        len -> <<0x81, 0x80 ||| 127, len::64>>
+      end
+
+    header <> mask <> masked
   end
 
   defp mask_payload(payload, mask) do
@@ -138,60 +147,103 @@ defmodule Codrift.Web.TransportE2ETest do
 
   import Bitwise, only: [|||: 2]
 
-  # ── SSE: live output stream ───────────────────────────────────────────────────
+  # ── The unified initiative socket ─────────────────────────────────────────────
 
-  describe "SSE /events/initiative/:id" do
+  describe "ws /ws" do
     @tag :tmp_dir
-    test "streams the connected event and then agent output", %{port: port, tmp_dir: tmp_dir} do
-      {initiative_id, agent_id} = start_live_agent(tmp_dir)
-
-      sock = connect(port)
-
-      req =
-        "GET /events/initiative/#{initiative_id} HTTP/1.1\r\n" <>
-          "Host: localhost\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
-
-      :ok = :gen_tcp.send(sock, req)
-
-      # The join reply.
-      assert read_until(sock, "event: connected") =~ "event: connected"
-
-      # Now type into the subscribed agent; its output must arrive as an SSE
-      # `output` event carrying base64 content.
-      _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo SSE_STREAM_OK\n"})
-
-      assert read_until(sock, "event: output") =~ "event: output"
-
-      :gen_tcp.close(sock)
-    end
-  end
-
-  # ── WS: input channel ─────────────────────────────────────────────────────────
-
-  describe "WS /ws/agent/:agent_id" do
-    @tag :tmp_dir
-    test "a data frame is delivered to the agent's PTY", %{port: port, tmp_dir: tmp_dir} do
+    test "streams the connected frame, then agent output, and accepts input", %{
+      port: port,
+      tmp_dir: tmp_dir
+    } do
       {_initiative_id, agent_id} = start_live_agent(tmp_dir)
 
       sock = connect(port)
-      key = Base.encode64(:crypto.strong_rand_bytes(16))
-
-      handshake =
-        "GET /ws/agent/#{agent_id} HTTP/1.1\r\n" <>
-          "Host: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" <>
-          "Sec-WebSocket-Key: #{key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
-
-      :ok = :gen_tcp.send(sock, handshake)
+      :ok = :gen_tcp.send(sock, ws_handshake("/ws"))
       assert read_until(sock, "101") =~ "101 Switching Protocols"
 
-      # Send a keystroke frame; the handler routes {"t":"d"} to the PTY.
-      frame = ws_text_frame(~s({"t":"d","d":"echo WS_INPUT_OK\\n"}))
+      # Join reply.
+      assert read_until(sock, ~s("event":"connected")) =~ ~s("event":"connected")
+
+      # Down: the agent's output arrives as an `output` frame.
+      _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo WS_STREAM_OK\n"})
+      assert read_until(sock, ~s("event":"output")) =~ ~s("event":"output")
+
+      # Up: a keystroke frame on the same socket reaches the PTY.
+      frame =
+        ws_text_frame(~s({"t":"d","agent_id":"#{agent_id}","d":"echo WS_INPUT_OK\\n"}))
+
       :ok = :gen_tcp.send(sock, frame)
 
-      # Output flows back over SSE, not WS — verify via the agent's buffer that
-      # the PTY actually received (and echoed) our input.
       assert eventually(fn -> String.contains?(agent_output(agent_id), "WS_INPUT_OK") end),
-             "agent PTY never received the WS input frame"
+             "agent PTY never received the input frame"
+
+      :gen_tcp.close(sock)
+    end
+
+    # Francis defaults max_frame_size to 64 KB; the route raises it, since a
+    # paste arrives as one frame.
+    @tag :tmp_dir
+    test "accepts a paste larger than the default frame limit", %{port: port, tmp_dir: tmp_dir} do
+      {_initiative_id, agent_id} = start_live_agent(tmp_dir)
+
+      sock = connect(port)
+      :ok = :gen_tcp.send(sock, ws_handshake("/ws"))
+      assert read_until(sock, ~s("event":"connected")) =~ ~s("event":"connected")
+
+      # ~100 KB of pasted text, with no newline so the shell just buffers it.
+      big = String.duplicate("x", 100_000)
+
+      :ok =
+        :gen_tcp.send(sock, ws_text_frame(~s({"t":"d","agent_id":"#{agent_id}","d":"#{big}"})))
+
+      # The socket survived, so a normal keystroke frame still lands.
+      marker = "AFTER_BIG_PASTE"
+
+      :ok =
+        :gen_tcp.send(
+          sock,
+          ws_text_frame(~s({"t":"d","agent_id":"#{agent_id}","d":"\\u0015echo #{marker}\\n"}))
+        )
+
+      assert eventually(fn -> String.contains?(agent_output(agent_id), marker) end),
+             "socket died on an oversized frame"
+
+      :gen_tcp.close(sock)
+    end
+
+    @tag :tmp_dir
+    test "an agent started after the socket connected is announced and streams", %{
+      port: port,
+      tmp_dir: tmp_dir
+    } do
+      initiative_id =
+        ok!("create_initiative", %{
+          "name" => "tx-late-#{System.unique_integer([:positive])}",
+          "dirs" => []
+        })["id"]
+
+      on_exit(fn -> rpc("delete_initiative", %{"initiative_id" => initiative_id}) end)
+
+      sock = connect(port)
+      :ok = :gen_tcp.send(sock, ws_handshake("/ws"))
+      assert read_until(sock, ~s("event":"connected")) =~ ~s("event":"connected")
+
+      # Started *after* the connection: the watcher registry has to wire it up.
+      agent_id =
+        ok!("start_agent", %{
+          "initiative_id" => initiative_id,
+          "dir" => tmp_dir,
+          "adapter" => "terminal"
+        })["id"]
+
+      on_exit(fn -> rpc("stop_agent", %{"agent_id" => agent_id}) end)
+
+      # Announced without a refresh, so an orchestrator's sub-agents appear live.
+      assert read_until(sock, ~s("event":"agent_started")) =~ agent_id
+
+      _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo LATE_AGENT_OK\n"})
+
+      assert read_until(sock, ~s("event":"output")) =~ ~s("event":"output")
 
       :gen_tcp.close(sock)
     end

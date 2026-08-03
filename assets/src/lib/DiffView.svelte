@@ -7,7 +7,16 @@
   type Row =
     | { kind: "hunk"; header: string }
     | { kind: "line"; type: string; tokens: ThemedToken[] };
-  type ViewFile = { path: string; additions: number; deletions: number; rows: Row[] };
+  type ViewFile = {
+    path: string;
+    /** Which of the initiative's repos this file is in — two repos can both have a README. */
+    dir: string | null;
+    additions: number;
+    deletions: number;
+    rows: Row[];
+  };
+
+  const base = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
 
   let viewFiles = $state<ViewFile[]>([]);
   let loading = $state(true);
@@ -16,7 +25,7 @@
   const lineBg: Record<string, string> = { add: "bg-green-500/15", remove: "bg-red-500/15" };
   const sign: Record<string, string> = { add: "+", remove: "-" };
 
-  async function buildFile(file: DiffFile): Promise<ViewFile> {
+  async function buildFile(file: DiffFile & { dir?: string }): Promise<ViewFile> {
     const contents = file.hunks.flatMap((h) => h.lines.map((l) => l.content));
     const tokens = await highlightLines(contents, langForPath(file.path));
     const rows: Row[] = [];
@@ -32,7 +41,13 @@
         i++;
       }
     }
-    return { path: file.path, additions: file.additions, deletions: file.deletions, rows };
+    return {
+      path: file.path,
+      dir: file.dir ?? null,
+      additions: file.additions,
+      deletions: file.deletions,
+      rows,
+    };
   }
 
   $effect(() => {
@@ -57,10 +72,14 @@
   {:else if viewFiles.length === 0}
     <p class="text-muted">No changes.</p>
   {:else}
-    {#each viewFiles as file (file.path)}
+    {#each viewFiles as file (`${file.dir ?? ""}:${file.path}`)}
       <div class="mb-4 overflow-hidden rounded-md border border-border">
         <div class="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5">
-          <span class="text-accent">{file.path}</span>
+          <span class="truncate">
+            {#if file.dir}<span class="text-muted" title={file.dir}>{base(file.dir)}/</span>{/if}<span
+              class="text-accent">{file.path}</span
+            >
+          </span>
           <span class="text-muted">
             <span class="text-green-400">+{file.additions}</span>
             <span class="text-red-400">-{file.deletions}</span>

@@ -70,21 +70,65 @@ defmodule Codrift.Memory do
             }
           ]
   def search(initiative_id, query) do
-    with_db(initiative_id, fn db ->
-      {:ok, stmt} =
-        Exqlite.Sqlite3.prepare(db, """
-        SELECT rowid, chunk_type, content, source, rank
-        FROM memory
-        WHERE memory MATCH ?1
-        ORDER BY rank
-        LIMIT 20
-        """)
+    case to_match_expr(query) do
+      "" ->
+        []
 
-      :ok = Exqlite.Sqlite3.bind(stmt, [query])
-      rows = collect_rows(db, stmt, &search_row_to_map/1, [])
-      :ok = Exqlite.Sqlite3.release(db, stmt)
-      rows
+      match ->
+        with_db(initiative_id, fn db ->
+          {:ok, stmt} =
+            Exqlite.Sqlite3.prepare(db, """
+            SELECT rowid, chunk_type, content, source, rank
+            FROM memory
+            WHERE memory MATCH ?1
+            ORDER BY rank
+            LIMIT 20
+            """)
+
+          :ok = Exqlite.Sqlite3.bind(stmt, [match])
+          rows = collect_rows(db, stmt, &search_row_to_map/1, [])
+          :ok = Exqlite.Sqlite3.release(db, stmt)
+          rows
+        end)
+    end
+  end
+
+  # FTS5 treats `(`, `)`, `*`, `:` and `"` as operators, so a literal query like
+  # `greet()` is a syntax error. Quote bare terms; keep boolean operators that
+  # sit between terms; preserve quoted phrases.
+  @fts_operators ~w(AND OR NOT)
+
+  defp to_match_expr(query) when is_binary(query) do
+    ~r/"([^"]*)"|(\S+)/
+    |> Regex.scan(query)
+    |> Enum.map(&classify/1)
+    |> Enum.reject(&(&1 == :skip))
+    |> drop_edge_operators()
+    |> Enum.map_join(" ", fn
+      {:op, op} -> op
+      {:term, term} -> ~s("#{String.replace(term, ~s("), ~s(""))}")
     end)
+  end
+
+  defp to_match_expr(_), do: ""
+
+  # An unmatched capture group comes back as "".
+  defp classify([_, phrase]), do: term_or_skip(phrase)
+
+  defp classify([_, "", token]),
+    do: if(token in @fts_operators, do: {:op, token}, else: {:term, token})
+
+  defp classify([_, phrase, _]), do: term_or_skip(phrase)
+
+  defp term_or_skip(text), do: if(String.trim(text) == "", do: :skip, else: {:term, text})
+
+  # `foo AND` / `OR foo` are syntax errors.
+  defp drop_edge_operators(tokens) do
+    tokens
+    |> Enum.drop_while(&match?({:op, _}, &1))
+    |> Enum.reverse()
+    |> Enum.drop_while(&match?({:op, _}, &1))
+    |> Enum.reverse()
   end
 
   @doc """
@@ -265,8 +309,16 @@ defmodule Codrift.Memory do
 
   defp collect_rows(db, stmt, mapper, acc) do
     case Exqlite.Sqlite3.step(db, stmt) do
-      {:row, row} -> collect_rows(db, stmt, mapper, [mapper.(row) | acc])
-      :done -> Enum.reverse(acc)
+      {:row, row} ->
+        collect_rows(db, stmt, mapper, [mapper.(row) | acc])
+
+      :done ->
+        Enum.reverse(acc)
+
+      {:error, reason} ->
+        require Logger
+        Logger.warning("memory query failed: #{inspect(reason)}")
+        Enum.reverse(acc)
     end
   end
 

@@ -3,7 +3,7 @@ defmodule Codrift do
   Application entry point and HTTP router.
 
   Starts the supervision tree (Registry, Initiative.Store, AgentSupervisor,
-  ConductorSupervisor, Bandit) and declares all HTTP/SSE routes.
+  ConductorSupervisor, Bandit) and declares all HTTP routes.
 
   ## MCP server
 
@@ -13,16 +13,11 @@ defmodule Codrift do
 
   Run `mix codrift.mcp.install` to register the server with Claude Code.
 
-  ## SSE initiative stream
+  ## Live WebSocket
 
-  `GET /events/initiative/:id` streams events for a single initiative:
-
-    - `connected`               – emitted on join with agent count
-    - `output`                  – raw agent output chunk
-    - `stopped`                 – agent exited with a code
-    - `conductor_output`        – output chunk from a conductor-managed agent
-    - `conductor_agent_ready`   – conductor agent became idle
-    - `conductor_agent_stopped` – conductor agent exited
+  `ws /ws` carries the live surface both ways for the whole workspace: agent
+  output and status out, keystrokes and resizes in. See `Codrift.Web.EventRelay`
+  for the frame shapes.
   """
 
   use Francis
@@ -54,6 +49,7 @@ defmodule Codrift do
     base = [
       {Registry, keys: :unique, name: Codrift.AgentRegistry},
       {Registry, keys: :unique, name: Codrift.ConductorRegistry},
+      {Registry, keys: :duplicate, name: Codrift.AgentWatchers},
       Codrift.SessionStore,
       Store,
       Codrift.AgentSupervisor,
@@ -168,8 +164,7 @@ defmodule Codrift do
     end
   end)
 
-  # Recent buffered output for a single agent, oldest-first. Used by web
-  # terminals to replay scrollback before live bytes start arriving over SSE.
+  # Recent buffered output for a single agent, oldest-first — terminal scrollback.
   get("/api/agent/:id/output", fn conn ->
     n =
       case Integer.parse(conn.params["n"] || "200") do
@@ -209,86 +204,44 @@ defmodule Codrift do
     end
   end)
 
-  # Bidirectional input channel for a single agent's PTY. Output flows the
-  # other way over the initiative SSE stream (`/events/initiative/:id`).
+  # Client frames: {"t":"d",agent_id,d} keystrokes, {"t":"r",agent_id,cols,rows} resize.
+  # Server frames come from Codrift.Web.EventRelay. The handler is compiled into
+  # its own module, so it can only call public functions.
   #
-  # Client → server JSON frames:
-  #   {"t":"d","d":"<bytes>"}       raw terminal data / keystrokes → send_raw
-  #   {"t":"r","cols":N,"rows":M}   terminal resize → PTY winsz
-  #
-  # The handler body is inlined: `ws/3` compiles it into a separate generated
-  # module, so it can only call public functions (not `Codrift` privates).
-  # Only `{:received, _}` is handled: `:join` and `{:close, _}` are no-ops here,
-  # and Francis silently succeeds when the handler doesn't match them. Spelling
-  # them out as dead clauses also confuses Dialyzer — the ws macro applies the
-  # handler inline only for received frames, so it infers those clauses can
-  # never match. See Francis.Websocket.call_join/call_close.
-  ws("/ws/agent/:agent_id", fn {:received, frame}, socket ->
-    with {:ok, pid} <- Codrift.AgentSupervisor.find_agent(socket.params["agent_id"]),
-         {:ok, msg} <- JSON.decode(frame) do
-      case msg do
-        %{"t" => "d", "d" => data} when is_binary(data) ->
-          Codrift.AgentProcess.send_raw(pid, data)
+  # max_frame_size covers a large paste (one frame); timeout must stay above two
+  # heartbeat intervals, since an idle terminal only sends the browser's pongs.
+  ws(
+    "/ws",
+    fn
+      :join, _socket ->
+        {:ok, _relay} = Codrift.Web.EventRelay.start_link()
+        {:reply, %{event: "connected", agents: Codrift.Web.EventRelay.snapshot()}}
 
-        %{"t" => "r", "cols" => cols, "rows" => rows}
-        when is_integer(cols) and is_integer(rows) ->
-          Codrift.AgentProcess.resize(pid, cols, rows)
+      {:received, frame}, _socket ->
+        with {:ok, %{"agent_id" => agent_id} = msg} <- JSON.decode(frame),
+             {:ok, pid} <- Codrift.AgentSupervisor.find_agent(agent_id) do
+          case msg do
+            %{"t" => "d", "d" => data} when is_binary(data) ->
+              Codrift.AgentProcess.send_raw(pid, data)
 
-        _ ->
-          :ok
-      end
-    end
+            %{"t" => "r", "cols" => cols, "rows" => rows}
+            when is_integer(cols) and is_integer(rows) ->
+              Codrift.AgentProcess.resize(pid, cols, rows)
 
-    :noreply
-  end)
+            _ ->
+              :ok
+          end
+        end
 
-  sse("/events/initiative/:id", fn
-    :join, socket ->
-      initiative_id = socket.params["id"]
-      agents = Codrift.AgentSupervisor.list_agents_for_initiative(initiative_id)
-      Enum.each(agents, &Codrift.AgentProcess.subscribe(&1, self()))
+        :noreply
 
-      case Codrift.ConductorSupervisor.find_conductor(initiative_id) do
-        {:ok, conductor_pid} -> Codrift.Conductor.subscribe(conductor_pid, self())
-        {:error, :not_found} -> :ok
-      end
-
-      {:reply,
-       %{event: "connected", data: %{initiative_id: initiative_id, agent_count: length(agents)}}}
-
-    {:received, {:agent_output, agent_id, data}}, _socket ->
-      {:reply, %{event: "output", data: %{agent_id: agent_id, content: Base.encode64(data)}}}
-
-    {:received, {:agent_stopped, agent_id, code}}, _socket ->
-      {:reply, %{event: "stopped", data: %{agent_id: agent_id, exit_code: code}}}
-
-    {:received, {:conductor_output, initiative_id, agent_id, data}}, _socket ->
-      {:reply,
-       %{
-         event: "conductor_output",
-         data: %{initiative_id: initiative_id, agent_id: agent_id, content: Base.encode64(data)}
-       }}
-
-    {:received, {:conductor_agent_ready, initiative_id, agent_id}}, _socket ->
-      {:reply,
-       %{
-         event: "conductor_agent_ready",
-         data: %{initiative_id: initiative_id, agent_id: agent_id}
-       }}
-
-    {:received, {:conductor_agent_stopped, initiative_id, agent_id, code}}, _socket ->
-      {:reply,
-       %{
-         event: "conductor_agent_stopped",
-         data: %{initiative_id: initiative_id, agent_id: agent_id, exit_code: code}
-       }}
-
-    {:received, _}, _socket ->
-      :noreply
-
-    {:close, _reason}, _socket ->
-      :ok
-  end)
+      {:close, _reason}, _socket ->
+        :ok
+    end,
+    max_frame_size: 4 * 1024 * 1024,
+    heartbeat_interval: 30_000,
+    timeout: 90_000
+  )
 
   # ── OAuth2 routes ────────────────────────────────────────────────────────────
 

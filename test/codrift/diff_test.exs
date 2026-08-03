@@ -102,16 +102,8 @@ defmodule Codrift.DiffTest do
   describe "generate/2" do
     @moduletag :tmp_dir
 
-    defp init_git_repo(dir) do
-      System.cmd("git", ["init"], cd: dir)
-      System.cmd("git", ["config", "user.email", "test@test.com"], cd: dir)
-      System.cmd("git", ["config", "user.name", "Test"], cd: dir)
-    end
-
-    defp git_commit(dir, message) do
-      System.cmd("git", ["add", "-A"], cd: dir)
-      System.cmd("git", ["commit", "-m", message], cd: dir)
-    end
+    defp init_git_repo(dir), do: Codrift.Test.GitRepo.git(dir, ["init"])
+    defp git_commit(dir, message), do: Codrift.Test.GitRepo.commit!(dir, message)
 
     test "returns {:ok, []} when there are no changes", %{tmp_dir: dir} do
       init_git_repo(dir)

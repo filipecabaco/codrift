@@ -62,7 +62,25 @@
   let activeFile = $state<string | null>(null);
   let panel = $state<"file" | "memory">("file");
   let docHtml = $state<string>("");
+  // The agent-facing half of initiative.md, rendered collapsed: agents read the
+  // file, humans shouldn't have to re-read it every session.
+  let agentNotesHtml = $state<string>("");
   let docError = $state<string | null>(null);
+
+  const AGENT_NOTES =
+    /<!--\s*codrift:agent-notes:start\s*-->([\s\S]*?)<!--\s*codrift:agent-notes:end\s*-->/;
+  // Fallback for initiatives created before the markers existed.
+  const LEGACY_NOTES = /^##\s+Memory Store[\s\S]*?(?=^##\s+(?!#)|\Z)/m;
+
+  function splitDoc(markdown: string): { body: string; notes: string } {
+    const marked = markdown.match(AGENT_NOTES);
+    if (marked) return { body: markdown.replace(AGENT_NOTES, ""), notes: marked[1] };
+
+    const legacy = markdown.match(LEGACY_NOTES);
+    if (legacy) return { body: markdown.replace(LEGACY_NOTES, ""), notes: legacy[0] };
+
+    return { body: markdown, notes: "" };
+  }
 
   async function start(dir: string) {
     starting = dir;
@@ -109,14 +127,20 @@
     const name = activeFile;
     if (!name) {
       docHtml = "";
+      agentNotesHtml = "";
       return;
     }
     docError = null;
     rpc<{ content: string }>("read_context_file", { initiative_id: id, name })
-      .then((res) => (docHtml = marked.parse(res.content) as string))
+      .then((res) => {
+        const { body, notes } = splitDoc(res.content);
+        docHtml = marked.parse(body) as string;
+        agentNotesHtml = notes ? (marked.parse(notes) as string) : "";
+      })
       .catch((e) => {
         docError = (e as Error).message;
         docHtml = "";
+        agentNotesHtml = "";
       });
   });
 </script>
@@ -165,7 +189,7 @@
       {#each initiative.dirs as dir (dir.path)}
         {@const dirAgents = agents.filter((a) => a.dir === dir.path).length}
         <div class="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface">
-          <span class="text-muted">▸</span>
+          <span class="text-muted">◇</span>
           <span class="min-w-0 flex-1 truncate text-[13px] text-fg" title={dir.path}>
             {dirLabel(dir.path)}
           </span>
@@ -233,6 +257,18 @@
           >
             {@html docHtml}
           </div>
+          {#if agentNotesHtml}
+            <details class="mt-6 border-t border-border pt-3">
+              <summary class="cursor-pointer text-[11px] text-muted hover:text-fg">
+                Agent instructions (memory store, MCP and CLI usage)
+              </summary>
+              <div
+                class="mt-3 text-[13px] leading-6 text-fg/70 [&_code]:rounded [&_code]:bg-surface [&_code]:px-1 [&_code]:py-0.5 [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-fg [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-surface [&_pre]:p-3"
+              >
+                {@html agentNotesHtml}
+              </div>
+            </details>
+          {/if}
         {:else}
           <p class="text-xs text-muted">No context file.</p>
         {/if}
