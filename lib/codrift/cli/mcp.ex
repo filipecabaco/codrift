@@ -7,7 +7,7 @@ defmodule Codrift.CLI.MCP do
 
   ## Usage
 
-      codrift mcp install [--port=7437]
+      codrift mcp install [--port=43117]
 
   Registers the Codrift SSE endpoint with every detected AI CLI:
 

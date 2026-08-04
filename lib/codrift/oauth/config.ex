@@ -14,7 +14,13 @@ defmodule Codrift.OAuth.Config do
 
   ## Registering apps
 
-  PKCE services — redirect URI: `http://localhost:7437/oauth/callback/<service>`
+  PKCE services — redirect URI: `http://127.0.0.1:43117/oauth/callback/<service>`
+
+  The literal loopback IP, not `localhost`: Bandit binds IPv4 `127.0.0.1` only
+  (see `config/config.exs`), while `localhost` may resolve to `::1` first. RFC
+  8252 §7.3 recommends the literal IP for native-app loopback redirects for
+  exactly this reason. The port is fixed because providers store the redirect
+  URI at registration time and it cannot be renegotiated at runtime.
   Device Flow  — no redirect URI needed; register a GitHub OAuth App.
 
   `client_id` resolution order:
@@ -22,7 +28,7 @@ defmodule Codrift.OAuth.Config do
     2. Codrift's hardcoded client ID (set once registered apps exist)
   """
 
-  @port 7437
+  @port 43117
 
   @services %{
     "github" => %{
@@ -30,7 +36,7 @@ defmodule Codrift.OAuth.Config do
       device_code_url: "https://github.com/login/device/code",
       token_url: "https://github.com/login/oauth/access_token",
       client_id_env: "GITHUB_CLIENT_ID",
-      client_id: nil,
+      client_id: "Ov23lifrU89AdlZ0GOih",
       scopes: "repo read:org project"
     },
     "github_projects" => %{
@@ -38,7 +44,7 @@ defmodule Codrift.OAuth.Config do
       device_code_url: "https://github.com/login/device/code",
       token_url: "https://github.com/login/oauth/access_token",
       client_id_env: "GITHUB_CLIENT_ID",
-      client_id: nil,
+      client_id: "Ov23lifrU89AdlZ0GOih",
       scopes: "repo read:org project"
     },
     "linear" => %{
@@ -46,27 +52,24 @@ defmodule Codrift.OAuth.Config do
       auth_url: "https://linear.app/oauth/authorize",
       token_url: "https://api.linear.app/oauth/token",
       client_id_env: "LINEAR_CLIENT_ID",
-      client_id: nil,
-      scopes: "read",
-      token_format: :json
+      client_id: "17a8b9b39ebdd14c9c2e600f1ac51141",
+      scopes: "read"
     },
     "linear_projects" => %{
       flow: :pkce_browser,
       auth_url: "https://linear.app/oauth/authorize",
       token_url: "https://api.linear.app/oauth/token",
       client_id_env: "LINEAR_CLIENT_ID",
-      client_id: nil,
-      scopes: "read",
-      token_format: :json
+      client_id: "17a8b9b39ebdd14c9c2e600f1ac51141",
+      scopes: "read"
     },
     "gitlab" => %{
       flow: :pkce_browser,
       auth_url: "https://gitlab.com/oauth/authorize",
       token_url: "https://gitlab.com/oauth/token",
       client_id_env: "GITLAB_CLIENT_ID",
-      client_id: nil,
-      scopes: "read_api read_user",
-      token_format: :json
+      client_id: "734af289d7dc4abd701f471c1c17dc6470cc58ba8b23bf3077736bb95dd05372",
+      scopes: "read_api read_user"
     }
   }
 
@@ -103,7 +106,7 @@ defmodule Codrift.OAuth.Config do
 
   @doc "Returns the redirect URI for a PKCE service."
   @spec redirect_uri(String.t()) :: String.t()
-  def redirect_uri(service), do: "http://localhost:#{@port}/oauth/callback/#{service}"
+  def redirect_uri(service), do: "http://127.0.0.1:#{@port}/oauth/callback/#{service}"
 
   @doc """
   Builds the PKCE authorization URL for a service.

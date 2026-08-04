@@ -1,7 +1,7 @@
 import Config
 
 config :francis, dev: true
-config :codrift, bandit_opts: [port: 7437]
+config :codrift, bandit_opts: [port: 43117]
 
 config :codrift, Codrift.Scheduler,
   jobs: [

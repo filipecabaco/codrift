@@ -9,7 +9,7 @@ defmodule Codrift.ShutdownManager do
   Drop-in replacement for `ExTauri.ShutdownManager` with one correctness fix: the
   timeout is only enforced **after the first heartbeat is received**. The upstream
   version arms the 1500ms timeout at `init`, so a slow boot — the chain of this
-  process starting, Bandit binding `:7437`, the Rust shell polling and detecting
+  process starting, Bandit binding `:43117`, the Rust shell polling and detecting
   the port, connecting the socket, then sending the first byte — that exceeds the
   timeout makes the backend `System.stop/0` itself mid-startup, leaving the window
   pointed at a dead server (`ERR_CONNECTION_REFUSED`). Normal exits are already

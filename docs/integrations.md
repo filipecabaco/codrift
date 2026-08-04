@@ -9,10 +9,19 @@ Codrift can pull context from GitHub (Issues & Projects), Linear (Issues & Proje
 
 ## Quick start
 
-1. Register a developer app for the services you want (instructions below).
-2. Set the `*_CLIENT_ID` env var for each service.
-3. In the Codrift app, click the **Integrations** button in the header to open the connection manager and authorize a service.
-4. Import an issue with the CLI (`codrift integration import <service> <item_id>`), or let a connected agent call the `import_from_integration` MCP tool.
+Released builds ship with Codrift's own OAuth client IDs baked in, so there is
+nothing to register and no env var to set:
+
+1. In the Codrift app, click the **Integrations** button in the header to open the connection manager and authorize a service.
+2. Import an issue with the CLI (`codrift integration import <service> <item_id>`), or let a connected agent call the `import_from_integration` MCP tool.
+
+The sections below are only needed if you want to point Codrift at **your own**
+OAuth app (self-hosted GitLab, a private Linear app, an org-owned GitHub app) —
+set the matching `*_CLIENT_ID` env var and it overrides the bundled default.
+
+> **Port 43117 is fixed.** OAuth redirect URIs are registered ahead of time and
+> cannot be renegotiated at runtime, so the local server always binds `43117`.
+> If you register your own app, its redirect URI must use that exact port.
 
 ![Integrations connection manager](images/integrations.png)
 
@@ -29,7 +38,10 @@ Codrift can pull context from GitHub (Issues & Projects), Linear (Issues & Proje
 2. Fill in:
    - **Application name:** `Codrift`
    - **Homepage URL:** any URL (e.g. `https://github.com/your-org/codrift`)
-   - **Authorization callback URL:** leave blank (Device Flow has no callback)
+   - **Authorization callback URL:** required by the form even though Device Flow
+     never uses it — put `http://127.0.0.1:43117/oauth/callback/github`
+   - **Enable Device Flow:** **check this box.** Without it GitHub rejects the
+     device code request with `device_flow_disabled`.
 3. Click **Register application**.
 4. Copy the **Client ID** shown on the app page. Do **not** generate a client secret.
 
@@ -60,7 +72,7 @@ Required scopes: `repo`, `read:org`, `project` (for Projects v2).
 
 ## Linear — Issues and Projects
 
-**Auth flow:** PKCE (RFC 7636). Redirect to `localhost:7437`. No client secret.
+**Auth flow:** PKCE (RFC 7636). Redirect to `127.0.0.1:43117`. No client secret.
 
 ### Register an OAuth Application
 
@@ -68,7 +80,11 @@ Required scopes: `repo`, `read:org`, `project` (for Projects v2).
    → [Create application](https://linear.app/settings/api/applications/new)
 2. Fill in:
    - **Application name:** `Codrift`
-   - **Redirect URI:** `http://localhost:7437/oauth/callback/linear`
+   - **Callback URL:** `http://127.0.0.1:43117/oauth/callback/linear`
+     (adding `http://localhost:43117/oauth/callback/linear` on a second line is
+     harmless insurance, but the app only ever sends the literal IP form)
+   - **Public:** enable it if the client ID will be distributed. A private app can
+     only ever be authorized by the workspace that owns it.
 3. Click **Create**.
 4. Copy the **Client ID**. Ignore the client secret field — PKCE does not need it.
 
@@ -97,7 +113,7 @@ Generate a personal API key at
 
 ## GitLab — Issues
 
-**Auth flow:** PKCE (RFC 7636). Redirect to `localhost:7437`. Registered as a
+**Auth flow:** PKCE (RFC 7636). Redirect to `127.0.0.1:43117`. Registered as a
 **public** application (no secret).
 
 ### Register an Application
@@ -106,7 +122,7 @@ Generate a personal API key at
    → [Add new application](https://gitlab.com/-/profile/applications)
 2. Fill in:
    - **Name:** `Codrift`
-   - **Redirect URI:** `http://localhost:7437/oauth/callback/gitlab`
+   - **Redirect URI:** `http://127.0.0.1:43117/oauth/callback/gitlab`
    - **Confidential:** **unchecked** (this marks it as a public client enabling PKCE without a secret)
    - **Scopes:** `read_api`, `read_user`
 3. Click **Save application**.
@@ -151,23 +167,26 @@ with `read_api` scope.
 
 ---
 
-## Distributing Codrift with client IDs pre-configured
+## Bundled client IDs
 
-Client IDs are safe to commit — they are public identifiers, not secrets. Once
-you have registered apps for each service, set the `client_id` field directly in
-`lib/codrift/oauth/config.ex`:
+Client IDs are safe to commit — they are public identifiers, not secrets. The
+`client_id` field in `lib/codrift/oauth/config.ex` carries Codrift's registered
+apps, so released binaries authorize without any env var:
 
 ```elixir
 "github" => %{
   flow: :device_flow,
   ...
-  client_id: "Ov23li...",   # your registered GitHub OAuth App client ID
+  client_id: "Ov23lifrU89AdlZ0GOih",
   ...
 }
 ```
 
-Users who run the released binary will then be able to authorize without setting
-any env vars.
+Resolution order is `{SERVICE}_CLIENT_ID` env var → bundled ID, so pointing a
+build at your own app is a matter of exporting one variable.
+
+No client **secret** exists for any of these apps: Device Flow and PKCE are both
+designed for clients that cannot keep one. Nothing secret ships in the binary.
 
 ---
 

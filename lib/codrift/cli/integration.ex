@@ -9,7 +9,7 @@ defmodule Codrift.CLI.Integration do
 
   ## Auth flows
 
-  - PKCE (linear, gitlab): delegates to the running web server at localhost:7437,
+  - PKCE (linear, gitlab): delegates to the running web server at localhost:43117,
     which holds the StateStore. The desktop app must be running.
   - Device Flow (github): authorize from the desktop app's Integrations panel.
   - API key env var: fallback for CI or headless environments.
@@ -22,7 +22,7 @@ defmodule Codrift.CLI.Integration do
   alias Codrift.OAuth.Config, as: OAuthConfig
   alias Codrift.Paths
 
-  @server_url "http://localhost:7437"
+  @server_url "http://localhost:43117"
 
   defp initiatives_file, do: Path.join(Paths.config_dir(), "initiatives.json")
 

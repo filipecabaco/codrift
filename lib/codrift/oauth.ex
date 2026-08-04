@@ -8,7 +8,7 @@ defmodule Codrift.OAuth do
 
   RFC 7636 — no client secret stored or shipped:
   1. `start_flow/1` → returns `{:ok, %{flow: :pkce_browser, auth_url: url}}`.
-  2. Provider redirects to `localhost:7437/oauth/callback/{service}`.
+  2. Provider redirects to `127.0.0.1:43117/oauth/callback/{service}`.
   3. `handle_callback/3` exchanges code + verifier, saves the token.
 
   ### Device Flow (GitHub)
@@ -190,7 +190,7 @@ defmodule Codrift.OAuth do
 
   defp request_device_code(url, client_id, scopes) do
     params = %{client_id: client_id, scope: scopes}
-    HTTP.post(url, params, [{"accept", "application/json"}])
+    HTTP.post_form(url, params, [{"accept", "application/json"}])
   end
 
   # Tail-recursive poller — runs inside a Task.Supervisor child.
@@ -200,7 +200,7 @@ defmodule Codrift.OAuth do
     if System.os_time(:second) >= expires_at do
       notify(notify_pid, {:device_auth_failed, service, "device code expired", return_to})
     else
-      case HTTP.post(token_url, params, [{"accept", "application/json"}]) do
+      case HTTP.post_form(token_url, params, [{"accept", "application/json"}]) do
         {:ok, %{"access_token" => _} = token_data} ->
           save_token(service, token_data)
           notify(notify_pid, {:device_auth_complete, service, return_to})
@@ -234,7 +234,7 @@ defmodule Codrift.OAuth do
       code_verifier: verifier
     }
 
-    HTTP.post(config.token_url, params, [{"accept", "application/json"}])
+    HTTP.post_form(config.token_url, params, [{"accept", "application/json"}])
   end
 
   # ── Storage ──────────────────────────────────────────────────────────────────
@@ -255,11 +255,19 @@ defmodule Codrift.OAuth do
     end
   end
 
+  # Same shape as `Codrift.AuthToken`: the temp file is chmod'ed 0600 while still
+  # empty, so access tokens are never on disk under the umask default, and the
+  # rename is atomic — a crash mid-write cannot leave a truncated token store
+  # behind (which `load_tokens/0` would silently read as "no tokens").
   defp save_tokens(tokens) do
     path = token_file()
     path |> Path.dirname() |> File.mkdir_p!()
-    File.write!(path, JSON.encode!(tokens))
-    File.chmod!(path, 0o600)
+    tmp = path <> ".tmp"
+    fd = File.open!(tmp, [:write])
+    File.chmod!(tmp, 0o600)
+    IO.binwrite(fd, JSON.encode!(tokens))
+    File.close(fd)
+    File.rename!(tmp, path)
     :ok
   end
 end

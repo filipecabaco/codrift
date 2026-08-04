@@ -10,7 +10,7 @@ real user rather than for an abstract "feature".
   tree** — `App.svelte` split into `Sidebar`/`Overlay`/`Confirm`/`workspace.svelte.ts`,
   `memory.ex`, `core.ex`, `codrift.ex` and the new `lib/codrift/web/event_relay.ex`.
   SPA built with `pnpm build:fast`.
-- **Surface:** web UI at `http://localhost:7437/index.html` (same SPA the Tauri
+- **Surface:** web UI at `http://localhost:43117/index.html` (same SPA the Tauri
   webview loads), driven headfully in Chrome at 1440×900
 
 ---
@@ -27,7 +27,7 @@ app boots without editing any config file:
 sandbox = "<scratch>/sandbox/home"
 Application.put_env(:codrift, :data_dir, Path.join(sandbox, ".codrift"))
 Application.put_env(:codrift, :config_dir, Path.join(sandbox, ".config/codrift"))
-Application.put_env(:codrift, :bandit_opts, ip: {127, 0, 0, 1}, port: 7437)
+Application.put_env(:codrift, :bandit_opts, ip: {127, 0, 0, 1}, port: 43117)
 {:ok, _} = Application.ensure_all_started(:codrift)
 ```
 
@@ -73,11 +73,47 @@ only accepted when the backend or the filesystem agrees.
 | **P6** | Integrator / operator | Import work; survive restarts; clean up safely | Integrations panel inventory, server kill → reconnect banner → auto-recovery, `d` delete/stop with confirm modal (`Esc` cancel and `Enter` confirm), post-delete cleanup | server killed/restarted via shell while the page stays open |
 | **P9** | Playbook keeper | Keep the team's scripts and docs *in* the initiative, not beside it | A context folder holding `scripts/` (3 files), `docs/runbooks/` (2), `templates/`, `conventions.md` → rendered as a tree in the sidebar; folder expand/collapse; `memory` row; git repo vs plain folder | `click`, `press_key`, `evaluate_script` on the tree |
 | **P10** | Theme switcher | Work in the theme (and typeface) they already use everywhere else | Appearance panel: 65 bundled VS Code themes + drop-ins from `~/.codrift/themes`, live preview on ↑↓, Enter keeps / Esc reverts, persistence across reload; font family + size | picker driven by keyboard, verified via CSS custom properties and screenshots |
+| **P11** | Integration authenticator | Connect their tracker **once**, from inside the app, without registering a developer app or exporting a token | **Device Flow** (GitHub, GitHub Projects): Connect → user code + `github.com/login/device` → poll → connected badge. **PKCE** (Linear, GitLab): Connect → provider consent → redirect to `127.0.0.1:43117/oauth/callback/<service>` → token stored. Plus: `state` mismatch rejected, Disconnect/revoke, env-var precedence over the bundled client ID, and an import that actually spends the fresh token | Chrome MCP against the **real** provider pages; token truth read from `$SANDBOX/.codrift/oauth_tokens.json`; import verified via `POST /api/rpc` |
 
 A **real Claude agent** was launched twice (adapter `claude`, once under profile
 `claude-personal`) rather than only shell agents: it answered the trust prompt,
 read `index.js`, requested edit permission, and wrote a JSDoc block — so P3/P4
 were validated against genuine agent output, not a simulated diff.
+
+### P11 harness — what makes this persona different
+
+P11 is the only persona that reaches **outside the sandbox**. Three constraints
+follow from that:
+
+1. **The port is not free to choose.** Every other persona would work on any
+   port; P11 will not. The PKCE redirect URI is stored by the provider at app
+   registration time and cannot be renegotiated at runtime, so the sandbox must
+   bind exactly `43117` — which `boot.exs` already pins. On any other port
+   Linear and GitLab fail with `redirect_uri_mismatch` before the callback is
+   ever reached. Bandit binds IPv4 `127.0.0.1` only, and the redirect uses the
+   literal IP rather than `localhost` (which can resolve to `::1` first).
+2. **It grants real credentials.** Completing a flow issues a genuine token
+   against the tester's own GitHub / Linear / GitLab account. Tokens land in
+   `$SANDBOX/.codrift/oauth_tokens.json` because `Codrift.Paths` honours
+   `:data_dir` — assert that the real `~/.codrift/oauth_tokens.json` is
+   untouched, then revoke afterwards (in-app **Disconnect**, or the provider's
+   authorized-apps page) so the pass leaves nothing behind.
+3. **No env vars are needed to start.** Client IDs ship in
+   `lib/codrift/oauth/config.ex`, so the default path is "click Connect". The
+   env-var leg is a *separate* assertion: export `GITHUB_CLIENT_ID` (etc.) to a
+   junk value and confirm it overrides the bundled ID — that proves resolution
+   order rather than merely that OAuth works.
+
+Assertions worth making explicit, because a green badge alone does not prove
+them:
+
+| Claim | How to check it |
+|---|---|
+| Token actually persisted | `oauth_tokens.json` contains the service key, file mode is `0600` |
+| PKCE round-trip is sound | Tamper with `state` on the callback URL → rejected; correct `state` → token |
+| Device Flow is enabled on the app | The device-code request returns `user_code` / `verification_uri`, not `device_flow_disabled` |
+| The token is usable | Import an issue (`import_from_integration` or the CLI) and confirm the content lands in the initiative |
+| Fallback still works | Unset OAuth, set `GITHUB_TOKEN` / `LINEAR_API_KEY` / `GITLAB_TOKEN`, repeat the import |
 
 ---
 
@@ -164,6 +200,7 @@ regression is recognisable.
 | 8 | **xterm threw on every themed glyph** — `Unexpected fillStyle color format "oklch(…)"` — because `getComputedStyle` now keeps colours in their own space. Found while re-verifying, not in the original pass. | P1–P6 | **Fixed.** Colours are resolved through a 1×1 canvas readback, so xterm always receives `rgb()`. Console is clean. |
 | 9 | **45 of 65 VS Code themes mapped to an unusable accent** (many at 1.00:1 — `focusBorder` equal to the background). Found by auditing the mapping rather than by eye. | P10 | **Fixed.** Candidate keys are ranked and each token falls back until it clears WCAG (4.5:1 body, 3:1 secondary/accent). `pnpm check` now runs `scripts/audit-themes.mjs`: **65 themes, 0 below threshold.** |
 | 10 | Sidebar agent rows wrapped to two lines; the launch profile reset in a cloned pane; the dir picker did not scroll to the caret after `Tab`. | P2, P3 | **Fixed** — verified individually. |
+| 11 | **Every OAuth request was sent as JSON, so no PKCE connect could ever complete.** `Codrift.Integration.HTTP.post/3` always sets a JSON body, but OAuth 2.0 token and device-authorization endpoints require `application/x-www-form-urlencoded` (RFC 6749 §4.1.3, RFC 8628 §3.1). Linear rejected the token exchange with `HTTP 400 invalid_request: content must be application/x-www-form-urlencoded`. Repro: complete a Linear or GitLab consent and exchange the resulting `code`. Found while registering the OAuth apps — **not** by a UI pass, because no pass had ever completed a real consent. | P11 | **Fixed.** New `HTTP.post_form/3` (`{:form, params}` → Req's `:form`); the three OAuth call sites in `oauth.ex` use it, while the adapters keep JSON/GraphQL. 4 new tests assert the bytes on the wire against a live Bandit listener. GitHub Device Flow re-verified through the fixed path (real `user_code` issued). |
 
 ### Known limits (not defects)
 
@@ -183,8 +220,23 @@ regression is recognisable.
 
 - **OAuth connect flows** (GitHub / GitHub Projects / GitLab / Linear / Linear
   Projects) — the panel inventory was verified (five providers, all
-  disconnected, each with a Connect button), but completing a flow would hit
-  real accounts. Needs an explicit go-ahead.
+  disconnected, each with a Connect button), but no flow was completed **through
+  the UI**. P11 above is the persona that closes this; it has not been run yet.
+
+  What *is* established, at the protocol level rather than through the app:
+
+  | Service | State |
+  |---|---|
+  | GitHub / GitHub Projects | OAuth App registered, Device Flow enabled, client ID bundled. Verified live — a device-code request returned a real `user_code` and `verification_uri`. |
+  | GitLab | Public (non-confidential) app registered with `read_api` + `read_user`, client ID bundled. Verified live — consent granted, provider redirected to `127.0.0.1:43117/oauth/callback/gitlab?code=…&state=…` with the state echoed intact. |
+  | Linear / Linear Projects | Public app registered with both loopback redirect URIs, client ID bundled (shared by both services). Verified live — consent granted, provider redirected to `127.0.0.1:43117/oauth/callback/linear?code=…&state=…`. Note that Linear's authorize endpoint renders client-side, so an HTTP-level check cannot tell a valid client ID from an invalid one; only a logged-in consent proves it. |
+
+  None of these exercised the callback handler or anything in the UI — the local
+  server was not running to receive the redirect. Attempting the Linear token
+  *exchange* by hand is what surfaced defect 11 above: the whole PKCE leg was
+  broken and no UI pass had ever reached far enough to notice. Closing the
+  remaining gap — callback handler, token persistence, badge state, revoke — is
+  P11's job.
 - **Worktrees** — `worktree_enable` / `worktree_disable` and the `wt` badge.
 - **Orchestration** (`o` / conductor) and the MCP SSE transport.
 - **Session persistence across restarts** for Claude agents (`SessionStore`);

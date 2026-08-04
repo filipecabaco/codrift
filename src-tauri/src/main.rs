@@ -203,7 +203,7 @@ fn start_server(app: &tauri::AppHandle) {
 fn check_server_started() {
     let sleep_interval = std::time::Duration::from_millis(200);
     let host = "localhost".to_string();
-    let port = "7437".to_string();
+    let port = "43117".to_string();
     let addr = format!("{}:{}", host, port);
     println!(
         "Waiting for your phoenix dev server to start on {}...",

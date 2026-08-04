@@ -68,7 +68,7 @@ Then register the MCP server so Claude Code can talk to Codrift:
 
 ```bash
 codrift mcp install
-# runs: claude mcp add codrift --transport sse http://localhost:7437/mcp/sse \
+# runs: claude mcp add codrift --transport sse http://localhost:43117/mcp/sse \
 #         --header "X-Codrift-Token: <token from ~/.codrift/auth-token>"
 ```
 
@@ -106,7 +106,7 @@ Agents can also call these as MCP tools (`memory_search`, `memory_add`, …). Se
 
 ### MCP server
 
-While Codrift is running, an MCP server listens at `http://localhost:7437/mcp/sse`.
+While Codrift is running, an MCP server listens at `http://localhost:43117/mcp/sse`.
 State-changing requests authenticate with the local token from
 `~/.codrift/auth-token` (sent as an `X-Codrift-Token` header — `codrift mcp
 install` configures this automatically). Any connected agent can call:
@@ -229,7 +229,7 @@ Also: the [command palette](docs/images/command-palette.png), [shared memory](do
 ```
 Tauri window (Rust)  ── spawns ──▶  Elixir sidecar ("desktop" release)
    Svelte UI (xterm.js)                Codrift (Application)
-        │  HTTP + WS  :7437              └── Codrift.Supervisor (:one_for_one)
+        │  HTTP + WS  :43117              └── Codrift.Supervisor (:one_for_one)
         └───────────────────────────────────┤ Registry (AgentRegistry)
                                              ├── Codrift.Initiative.Store
                                              ├── Codrift.SessionStore (SQLite)

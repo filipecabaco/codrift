@@ -18,8 +18,8 @@
     ]
   },
   "build": {
-    "devUrl": "http://localhost:7437/index.html",
-    "frontendDist": "http://localhost:7437/index.html"
+    "devUrl": "http://localhost:43117/index.html",
+    "frontendDist": "http://localhost:43117/index.html"
   },
   "bundle": {
     "active": true,

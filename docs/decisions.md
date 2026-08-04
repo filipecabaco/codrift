@@ -3,7 +3,7 @@
 | Decision | Choice | Reason |
 |----------|--------|--------|
 | Francis role | Web server only | Serves the desktop UI plus the HTTP/RPC, SSE, and MCP endpoints |
-| HTTP port | 7437 | Rarely used; avoids clashes with Phoenix (4000), Angular (4200), etc. |
+| HTTP port | 43117 | Fixed, because OAuth redirect URIs are registered ahead of time and cannot be negotiated at runtime. IANA-unassigned, inside the registered range (1024–49151) so the OS ephemeral pool (49152+) can never steal it, and far from the crowded dev bands (3000/4000/5000/8080) and the 7xxx block used by AirPlay, Raycast, OrbStack and Spotify. |
 | CLI agents | erlexec PTY (`:pty` mode primary) | Claude Code requires a real TTY for interactive mode; PTY via erlexec gives full terminal support |
 | Agent restart | `:temporary` | User-driven; automatic restart would re-run expensive inference |
 | Persistence | JSON file (`~/.config/codrift/`) | Simple, human-readable, v1 scope |
@@ -13,7 +13,7 @@
 | MCP transport | HTTP+SSE (`POST /mcp` + `GET /mcp/sse`) | Compatible with `claude mcp add --transport sse` |
 | Test isolation | `:name` opt defaults to `__MODULE__`; `server` param on queries | Avoids conflicts with app-started named processes |
 | Code style | Credo enforced; `@doc`/`@moduledoc` on all public modules | Consistency + discoverability |
-| Desktop shell | Tauri via `ex_tauri`; Elixir `desktop` release runs as a sidecar | Native window + webview per platform; the Svelte UI talks to Francis on `:7437`; no browser or runtime prerequisites for end users |
+| Desktop shell | Tauri via `ex_tauri`; Elixir `desktop` release runs as a sidecar | Native window + webview per platform; the Svelte UI talks to Francis on `:43117`; no browser or runtime prerequisites for end users |
 | Distribution | Tauri bundles (`.dmg`/`.AppImage`) via GitHub Releases | Native installers for macOS and Linux; the headless `codrift` CLI ships alongside for MCP registration and scripting |
 | Sidecar packaging | Burrito-wrapped `:desktop` release in prod; `BURRITO_SKIP=true` for dev | ex_tauri needs a single-file `externalBin`; Burrito produces it. `mix ex_tauri.dev` skips Burrito for fast iteration and so the local macOS Tahoe host never invokes Zig; prod bundles build in CI (non-Tahoe) with Zig 0.15.2, one native triple per runner via `BURRITO_TARGET` |
 | Async agent starts | `Task.Supervisor` (`Codrift.TaskSupervisor`) | Non-blocking server; failures are isolated |

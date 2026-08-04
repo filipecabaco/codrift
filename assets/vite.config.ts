@@ -3,10 +3,10 @@ import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
 
-// The Elixir/Francis server (REST, SSE, WebSocket, MCP) listens on 7437.
+// The Elixir/Francis server (REST, SSE, WebSocket, MCP) listens on 43117.
 // In dev, Vite serves the SPA with HMR and proxies all backend traffic there.
 // In prod, `vite build` emits into ../priv/static and Francis serves it.
-const target = "http://localhost:7437";
+const target = "http://localhost:43117";
 
 export default defineConfig({
   plugins: [tailwindcss(), svelte()],

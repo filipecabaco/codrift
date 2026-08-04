@@ -9,7 +9,7 @@ defmodule Mix.Tasks.Codrift.Mcp.Install do
   Attempts to run `claude mcp add` to register the server. Falls back to
   printing the manual install command if the Claude CLI is not found.
 
-  The server must be running on port 7437 (or the configured port) before
+  The server must be running on port 43117 (or the configured port) before
   MCP clients can connect.
   """
 
@@ -30,7 +30,7 @@ defmodule Mix.Tasks.Codrift.Mcp.Install do
       if has_port_flag do
         []
       else
-        port = Application.get_env(:codrift, :bandit_opts, []) |> Keyword.get(:port, 7437)
+        port = Application.get_env(:codrift, :bandit_opts, []) |> Keyword.get(:port, 43117)
         ["--port=#{port}"]
       end
 

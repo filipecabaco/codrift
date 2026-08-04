@@ -168,7 +168,7 @@ jobs:
   # ── 4. Desktop app build ─────────────────────────────────────────────────────
   # Verifies the Tauri app builds AND runs: the frontend, the :desktop sidecar
   # release, and the native Rust shell all compile, then the assembled sidecar is
-  # booted and smoke-tested — it must bind :7437 and serve both the health root
+  # booted and smoke-tested — it must bind :43117 and serve both the health root
   # ("ok") and the SPA (priv/static/index.html) from inside the release, catching
   # static-path / boot regressions that a compile-only check misses. Full bundle
   # production (Burrito wrap + .dmg/.AppImage) is exercised by release.yml on tags.
@@ -247,21 +247,21 @@ jobs:
 
           ready=0
           for _ in $(seq 1 30); do
-            if curl -sf http://localhost:7437/ >/dev/null; then ready=1; break; fi
+            if curl -sf http://localhost:43117/ >/dev/null; then ready=1; break; fi
             sleep 2
           done
 
           if [ "$ready" != "1" ]; then
-            echo "::error::desktop sidecar did not serve :7437 within 60s"
+            echo "::error::desktop sidecar did not serve :43117 within 60s"
             [ -f "$LOG" ] && cat "$LOG"
             "$BIN" stop || true
             exit 1
           fi
 
           fail=0
-          curl -sf http://localhost:7437/ | grep -q ok \
+          curl -sf http://localhost:43117/ | grep -q ok \
             || { echo "::error::health root did not return ok"; fail=1; }
-          curl -sf http://localhost:7437/index.html | grep -qi 'id="app"' \
+          curl -sf http://localhost:43117/index.html | grep -qi 'id="app"' \
             || { echo "::error::SPA index.html not served from the release"; fail=1; }
 
           [ "$fail" != "0" ] && { [ -f "$LOG" ] && cat "$LOG"; }

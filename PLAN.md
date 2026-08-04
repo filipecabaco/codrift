@@ -14,7 +14,12 @@ directories. See the docs above for the current shape of each subsystem.
 
 - Verify the desktop build end-to-end in CI (`mix ex_tauri.build`).
 - Ship Tauri bundles (`.dmg`/`.AppImage`) from CI on tagged releases.
-- Bundle OAuth `client_id`s into the release so integrations work without env vars.
+- ~~Bundle OAuth `client_id`s into the release so integrations work without env
+  vars.~~ Done — GitHub, Linear and GitLab apps are registered and their client
+  IDs ship in `lib/codrift/oauth/config.ex`. Still to do: run persona P11 (see
+  [PERSONAS.md](PERSONAS.md)) to validate all three flows through the UI. The
+  sandbox must bind `43117`, since the redirect URI is registered with each
+  provider and cannot change at runtime.
 - Deploy the `codrift.sh` landing page (built in `website/`, Francis + Tailwind, with per-platform download links and product screenshots).
 - In-app manager for [agent launch profiles](docs/agent-profiles.md) (add/edit/delete) — currently file-defined in `settings.json`, selectable from the Launch dropdown.
 </content>

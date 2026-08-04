@@ -49,7 +49,7 @@ defmodule Codrift.Web.LocalGuardTest do
           Jason.encode!(%{"name" => "list_initiatives", "args" => %{}})
         )
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("origin", "http://localhost:7437")
+        |> put_req_header("origin", "http://localhost:43117")
         |> call()
 
       assert conn.status == 200

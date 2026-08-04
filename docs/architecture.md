@@ -26,7 +26,7 @@ Codrift (Application)
       ├── Codrift.Scheduler
       │     Quantum — runs Codrift.Integration.Sync every 5 minutes
       ├── Codrift (Francis / Bandit)
-      │     HTTP + WebSocket server on port 7437 (SSE only for the MCP transport)
+      │     HTTP + WebSocket server on port 43117 (SSE only for the MCP transport)
       └── Codrift.ShutdownManager        (desktop release only)
             Unix-socket heartbeat from the Tauri shell; stops the backend when the app closes
 ```
@@ -77,7 +77,7 @@ Codrift (Application)
 ## Frontend
 
 The desktop shell is a Tauri (Rust) window that spawns the Elixir `desktop`
-release as a sidecar and points its webview at the Francis server on `:7437`.
+release as a sidecar and points its webview at the Francis server on `:43117`.
 The UI is a **Svelte 5** app (`assets/`, built with Vite) that renders agent
 output in embedded **xterm.js** terminals (WebGL renderer, Canvas/DOM fallback),
 highlights code with **Shiki**, and edits files in a **CodeMirror 6** pane with

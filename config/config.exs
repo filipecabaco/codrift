@@ -1,11 +1,11 @@
 import Config
 
 # Tauri desktop shell (ex_tauri). The webview points at the Francis server, which
-# listens on 7437 in every env (see dev.exs / prod.exs bandit_opts).
+# listens on 43117 in every env (see dev.exs / prod.exs bandit_opts).
 config :ex_tauri,
   app_name: "Codrift",
   host: "localhost",
-  port: 7437,
+  port: 43117,
   version: "2.5.1",
   # Launch windowed as a roomy "operating system for agents": the Rust setup
   # hook (src-tauri/src/lib.rs) resizes to 80% of the primary monitor and
