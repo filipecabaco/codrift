@@ -2,11 +2,12 @@ defmodule Codrift.WorktreeTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
+  alias Codrift.Test.GitRepo
   alias Codrift.Worktree
 
   @moduletag :tmp_dir
 
-  defp init_git_repo(path), do: Codrift.Test.GitRepo.init!(path)
+  defp init_git_repo(path), do: GitRepo.init!(path)
 
   describe "git_repo?/1" do
     test "returns true for a git repository", %{tmp_dir: tmp_dir} do

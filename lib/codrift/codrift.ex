@@ -206,7 +206,9 @@ defmodule Codrift do
 
   # Client frames: {"t":"d",agent_id,d} keystrokes, {"t":"r",agent_id,cols,rows} resize.
   # Server frames come from Codrift.Web.EventRelay. The handler is compiled into
-  # its own module, so it can only call public functions.
+  # its own module, so it can only call public functions — and this module's
+  # aliases do not reach it either, hence the fully-qualified calls below (and
+  # the credo exemption on them: aliasing here fails to compile).
   #
   # max_frame_size covers a large paste (one frame); timeout must stay above two
   # heartbeat intervals, since an idle terminal only sends the browser's pongs.
@@ -214,6 +216,7 @@ defmodule Codrift do
     "/ws",
     fn
       :join, _socket ->
+        # credo:disable-for-lines:2 Credo.Check.Design.AliasUsage
         {:ok, _relay} = Codrift.Web.EventRelay.start_link()
         {:reply, %{event: "connected", agents: Codrift.Web.EventRelay.snapshot()}}
 

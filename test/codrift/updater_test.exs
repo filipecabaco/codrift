@@ -17,7 +17,7 @@ defmodule Codrift.UpdaterTest do
     test "matches the asset naming produced by release.yml" do
       yml = File.read!(@release_yml)
 
-      # The "Rename CLI tarball" step defines the published asset name; if it
+      # The "Collect release assets" step defines the published asset name; if it
       # changes, the updater must change with it (and vice versa).
       assert yml =~ ~S(codrift-cli-${VERSION}-${{ matrix.cli_suffix }}.tar.gz),
              "release.yml no longer names CLI tarballs codrift-cli-<version>-<suffix>.tar.gz; " <>
@@ -54,10 +54,27 @@ defmodule Codrift.UpdaterTest do
   describe "release.yml checksum publishing" do
     test "release.yml publishes .sha256 assets that install.sh and the updater verify" do
       yml = File.read!(@release_yml)
-      assert yml =~ "shasum -a 256"
-      assert yml =~ "codrift-cli-*.tar.gz.sha256"
+
+      # Everything that ships is collected into dist/, every file there gets a
+      # sibling checksum, and the whole directory is uploaded — so the
+      # `<asset-url>.sha256` that verify_sha/download fetch always resolves.
+      assert yml =~ ~S(shasum -a 256 "$f" > "$f.sha256")
+      assert yml =~ "files: dist/*"
 
       assert File.read!(@install_sh) =~ "verify_sha"
+    end
+  end
+
+  describe "release.yml version stamping" do
+    test "stamps the release version into mix.exs, not just tauri.conf.json" do
+      yml = File.read!(@release_yml)
+
+      # current_version/0 reads the OTP app vsn, which comes from mix.exs. If the
+      # release stops stamping it, every published build reports the placeholder
+      # version, sees itself as older than the release it *is*, and reinstalls on
+      # every update check.
+      assert yml =~ "mix.exs"
+      assert yml =~ "tauri.conf.json"
     end
   end
 

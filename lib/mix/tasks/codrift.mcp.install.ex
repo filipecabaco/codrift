@@ -30,7 +30,7 @@ defmodule Mix.Tasks.Codrift.Mcp.Install do
       if has_port_flag do
         []
       else
-        port = Application.get_env(:codrift, :bandit_opts, []) |> Keyword.get(:port, 43117)
+        port = Application.get_env(:codrift, :bandit_opts, []) |> Keyword.get(:port, 43_117)
         ["--port=#{port}"]
       end
 

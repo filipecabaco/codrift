@@ -4,6 +4,7 @@ defmodule Codrift.DiffTest do
 
   alias Codrift.Diff
   alias Codrift.Diff.{FileDiff, Line}
+  alias Codrift.Test.GitRepo
 
   @sample_patch """
   diff --git a/lib/foo.ex b/lib/foo.ex
@@ -102,8 +103,8 @@ defmodule Codrift.DiffTest do
   describe "generate/2" do
     @moduletag :tmp_dir
 
-    defp init_git_repo(dir), do: Codrift.Test.GitRepo.git(dir, ["init"])
-    defp git_commit(dir, message), do: Codrift.Test.GitRepo.commit!(dir, message)
+    defp init_git_repo(dir), do: GitRepo.git(dir, ["init"])
+    defp git_commit(dir, message), do: GitRepo.commit!(dir, message)
 
     test "returns {:ok, []} when there are no changes", %{tmp_dir: dir} do
       init_git_repo(dir)

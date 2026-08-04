@@ -28,7 +28,7 @@ defmodule Codrift.OAuth.Config do
     2. Codrift's hardcoded client ID (set once registered apps exist)
   """
 
-  @port 43117
+  @port 43_117
 
   @services %{
     "github" => %{

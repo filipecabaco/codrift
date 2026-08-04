@@ -13,6 +13,7 @@ defmodule Codrift.Core do
   alias Codrift.Config.Keybindings
   alias Codrift.Config.Settings
   alias Codrift.Initiative.{DirEntry, Store}
+  alias Codrift.MCP.Handler
   alias Codrift.OAuth.Config, as: OAuthConfig
 
   @doc """
@@ -463,11 +464,11 @@ defmodule Codrift.Core do
   # dropped into ~/.codrift/themes and picked here.
 
   def call("get_theme", _args) do
-    {:ok, %{"name" => Codrift.Config.Settings.theme()}}
+    {:ok, %{"name" => Settings.theme()}}
   end
 
   def call("set_theme", %{"name" => name}) when is_binary(name) do
-    Codrift.Config.Settings.put_theme(name)
+    Settings.put_theme(name)
     {:ok, %{"name" => name}}
   end
 
@@ -476,7 +477,7 @@ defmodule Codrift.Core do
   end
 
   def call("get_font", _args) do
-    {:ok, Codrift.Config.Settings.font()}
+    {:ok, Settings.font()}
   end
 
   def call("set_font", %{"family" => family, "size" => size})
@@ -484,7 +485,7 @@ defmodule Codrift.Core do
     # Clamped here as well as in the UI: settings.json is hand-editable, and a
     # 2px or 400px interface is not a state the app should be able to reach.
     size = size |> max(10) |> min(20)
-    Codrift.Config.Settings.put_font(family, size)
+    Settings.put_font(family, size)
     {:ok, %{"family" => family, "size" => size}}
   end
 
@@ -571,7 +572,7 @@ defmodule Codrift.Core do
   end
 
   def call(name, args) do
-    if name in Codrift.MCP.Handler.tool_names() do
+    if name in Handler.tool_names() do
       {:error, "wrong arguments for #{name}: got #{inspect(Map.keys(args))}"}
     else
       {:error, "unknown tool: #{name}"}
