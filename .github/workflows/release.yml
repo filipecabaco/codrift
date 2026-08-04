@@ -1,6 +1,12 @@
 name: Release
 
-# One workflow, three jobs: version -> bundle -> cask.
+# One workflow, four jobs: version -> bundle -> release -> cask.
+#
+# `bundle` only builds and uploads artifacts; `release` publishes them in a
+# single step once every leg has succeeded. That split is deliberate: if each
+# leg published on its own, one failing runner would leave a tag and a
+# half-populated release behind, and the re-run would then trip the
+# already-exists guard. Either everything ships or nothing does.
 #
 # `version` picks the number. On a push to `main` it derives the next semver
 # from the Conventional Commit prefixes since the last `v*` tag (`fix:` patch,
@@ -233,11 +239,36 @@ jobs:
           cd dist && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
           ls -l
 
-      # No tag exists yet (this runs on a branch push), so the action creates the
-      # `v<version>` tag at the current SHA and the Release in one shot. Runs on
-      # every matrix leg; softprops is idempotent — the first call creates the
-      # release, the rest append their assets.
-      - name: Upload artifacts to GitHub Release
+      # Hand off to the `release` job rather than publishing here — see the note
+      # at the top of this file about partial releases.
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── 3. Publish ───────────────────────────────────────────────────────────────
+  # Reached only when every bundle leg succeeded, so the tag and the release are
+  # created once, complete. No tag exists yet (this runs on a branch push), so
+  # the action creates `v<version>` at the current SHA and the Release together.
+  release:
+    name: Publish release
+    needs: [version, bundle]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download every bundle
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: List assets
+        run: ls -l dist
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.version }}
@@ -245,7 +276,7 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-  # ── 3. Homebrew cask ─────────────────────────────────────────────────────────
+  # ── 4. Homebrew cask ─────────────────────────────────────────────────────────
   # This repo doubles as its own Homebrew tap (Casks/codrift.rb). Once both macOS
   # DMGs are published, rewrite the cask's version + per-arch checksums and push
   # to main so `brew upgrade` sees the new version immediately.
@@ -254,7 +285,7 @@ jobs:
   # direct pushes, swap the "Commit and push" step for a `gh pr create`.
   cask:
     name: Bump Homebrew cask
-    needs: [version, bundle]
+    needs: [version, release]
     runs-on: ubuntu-22.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -264,34 +295,91 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      # The bundle job already published a `.sha256` beside every asset, so pull
-      # those two tiny files instead of re-downloading ~200 MB of disk images.
-      - name: Rewrite cask version + checksums
+      # The DMG names are read back off the release rather than assumed. Tauri
+      # decides the architecture segment (`aarch64` is stable, but the Intel one
+      # is `x64` or `x86_64` depending on version), and guessing it wrong here
+      # would write a cask whose URL 404s. `aarch64` identifies the arm image;
+      # whatever other .dmg exists is the Intel one.
+      - name: Resolve published DMGs
+        id: dmgs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          mapfile -t DMGS < <(
+            gh release view "v${VERSION}" --json assets \
+              --jq '.assets[].name | select(endswith(".dmg"))'
+          )
+
+          ARM_DMG=""; INTEL_DMG=""
+          for d in "${DMGS[@]:-}"; do
+            case "$d" in
+              *aarch64*|*arm64*) ARM_DMG="$d" ;;
+              *)                 INTEL_DMG="$d" ;;
+            esac
+          done
+
+          if [ -z "$ARM_DMG" ] || [ -z "$INTEL_DMG" ]; then
+            echo "::error::v${VERSION} must carry one arm and one intel .dmg; found: ${DMGS[*]:-none}"
+            exit 1
+          fi
+          echo "arm=${ARM_DMG}  intel=${INTEL_DMG}"
+
+          # Pull only the two checksum files the bundle job published beside the
+          # images — a few bytes each, instead of ~200 MB of disk image.
           gh release download "v${VERSION}" --dir sums \
-            --pattern "Codrift_${VERSION}_aarch64.dmg.sha256" \
-            --pattern "Codrift_${VERSION}_x64.dmg.sha256"
+            --pattern "${ARM_DMG}.sha256" --pattern "${INTEL_DMG}.sha256"
 
-          ARM_SHA="$(awk '{print $1}' "sums/Codrift_${VERSION}_aarch64.dmg.sha256")"
-          INTEL_SHA="$(awk '{print $1}' "sums/Codrift_${VERSION}_x64.dmg.sha256")"
+          {
+            echo "arm_dmg=${ARM_DMG}"
+            echo "intel_dmg=${INTEL_DMG}"
+            echo "arm_sha=$(awk '{print $1}' "sums/${ARM_DMG}.sha256")"
+            echo "intel_sha=$(awk '{print $1}' "sums/${INTEL_DMG}.sha256")"
+          } >> "$GITHUB_OUTPUT"
           rm -rf sums
-          echo "version=$VERSION arm=$ARM_SHA intel=$INTEL_SHA"
 
-          # The on_arm block precedes the on_intel block in the cask, so
-          # replacing the two sha256 lines in file order maps arm -> intel.
-          ARM_SHA="$ARM_SHA" INTEL_SHA="$INTEL_SHA" python3 - <<'PY'
+      - name: Rewrite cask version, checksums and URLs
+        shell: bash
+        env:
+          ARM_DMG: ${{ steps.dmgs.outputs.arm_dmg }}
+          INTEL_DMG: ${{ steps.dmgs.outputs.intel_dmg }}
+          ARM_SHA: ${{ steps.dmgs.outputs.arm_sha }}
+          INTEL_SHA: ${{ steps.dmgs.outputs.intel_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
           import os, re
+
+          version = os.environ["VERSION"]
           path = "Casks/codrift.rb"
           src = open(path).read()
-          src = re.sub(r'version "[^"]*"', f'version "{os.environ["VERSION"]}"', src, count=1)
+
+          def arch_of(dmg):
+              prefix, suffix = f"Codrift_{version}_", ".dmg"
+              if not (dmg.startswith(prefix) and dmg.endswith(suffix)):
+                  raise SystemExit(f"unexpected DMG name: {dmg}")
+              return dmg[len(prefix):-len(suffix)]
+
+          # on_arm precedes on_intel in the cask, so replacing each pair of
+          # matches in file order maps arm -> intel.
+          archs = iter([arch_of(os.environ["ARM_DMG"]), arch_of(os.environ["INTEL_DMG"])])
           shas = iter([os.environ["ARM_SHA"], os.environ["INTEL_SHA"]])
+
+          src = re.sub(r'version "[^"]*"', f'version "{version}"', src, count=1)
           src = re.sub(r'sha256 "[^"]*"', lambda _: f'sha256 "{next(shas)}"', src, count=2)
+          src, n = re.subn(
+              r'(Codrift_#\{version\}_)[^.]+(\.dmg)',
+              lambda m: f"{m.group(1)}{next(archs)}{m.group(2)}",
+              src,
+              count=2,
+          )
+          if n != 2:
+              raise SystemExit(f"expected 2 DMG URLs in the cask, rewrote {n}")
+
           open(path, "w").write(src)
           PY
+          git --no-pager diff -- Casks/codrift.rb || true
 
       - name: Commit and push
         run: |
