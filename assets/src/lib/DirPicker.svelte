@@ -94,7 +94,12 @@
     const pick = matches[cursor];
     if (!pick) return;
     value = join(base, pick) + "/";
-    queueMicrotask(() => input?.setSelectionRange(value.length, value.length));
+    queueMicrotask(() => {
+      input?.setSelectionRange(value.length, value.length);
+      // Programmatic edits don't scroll the field, so a long path would still
+      // show its middle — the completed segment has to be the visible one.
+      if (input) input.scrollLeft = input.scrollWidth;
+    });
   }
 
   function onkeydown(e: KeyboardEvent) {

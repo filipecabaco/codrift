@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
     "build:fast": "vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-check --tsconfig ./tsconfig.json && node scripts/audit-themes.mjs",
+    "audit:themes": "node scripts/audit-themes.mjs --all",
     "tauri": "tauri"
   },
   "devDependencies": {
@@ -27,6 +28,7 @@
     "@codemirror/language-data": "^6.5.2",
     "@codemirror/state": "^6.7.0",
     "@codemirror/view": "^6.43.4",
+    "@lezer/highlight": "^1.2.3",
     "@replit/codemirror-vim": "^6.3.0",
     "@steeze-ui/heroicons": "^2.4.2",
     "@steeze-ui/svelte-icon": "^1.6.2",

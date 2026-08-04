@@ -1,7 +1,18 @@
 <script lang="ts">
   // The initiative tree. Rows come from `workspace.rows`, so what renders and
   // what j/k walks are the same list.
+  import { Icon } from "@steeze-ui/svelte-icon";
   import { workspace as ws, isDead, needsInput, statusLabel } from "$lib/workspace.svelte";
+  import {
+    AgentIcon,
+    FolderIcon,
+    FolderOpenIcon,
+    InitiativeIcon,
+    MemoryIcon,
+    TerminalAgentIcon,
+    contextFileIcon,
+    dirIcon,
+  } from "$lib/icons";
   import type { Agent, Initiative } from "$lib/api";
 
   let {
@@ -13,6 +24,8 @@
     onSelectDir,
     onSelectAgent,
     onOpenContextFile,
+    onOpenMemory,
+    onToggleContextFolder,
     onCollapse,
   }: {
     focused: boolean;
@@ -23,17 +36,21 @@
     onSelectDir: (initId: string, path: string) => void;
     onSelectAgent: (initId: string, agentId: string) => void;
     onOpenContextFile: (initId: string, name: string) => void;
+    onOpenMemory: (initId: string) => void;
+    onToggleContextFolder: (initId: string, path: string) => void;
     onCollapse: () => void;
   } = $props();
 
   const base = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
 
-  // Off the amber accent on purpose: amber means focus/selection, never state.
-  const statusDot: Record<string, string> = {
-    ongoing: "bg-green-500",
-    planning: "bg-sky-500",
-    done: "bg-violet-500",
-    archived: "bg-muted",
+  // Status colours the initiative icon rather than a separate dot: one glyph
+  // says both *what* the row is and *where* it stands. Off the amber accent on
+  // purpose — amber means focus/selection, never state.
+  const statusColor: Record<string, string> = {
+    ongoing: "text-green-500",
+    planning: "text-sky-500",
+    done: "text-violet-500",
+    archived: "text-muted",
   };
 
   const rowBase = "flex w-full items-center gap-1.5 rounded-md py-0.5 pr-1.5 text-left text-xs";
@@ -84,37 +101,75 @@
               ]}
               onclick={() => onSelectInitiative(init.id)}
             >
-              <span class={["size-2 rounded-full", statusDot[init.status] ?? "bg-muted"]}></span>
-              <span class="truncate">{init.name}</span>
+              <Icon
+                src={InitiativeIcon}
+                class={["size-3.5 shrink-0", statusColor[init.status] ?? "text-muted"]}
+                title="Initiative · {init.status}"
+              />
+              <span class="min-w-0 flex-1 truncate">{init.name}</span>
               <!-- A collapsed initiative still has to say someone inside is blocked. -->
               {#if waiting}
-                <span class="ml-auto rounded bg-accent/20 px-1 text-[10px] font-semibold text-accent">
+                <span class="shrink-0 rounded bg-accent/20 px-1 text-[10px] font-semibold whitespace-nowrap text-accent">
                   {waiting} waiting
                 </span>
               {:else if ws.agentsFor(init.id).length}
-                <span class="ml-auto text-[11px] text-muted">{ws.agentsFor(init.id).length}</span>
+                <span class="shrink-0 text-[11px] text-muted">{ws.agentsFor(init.id).length}</span>
               {/if}
             </button>
           </div>
 
           {#if open}
             <ul role="group" class="list-none">
-              {#each ws.contextFiles[init.id] ?? [] as f (f)}
+              <!-- The initiative folder, as it actually is on disk: docs at the
+                   root, plus whatever scripts/ and docs/ the user keeps there. -->
+              {#each ws.contextRows(init.id) as { node, depth } (node.path)}
+                {@const key = node.isFile ? `f:${init.id}:${node.path}` : `x:${init.id}:${node.path}`}
+                {@const folderOpen = ws.folderOpen(init.id, node.path)}
                 <li role="none">
                   <button
                     role="treeitem"
-                    aria-selected={selected(`f:${init.id}:${f}`)}
+                    aria-selected={selected(key)}
+                    aria-expanded={node.isFile ? undefined : folderOpen}
+                    aria-level={depth + 2}
                     class={[
                       rowBase,
-                      "pl-6",
-                      selected(`f:${init.id}:${f}`) ? "bg-accent/20 text-white" : "text-fg/70 hover:bg-surface",
+                      selected(key) ? "bg-accent/20 text-white" : "text-fg/70 hover:bg-surface",
                     ]}
-                    onclick={() => onOpenContextFile(init.id, f)}
+                    style="padding-left: {depth * 12 + 24}px"
+                    title={node.path}
+                    onclick={() =>
+                      node.isFile
+                        ? onOpenContextFile(init.id, node.path)
+                        : onToggleContextFolder(init.id, node.path)}
                   >
-                    <span class="text-muted">◈</span>{f}
+                    <Icon
+                      src={node.isFile
+                        ? contextFileIcon(node.path)
+                        : folderOpen
+                          ? FolderOpenIcon
+                          : FolderIcon}
+                      class="size-3.5 shrink-0 text-muted"
+                    />
+                    <span class="truncate">{node.name}</span>
                   </button>
                 </li>
               {/each}
+
+              <li role="none">
+                <button
+                  role="treeitem"
+                  aria-selected={selected(`m:${init.id}`)}
+                  class={[
+                    rowBase,
+                    "pl-6",
+                    selected(`m:${init.id}`) ? "bg-accent/20 text-white" : "text-fg/70 hover:bg-surface",
+                  ]}
+                  onclick={() => onOpenMemory(init.id)}
+                >
+                  <Icon src={MemoryIcon} class="size-3.5 shrink-0 text-muted" />
+                  <span class="truncate">memory</span>
+                </button>
+              </li>
 
               {#each init.dirs as dir (dir.path)}
                 <li role="none">
@@ -129,12 +184,18 @@
                     onclick={() => onSelectDir(init.id, dir.path)}
                     title={dir.path}
                   >
-                    <span class="text-muted">◇</span>
-                    <span class="truncate">
+                    <!-- A repo and a plain folder are different things to work
+                         in: one has a diff, the other doesn't. -->
+                    <Icon
+                      src={dirIcon(dir.git)}
+                      class="size-3.5 shrink-0 text-muted"
+                      title={dir.git ? "Git repository" : "Folder (not a git repository)"}
+                    />
+                    <span class="min-w-0 flex-1 truncate">
                       {dir.path === init.context_path ? "scratch" : base(dir.path)}
                     </span>
                     {#if dir.worktree_enabled}
-                      <span class="rounded border border-border px-1 text-[10px] text-muted">wt</span>
+                      <span class="shrink-0 rounded border border-border px-1 text-[10px] text-muted">wt</span>
                     {/if}
                   </button>
                 </li>
@@ -168,15 +229,24 @@
       ]}
       onclick={() => onSelectAgent(init.id, agent.id)}
     >
-      <span class={needsInput(agent.status) ? "text-accent" : "text-muted"}>◦</span>
-      <span class="truncate">{agent.adapter}</span>
+      <Icon
+        src={agent.adapter === "terminal" ? TerminalAgentIcon : AgentIcon}
+        class={["size-3.5 shrink-0", needsInput(agent.status) ? "text-accent" : "text-muted"]}
+      />
+      <!-- Adapter, profile and status compete for a narrow sidebar. The adapter
+           and the status are short and fixed, so the user-named profile is the
+           one that gives way — on its own line, never wrapping the row. -->
+      <span class="shrink-0">{agent.adapter}</span>
       {#if agent.profile}
-        <span class="rounded border border-accent/40 px-1 text-[10px] text-accent/90">{agent.profile}</span>
+        <span
+          class="min-w-0 flex-1 truncate rounded border border-accent/40 px-1 text-[10px] whitespace-nowrap text-accent/90"
+          title={agent.profile}
+        >{agent.profile}</span>
       {/if}
       <!-- Text first; colour only reinforces it. -->
       <span
         class={[
-          "ml-auto shrink-0 text-[11px]",
+          "ml-auto shrink-0 text-[11px] whitespace-nowrap",
           needsInput(agent.status)
             ? "rounded bg-accent/20 px-1 font-semibold text-accent"
             : isDead(agent.status)

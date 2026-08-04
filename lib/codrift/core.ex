@@ -458,27 +458,52 @@ defmodule Codrift.Core do
     {:ok, Keybindings.load()}
   end
 
+  # ── Theming ────────────────────────────────────────────────────────────────
+  # The UI speaks VS Code's theme format, so anything written for VS Code can be
+  # dropped into ~/.codrift/themes and picked here.
+
+  def call("get_theme", _args) do
+    {:ok, %{"name" => Codrift.Config.Settings.theme()}}
+  end
+
+  def call("set_theme", %{"name" => name}) when is_binary(name) do
+    Codrift.Config.Settings.put_theme(name)
+    {:ok, %{"name" => name}}
+  end
+
+  def call("list_themes", _args) do
+    {:ok, %{"themes" => Codrift.Themes.list()}}
+  end
+
+  def call("get_font", _args) do
+    {:ok, Codrift.Config.Settings.font()}
+  end
+
+  def call("set_font", %{"family" => family, "size" => size})
+      when is_binary(family) and is_integer(size) do
+    # Clamped here as well as in the UI: settings.json is hand-editable, and a
+    # 2px or 400px interface is not a state the app should be able to reach.
+    size = size |> max(10) |> min(20)
+    Codrift.Config.Settings.put_font(family, size)
+    {:ok, %{"family" => family, "size" => size}}
+  end
+
+  def call("read_theme", %{"name" => name}) when is_binary(name) do
+    case Codrift.Themes.read(name) do
+      {:ok, theme} -> {:ok, theme}
+      {:error, :not_found} -> {:error, "theme not found: #{name}"}
+      {:error, :invalid} -> {:error, "not a valid VS Code theme: #{name}"}
+    end
+  end
+
+  # Relative paths, not just basenames: an initiative folder is a working
+  # workspace — people keep `scripts/deploy.sh` and `docs/runbook.md` in it —
+  # and the sidebar renders whatever this returns as a tree.
   def call("list_context_files", %{"initiative_id" => id}) do
     case Store.get(id) do
       {:ok, _initiative} ->
         dir = Store.context_path(id)
-
-        files =
-          case File.ls(dir) do
-            {:ok, names} ->
-              names
-              |> Enum.reject(
-                &(String.starts_with?(&1, ".") or &1 == "CLAUDE.md" or
-                    String.ends_with?(&1, ".db"))
-              )
-              |> Enum.filter(&File.regular?(Path.join(dir, &1)))
-              |> Enum.sort()
-
-            {:error, _} ->
-              []
-          end
-
-        {:ok, %{"files" => files}}
+        {:ok, %{"files" => context_files(dir)}}
 
       {:error, :not_found} ->
         {:error, "initiative not found: #{id}"}
@@ -487,15 +512,16 @@ defmodule Codrift.Core do
 
   def call("read_context_file", %{"initiative_id" => id, "name" => name}) do
     with {:ok, _initiative} <- Store.get(id),
-         :ok <- validate_basename(name),
-         path = Path.join(Store.context_path(id), name),
-         true <- File.regular?(path),
-         {:ok, content} <- File.read(path) do
+         :ok <- validate_context_path(name),
+         dir = Store.context_path(id),
+         {:ok, content} <- Codrift.Files.read_within([dir], Path.join(dir, name)) do
       {:ok, %{"name" => name, "content" => content}}
     else
       {:error, :not_found} -> {:error, "initiative not found: #{id}"}
       {:error, :invalid_name} -> {:error, "invalid file name"}
-      false -> {:error, "context file not found: #{name}"}
+      {:error, :forbidden} -> {:error, "context file not found: #{name}"}
+      {:error, :not_a_file} -> {:error, "context file not found: #{name}"}
+      {:error, :enoent} -> {:error, "context file not found: #{name}"}
       {:error, reason} -> {:error, "could not read context file: #{inspect(reason)}"}
     end
   end
@@ -586,24 +612,47 @@ defmodule Codrift.Core do
     end
   end
 
-  # Guards a context-file name to a plain basename — no directory separators or
-  # traversal — so reads stay inside the initiative's context folder.
   # Initiative map enriched with its context folder path, so the UI can offer
   # the context folder as a scratch workspace and label it nicely.
   defp initiative_map(initiative) do
     initiative
     |> Codrift.Initiative.to_map()
     |> Map.put("context_path", Store.context_path(initiative.id))
+    |> Map.update!("dirs", fn dirs -> Enum.map(dirs, &tag_git/1) end)
   end
 
-  defp validate_basename(name) when is_binary(name) do
-    if name not in ["", ".", ".."] and not String.contains?(name, "/") and
-         name == Path.basename(name),
+  # Derived at the API boundary, never persisted: whether a directory is under
+  # version control decides how the UI draws it (a repo you can diff vs a plain
+  # folder), and that can change on disk between two calls.
+  defp tag_git(%{"path" => path} = dir), do: Map.put(dir, "git", Codrift.Files.git_repo?(path))
+
+  # Everything the user keeps in the initiative folder, as paths relative to it:
+  # `initiative.md`, but also `scripts/deploy.sh` and `docs/runbook.md`. Skips
+  # Codrift's own bookkeeping — dot-prefixed entries (agent logs), the generated
+  # CLAUDE.md, and the memory database.
+  defp context_files(dir) do
+    dir
+    |> Codrift.Files.list_relative()
+    |> Enum.reject(fn rel ->
+      rel == "CLAUDE.md" or String.ends_with?(rel, ".db") or
+        Enum.any?(Path.split(rel), &String.starts_with?(&1, "."))
+    end)
+    |> Enum.sort()
+  end
+
+  # Guards a context-file path: relative, no traversal. `Files.read_within/2`
+  # then re-checks containment against the resolved folder, so a symlink inside
+  # it cannot reach out either.
+  defp validate_context_path(name) when is_binary(name) do
+    segments = Path.split(name)
+
+    if name not in ["", ".", ".."] and Path.type(name) == :relative and
+         ".." not in segments and "." not in segments,
        do: :ok,
        else: {:error, :invalid_name}
   end
 
-  defp validate_basename(_), do: {:error, :invalid_name}
+  defp validate_context_path(_), do: {:error, :invalid_name}
 
   defp adapter_module("terminal"), do: Codrift.Agent.Adapters.Terminal
 

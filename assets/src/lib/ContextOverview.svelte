@@ -1,39 +1,36 @@
 <script lang="ts">
   import { marked } from "marked";
-  import {
-    rpc,
-    ADAPTERS,
-    listAgentProfiles,
-    type Initiative,
-    type Agent,
-    type AgentProfile,
-  } from "$lib/api";
+  import { Icon } from "@steeze-ui/svelte-icon";
+  import { rpc, ADAPTERS, type Initiative, type Agent } from "$lib/api";
+  import { workspace as ws } from "$lib/workspace.svelte";
+  import { MemoryIcon, contextFileIcon, dirIcon } from "$lib/icons";
   import MemoryView from "$lib/MemoryView.svelte";
 
   let {
     initiative,
     agents = [],
     wantFile = null,
+    wantPanel = "file",
     onChanged,
   }: {
     initiative: Initiative;
     agents: Agent[];
     wantFile?: string | null;
+    /** Which half the sidebar asked for: a context document or the memory store. */
+    wantPanel?: "file" | "memory";
     onChanged: () => void;
   } = $props();
 
-  // The selected launch choice: either a base adapter name or a profile name.
-  let choice = $state<string>("claude");
-  let profiles = $state<AgentProfile[]>([]);
+  // The selected launch choice (a base adapter name or a profile name) and the
+  // profile list both live in the workspace: the choice so it survives a pane
+  // clone or an initiative switch, the list so a plain refresh picks up a
+  // profile the user just added to settings.json.
   let starting = $state<string | null>(null);
   let addingScratch = $state(false);
   let error = $state<string | null>(null);
 
-  $effect(() => {
-    listAgentProfiles()
-      .then((p) => (profiles = p))
-      .catch(() => (profiles = []));
-  });
+  const choice = $derived(ws.launchChoice);
+  const profiles = $derived(ws.profiles);
 
   // Resolve the selected choice into start_agent params: a profile passes its
   // base adapter plus its name; a bare adapter passes just itself.
@@ -121,6 +118,14 @@
     }
   });
 
+  // …and the panel, so the sidebar's `memory` row lands on the memory store.
+  // Re-runs on an initiative switch too, otherwise the file effect above would
+  // reset the panel while the sidebar still highlights `memory`.
+  $effect(() => {
+    initiative.id;
+    panel = wantPanel;
+  });
+
   // Render the selected context file as markdown.
   $effect(() => {
     const id = initiative.id;
@@ -168,7 +173,8 @@
         <label class="text-[11px] text-muted" for="adapter">Launch</label>
         <select
           id="adapter"
-          bind:value={choice}
+          value={choice}
+          onchange={(e) => (ws.launchChoice = e.currentTarget.value)}
           class="rounded-md border border-border bg-canvas px-2 py-1 text-xs text-fg"
         >
           {#each ADAPTERS as a}
@@ -189,7 +195,11 @@
       {#each initiative.dirs as dir (dir.path)}
         {@const dirAgents = agents.filter((a) => a.dir === dir.path).length}
         <div class="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface">
-          <span class="text-muted">◇</span>
+          <Icon
+            src={dirIcon(dir.git)}
+            class="size-4 shrink-0 text-muted"
+            title={dir.git ? "Git repository" : "Folder (not a git repository)"}
+          />
           <span class="min-w-0 flex-1 truncate text-[13px] text-fg" title={dir.path}>
             {dirLabel(dir.path)}
           </span>
@@ -218,28 +228,33 @@
     </div>
   </section>
 
-  <div class="flex gap-1 border-b border-border px-6 py-1.5">
+  <!-- An initiative folder can hold a whole handbook, so the strip scrolls
+       rather than wrapping into a wall of tabs. -->
+  <div class="flex gap-1 overflow-x-auto border-b border-border px-6 py-1.5">
     {#each files as f (f)}
       <button
         class={[
-          "rounded px-2 py-0.5 text-xs",
+          "flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs",
           panel === "file" && activeFile === f ? "bg-accent/20 text-white" : "text-muted hover:text-fg",
         ]}
+        title={f}
         onclick={() => {
           panel = "file";
           activeFile = f;
         }}
       >
-        {f}
+        <Icon src={contextFileIcon(f)} class="size-3.5 shrink-0" />
+        {f.split("/").pop()}
       </button>
     {/each}
     <button
       class={[
-        "rounded px-2 py-0.5 text-xs",
+        "flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs",
         panel === "memory" ? "bg-accent/20 text-white" : "text-muted hover:text-fg",
       ]}
       onclick={() => (panel = "memory")}
     >
+      <Icon src={MemoryIcon} class="size-3.5 shrink-0" />
       memory
     </button>
   </div>

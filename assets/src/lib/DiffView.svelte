@@ -1,6 +1,7 @@
 <script lang="ts">
   import { rpc, type DiffFile } from "$lib/api";
   import { highlightLines, langForPath, type ThemedToken } from "$lib/highlight";
+  import { themeState } from "$lib/theme.svelte";
 
   let { initiativeId }: { initiativeId: string } = $props();
 
@@ -22,7 +23,12 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
 
-  const lineBg: Record<string, string> = { add: "bg-green-500/15", remove: "bg-red-500/15" };
+  // Diff tints come from the theme's own diff colours (diffEditor.*), so a diff
+  // in Solarized looks like Solarized rather than like Tailwind green/red.
+  const lineBg: Record<string, string> = {
+    add: "var(--color-diff-add)",
+    remove: "var(--color-diff-remove)",
+  };
   const sign: Record<string, string> = { add: "+", remove: "-" };
 
   async function buildFile(file: DiffFile & { dir?: string }): Promise<ViewFile> {
@@ -52,6 +58,8 @@
 
   $effect(() => {
     const id = initiativeId;
+    // Tokens carry their colours inline, so a theme change means re-tokenising.
+    themeState.id;
     loading = true;
     error = null;
     viewFiles = [];
@@ -81,15 +89,15 @@
             >
           </span>
           <span class="text-muted">
-            <span class="text-green-400">+{file.additions}</span>
-            <span class="text-red-400">-{file.deletions}</span>
+            <span style="color: var(--color-diff-add-fg)">+{file.additions}</span>
+            <span style="color: var(--color-diff-remove-fg)">-{file.deletions}</span>
           </span>
         </div>
         {#each file.rows as row}
           {#if row.kind === "hunk"}
             <div class="bg-accent/10 px-3 py-0.5 text-[11px] text-accent">{row.header}</div>
           {:else}
-            <div class={["flex whitespace-pre", lineBg[row.type] ?? ""]}>
+            <div class="flex whitespace-pre" style:background-color={lineBg[row.type]}>
               <span class="w-4 shrink-0 select-none text-center text-muted">{sign[row.type] ?? " "}</span>
               <span class="flex-1 overflow-x-auto px-3"
                 >{#each row.tokens as t}<span style="color:{t.color ?? 'var(--color-fg)'}">{t.content}</span>{/each}</span

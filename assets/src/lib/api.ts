@@ -32,7 +32,8 @@ export type Initiative = {
   id: string;
   name: string;
   status: "planning" | "ongoing" | "done" | "archived";
-  dirs: { path: string; worktree_enabled?: boolean }[];
+  /** `git` is derived per request by the backend, not stored. */
+  dirs: { path: string; worktree_enabled?: boolean; git?: boolean }[];
   created_at: string;
   context_path?: string;
 };

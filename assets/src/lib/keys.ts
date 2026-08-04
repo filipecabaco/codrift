@@ -22,7 +22,8 @@ export type ActionId =
   | "quit"
   | "toggle_sidebar"
   | "palette"
-  | "start_orchestration";
+  | "start_orchestration"
+  | "appearance";
 
 export const ACTION_LABELS: Record<ActionId, string> = {
   navigate_down: "Navigate down",
@@ -46,6 +47,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   toggle_sidebar: "Toggle sidebar",
   palette: "Command palette",
   start_orchestration: "Start orchestration",
+  appearance: "Appearance (theme & font)",
 };
 
 // Actions the desktop UI actually performs. The keymap itself is wider — it is
@@ -69,6 +71,7 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "tree_mode",
   "diff_all_files",
   "toggle_sidebar",
+  "appearance",
   "palette",
   "quit",
 ];

@@ -1,15 +1,20 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { rpc } from "$lib/api";
   import { highlightToHtml, langForPath } from "$lib/highlight";
+  import { themeState } from "$lib/theme.svelte";
 
   let {
     initiativeId,
     selectedPath = $bindable<string | null>(null),
     onEdit,
+    revision = 0,
   }: {
     initiativeId: string;
     selectedPath?: string | null;
     onEdit: (path: string) => void;
+    /** Bumped by the editor on save; re-reads the previewed file when it changes. */
+    revision?: number;
   } = $props();
 
   type Node = {
@@ -81,18 +86,38 @@
   async function openFile(node: Node) {
     selected = node.key;
     selectedPath = node.fullPath;
-    previewError = null;
     previewHtml = "";
+    await loadPreview(node.fullPath);
+  }
+
+  async function loadPreview(path: string) {
+    previewError = null;
     try {
       const res = await rpc<{ content: string }>("read_file", {
         initiative_id: initiativeId,
-        path: node.fullPath,
+        path,
       });
-      previewHtml = await highlightToHtml(res.content, langForPath(node.fullPath));
+      previewHtml = await highlightToHtml(res.content, langForPath(path));
     } catch (e) {
       previewError = (e as Error).message;
     }
   }
+
+  // The editor writes the same file this pane is previewing, so a save has to
+  // invalidate the preview — otherwise closing the editor shows the old text.
+  // A theme change invalidates it too: the highlighted HTML has the old
+  // theme's colours baked in.
+  let seenRevision = 0;
+  let seenTheme = themeState.id;
+  $effect(() => {
+    const r = revision;
+    const theme = themeState.id;
+    if (r === seenRevision && theme === seenTheme) return;
+    seenRevision = r;
+    seenTheme = theme;
+    const path = untrack(() => selectedPath);
+    if (path) void loadPreview(path);
+  });
 
   $effect(() => {
     const id = initiativeId;

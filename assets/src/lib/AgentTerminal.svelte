@@ -5,6 +5,8 @@
   import { CanvasAddon } from "@xterm/addon-canvas";
   import "@xterm/xterm/css/xterm.css";
   import { fetchReplay, onAgentOutput, sendKeys, sendResize } from "$lib/stream";
+  import { themeState } from "$lib/theme.svelte";
+  import { fontState } from "$lib/fonts.svelte";
 
   // WebKit (Tauri/WKWebView) doesn't reliably composite xterm's DOM renderer —
   // output stays invisible until a native repaint (e.g. selecting text). A GPU
@@ -50,23 +52,34 @@
     unsubscribe = undefined;
   }
 
-  // Resolve a CSS custom property to an rgb() string xterm can parse (the tokens
-  // are OKLCH; the browser converts them for us). Keeps the terminal background
-  // in sync with the app's canvas instead of a hard-coded hex.
-  function cssColor(varName: string, fallback: string): string {
-    try {
-      const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-      if (!raw) return fallback;
-      const probe = document.createElement("span");
-      probe.style.color = raw;
-      probe.style.display = "none";
-      document.body.appendChild(probe);
-      const rgb = getComputedStyle(probe).color;
-      probe.remove();
-      return rgb || fallback;
-    } catch {
-      return fallback;
-    }
+  // The terminal is themed from the same VS Code theme as the rest of the app —
+  // including all 16 ANSI colours, so an agent's coloured output belongs to the
+  // theme instead of fighting it.
+  function xtermTheme() {
+    const t = themeState.palette.terminal;
+    return {
+      background: t.background,
+      foreground: t.foreground,
+      cursor: t.cursor,
+      cursorAccent: t.background,
+      selectionBackground: t.selectionBackground,
+      black: t.black,
+      red: t.red,
+      green: t.green,
+      yellow: t.yellow,
+      blue: t.blue,
+      magenta: t.magenta,
+      cyan: t.cyan,
+      white: t.white,
+      brightBlack: t.brightBlack,
+      brightRed: t.brightRed,
+      brightGreen: t.brightGreen,
+      brightYellow: t.brightYellow,
+      brightBlue: t.brightBlue,
+      brightMagenta: t.brightMagenta,
+      brightCyan: t.brightCyan,
+      brightWhite: t.brightWhite,
+    };
   }
 
   function connect(agent: string, initiative: string) {
@@ -98,13 +111,9 @@
     const i = initiativeId;
     if (!term) {
       term = new Terminal({
-        fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
-        fontSize: 13,
-        theme: {
-          background: cssColor("--color-canvas", "#0b0e14"),
-          foreground: cssColor("--color-fg", "#e8ebf1"),
-          cursor: cssColor("--color-accent", "#e0922e"),
-        },
+        fontFamily: fontState.stack,
+        fontSize: fontState.size,
+        theme: xtermTheme(),
         cursorBlink: true,
         scrollback: 5000,
       });
@@ -117,6 +126,24 @@
     }
     fit?.fit();
     connect(a, i);
+  });
+
+  // Re-skin a live terminal when the theme changes — no reconnect, no reload;
+  // the scrollback keeps its content and just repaints in the new palette.
+  $effect(() => {
+    const theme = xtermTheme();
+    if (term) term.options.theme = theme;
+  });
+
+  // Same for the typeface. A different cell size changes how many rows and
+  // columns fit, so refit and tell the PTY its new dimensions.
+  $effect(() => {
+    const family = fontState.stack;
+    const size = fontState.size;
+    if (!term) return;
+    term.options.fontFamily = family;
+    term.options.fontSize = size;
+    fit?.fit();
   });
 
   $effect(() => {

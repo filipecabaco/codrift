@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
-  import { ArrowPath, CommandLine, Link } from "@steeze-ui/heroicons";
+  import { ArrowPath, CommandLine, Link, Swatch } from "@steeze-ui/heroicons";
   import { rpc } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
   import { workspace as ws, type Row } from "$lib/workspace.svelte";
@@ -26,6 +26,9 @@
   import Confirm from "$lib/Confirm.svelte";
   import Editor from "$lib/Editor.svelte";
   import Integrations from "$lib/Integrations.svelte";
+  import Appearance from "$lib/Appearance.svelte";
+  import { initTheme, themeState } from "$lib/theme.svelte";
+  import { initFonts } from "$lib/fonts.svelte";
 
   // Each pane is an independent viewport onto an initiative — its own agent,
   // tab, open context file and tree selection. The sidebar drives whichever
@@ -35,6 +38,8 @@
     agentId: string | null;
     tab: "context" | "diff" | "tree";
     wantFile: string | null;
+    /** Which half of the context view is showing: a document or the memory store. */
+    wantPanel: "file" | "memory";
     treeSelectedPath: string | null;
   };
   const newView = (): PaneView => ({
@@ -42,6 +47,7 @@
     agentId: null,
     tab: "context",
     wantFile: null,
+    wantPanel: "file",
     treeSelectedPath: null,
   });
   let panes = $state<PaneView[]>([newView()]);
@@ -57,6 +63,9 @@
   let status = $state<string | null>(null);
   let keymap = $state<Keymap>(DEFAULT_KEYMAP);
   let editing = $state<{ path: string } | null>(null);
+  // Bumped whenever the editor writes a file, so views showing that file's
+  // contents (the tree's preview) re-read it instead of showing the old text.
+  let fileRevision = $state(0);
   // Which pane has keyboard focus. Tab cycles; the terminal only receives keys
   // when "main" so sidebar nav (j/k/arrows) keeps working otherwise.
   let paneFocus = $state<"sidebar" | "main">("sidebar");
@@ -86,6 +95,7 @@
     | { kind: "dirpicker"; submit: (v: string) => void }
     | { kind: "confirm"; message: string; onConfirm: () => void }
     | { kind: "integrations" }
+    | { kind: "appearance" }
     | null;
   let modal = $state<Modal>(null);
 
@@ -110,29 +120,41 @@
   async function load() {
     await ws.load();
     const v = panes[activePane];
-    if (!v.initiativeId && ws.initiatives.length > 0) v.initiativeId = ws.initiatives[0].id;
-    if (v.initiativeId) ws.expand(v.initiativeId);
+    // Only expand on the *first* selection: re-expanding on every refresh would
+    // undo a collapse the user just made (r, status cycling, starting an agent…).
+    if (!v.initiativeId && ws.initiatives.length > 0) {
+      v.initiativeId = ws.initiatives[0].id;
+      ws.expand(v.initiativeId);
+    }
   }
 
   // Apply a row's selection WITHOUT touching the cursor — the cursor is owned by
   // workspace.moveCursor. (The mouse-facing select* helpers below also sync the
   // cursor; calling them here would snap it back and break arrow navigation.)
+  // Nor does it expand: moving the cursor onto a collapsed node must leave it
+  // collapsed, the way any tree behaves. → (expandOrChild) opens it.
   function applyRow(row: Row) {
     const v = panes[activePane];
     switch (row.kind) {
       case "init":
       case "dir":
+      case "folder":
         v.initiativeId = row.initId;
         v.agentId = null;
         v.wantFile = null;
-        ws.expand(row.initId);
         break;
       case "file":
         v.initiativeId = row.initId;
         v.agentId = null;
         v.wantFile = row.name;
+        v.wantPanel = "file";
         v.tab = "context";
-        ws.expand(row.initId);
+        break;
+      case "memory":
+        v.initiativeId = row.initId;
+        v.agentId = null;
+        v.wantPanel = "memory";
+        v.tab = "context";
         break;
       case "agent":
         v.initiativeId = row.initId;
@@ -170,10 +192,31 @@
     v.initiativeId = initId;
     v.agentId = null;
     v.wantFile = name;
+    v.wantPanel = "file";
     v.tab = "context";
     paneFocus = "sidebar";
     ws.expand(initId);
     ws.syncCursor((r) => r.kind === "file" && r.initId === initId && r.name === name);
+  }
+
+  function openMemory(initId: string) {
+    const v = panes[activePane];
+    v.initiativeId = initId;
+    v.agentId = null;
+    v.wantPanel = "memory";
+    v.tab = "context";
+    paneFocus = "sidebar";
+    ws.expand(initId);
+    ws.syncCursor((r) => r.kind === "memory" && r.initId === initId);
+  }
+
+  function toggleContextFolder(initId: string, path: string) {
+    const v = panes[activePane];
+    v.initiativeId = initId;
+    v.agentId = null;
+    paneFocus = "sidebar";
+    ws.toggleFolder(initId, path);
+    ws.syncCursor((r) => r.kind === "folder" && r.initId === initId && r.path === path);
   }
 
   function selectAgent(initId: string, agentId: string) {
@@ -314,8 +357,12 @@
         openPrompt("New initiative name", async (name) => {
           modal = null;
           try {
-            await rpc("create_initiative", { name });
+            // Select what was just created: otherwise it lands at the bottom of
+            // the sidebar unselected and the natural next key (`a`) would add a
+            // directory to whatever was selected before.
+            const created = await rpc<{ id: string }>("create_initiative", { name });
             await load();
+            if (created?.id) selectInitiative(created.id);
           } catch (e) {
             toast((e as Error).message);
           }
@@ -331,6 +378,9 @@
       case "edit_context":
         if (active.treeSelectedPath) editing = { path: active.treeSelectedPath };
         else toast("Open a file in the Tree view to edit it.");
+        break;
+      case "appearance":
+        modal = { kind: "appearance" };
         break;
       case "quit":
         toast("Quit is handled by the window — nothing to do here.");
@@ -359,6 +409,11 @@
       };
     } else if (selectedInitiative) {
       const init = selectedInitiative;
+      // Remember the neighbour now: after the delete it is what the pane should
+      // land on, rather than an empty "Select an initiative" screen.
+      const others = ws.initiatives.filter((i) => i.id !== init.id);
+      const at = ws.initiatives.findIndex((i) => i.id === init.id);
+      const next = others[Math.min(at, others.length - 1)] ?? null;
       modal = {
         kind: "confirm",
         message: `Delete initiative "${init.name}"?`,
@@ -367,7 +422,9 @@
           try {
             await rpc("delete_initiative", { initiative_id: init.id });
             active.initiativeId = null;
+            active.agentId = null;
             await load();
+            if (next) selectInitiative(next.id);
           } catch (e) {
             toast((e as Error).message);
           }
@@ -543,18 +600,40 @@
     return () => window.removeEventListener("keydown", onCaptureKeydown, true);
   });
 
+  // Rows come and go under the cursor (an agent stops, an initiative is
+  // deleted, another pane starts one). Whenever that leaves the cursor pointing
+  // at nothing, re-anchor it inside the initiative this pane is showing, so the
+  // sidebar highlight can never disagree with the content — the one thing a
+  // multi-agent operator has to be able to trust.
+  $effect(() => {
+    ws.rows;
+    ws.reconcileCursor(active.initiativeId);
+  });
+
   // When the server drops (conn.online flipped false by a failed rpc), poll the
   // cheap health endpoint until it answers, then reload everything. The effect
   // re-runs when conn.online flips back true, which tears the interval down.
   $effect(() => {
     if (conn.online) return;
+    // Read once, untracked: this effect must depend on `conn.online` alone, or
+    // every agent update would tear the poll down and restart it.
+    const before = untrack(() => ws.totalAgents);
     const timer = setInterval(async () => {
-      if (await health()) await load();
+      if (!(await health())) return;
+      await load();
+      // Agents are children of the server process, so a restart kills them.
+      // Say so — silently emptying the sidebar looks like nothing happened.
+      const lost = before - ws.totalAgents;
+      if (lost > 0) toast(`Reconnected — ${lost} running agent${lost === 1 ? "" : "s"} was lost.`);
+      else toast("Reconnected to the Codrift server.");
     }, 2000);
     return () => clearInterval(timer);
   });
 
   onMount(async () => {
+    // Appearance first: it decides what everything below renders as.
+    void initTheme();
+    void initFonts();
     try {
       keymap = await rpc<Keymap>("get_keybindings");
     } catch {
@@ -590,6 +669,14 @@
     {/if}
     <button
       class="ml-auto rounded-md p-1 text-muted hover:text-fg"
+      title="Appearance — theme &amp; font ({themeState.label})"
+      onclick={() => (modal = { kind: "appearance" })}
+      aria-label="Appearance"
+    >
+      <Icon src={Swatch} class="size-4" />
+    </button>
+    <button
+      class="rounded-md p-1 text-muted hover:text-fg"
       title="Integrations"
       onclick={() => (modal = { kind: "integrations" })}
       aria-label="Integrations"
@@ -638,6 +725,8 @@
         onSelectDir={selectDir}
         onSelectAgent={selectAgent}
         onOpenContextFile={openContextFile}
+        onOpenMemory={openMemory}
+        onToggleContextFolder={toggleContextFolder}
         onCollapse={() => (sidebarCollapsed = true)}
       />
       <!-- Drag to resize the sidebar. -->
@@ -727,6 +816,7 @@
             initiative={init}
             agents={ws.agentsFor(init.id)}
             wantFile={view.wantFile}
+            wantPanel={view.wantPanel}
             onChanged={load}
           />
         {/if}
@@ -738,6 +828,7 @@
         {#key init.id}
           <TreeView
             initiativeId={init.id}
+            revision={fileRevision}
             bind:selectedPath={view.treeSelectedPath}
             onEdit={(p) => {
               activePane = idx;
@@ -764,11 +855,14 @@
   <Editor
     initiativeId={selectedInitiative.id}
     path={editing.path}
+    onSaved={() => fileRevision++}
     onClose={() => (editing = null)}
   />
 {/if}
 
-{#if modal?.kind === "integrations"}
+{#if modal?.kind === "appearance"}
+  <Appearance onClose={() => (modal = null)} />
+{:else if modal?.kind === "integrations"}
   <Integrations onClose={() => (modal = null)} />
 {:else if modal?.kind === "palette"}
   <CommandPalette items={paletteItems} onRun={runAction} onClose={() => (modal = null)} />

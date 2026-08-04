@@ -112,19 +112,77 @@ defmodule Codrift.Diff do
   @doc """
   Generates a diff for the given directory.
 
+  A plain working-tree diff also includes **untracked** files (rendered as
+  all-additions against `/dev/null`), because agents routinely create files and
+  `git diff` alone would leave them invisible to the reviewer.
+
   Options:
     - `:from` - base ref (default: index/working tree)
     - `:to` - target ref
     - `:staged` - boolean, diff staged changes (default: false)
     - `:paths` - list of paths to limit the diff
     - `:context` - context lines around changes (default: 3)
+    - `:include_untracked` - boolean (default: true). Ignored for `:staged` and
+      ref-to-ref diffs, where "untracked" has no meaning.
   """
   def generate(dir, opts \\ []) do
-    args = build_args(opts)
+    case git(dir, build_args(opts)) do
+      {:ok, tracked} -> {:ok, tracked ++ untracked_diffs(dir, opts)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
+  defp git(dir, args) do
     case System.cmd("git", args, cd: dir, stderr_to_stdout: false) do
       {output, status} when status in [0, 1] -> {:ok, parse(output)}
       {error, code} -> {:error, {code, error}}
+    end
+  end
+
+  # `git diff` only reports files git already knows about, so a file an agent
+  # just created never shows up. List the untracked ones (honouring .gitignore)
+  # and diff each against /dev/null, which yields the same patch shape the
+  # parser already understands.
+  defp untracked_diffs(dir, opts) do
+    if untracked?(opts) do
+      dir
+      |> untracked_paths(opts[:paths] || [])
+      |> Enum.flat_map(&untracked_diff(dir, &1, opts))
+    else
+      []
+    end
+  end
+
+  defp untracked?(opts) do
+    Keyword.get(opts, :include_untracked, true) and !opts[:staged] and
+      is_nil(opts[:from]) and is_nil(opts[:to])
+  end
+
+  defp untracked_paths(dir, paths) do
+    args = ["ls-files", "--others", "--exclude-standard", "-z"] ++ path_args(paths)
+
+    case System.cmd("git", args, cd: dir, stderr_to_stdout: false) do
+      {output, 0} -> String.split(output, "\0", trim: true)
+      {_error, _code} -> []
+    end
+  end
+
+  # Unreadable paths (dangling symlinks, permission errors) exit non-zero and
+  # are skipped rather than failing the whole diff.
+  defp untracked_diff(dir, path, opts) do
+    args = [
+      "diff",
+      "--no-index",
+      "--patch",
+      "-U#{opts[:context] || 3}",
+      "--",
+      "/dev/null",
+      path
+    ]
+
+    case System.cmd("git", args, cd: dir, stderr_to_stdout: false) do
+      {output, code} when code in [0, 1] -> parse(output)
+      {_error, _code} -> []
     end
   end
 
@@ -137,21 +195,20 @@ defmodule Codrift.Diff do
   end
 
   defp build_args(opts) do
-    paths = opts[:paths] || []
-
-    base =
-      [
-        "diff",
-        "--patch",
-        "-U#{opts[:context] || 3}",
-        if(opts[:staged], do: "--cached"),
-        opts[:from],
-        opts[:to]
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    if paths == [], do: base, else: base ++ ["--"] ++ paths
+    [
+      "diff",
+      "--patch",
+      "-U#{opts[:context] || 3}",
+      if(opts[:staged], do: "--cached"),
+      opts[:from],
+      opts[:to]
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Kernel.++(path_args(opts[:paths] || []))
   end
+
+  defp path_args([]), do: []
+  defp path_args(paths), do: ["--" | paths]
 
   defp parse_files([], acc), do: acc
 
@@ -195,7 +252,23 @@ defmodule Codrift.Diff do
         if String.starts_with?(line, "+++ "), do: strip_path_prefix(line, "+++ ")
       end)
 
-    {old_path || "/dev/null", new_path || "/dev/null"}
+    # Binary files have no `---`/`+++` lines at all ("Binary files … differ"),
+    # so fall back to the `diff --git a/x b/y` header — otherwise the file would
+    # render as "/dev/null" and the reviewer could not tell what changed.
+    case {old_path, new_path} do
+      {nil, nil} -> git_header_paths(header_lines)
+      {old, new} -> {old || "/dev/null", new || "/dev/null"}
+    end
+  end
+
+  @git_header_re ~r{^diff --git a/(.+) b/(.+)$}
+  defp git_header_paths(header_lines) do
+    header_lines
+    |> Enum.find_value(fn line -> Regex.run(@git_header_re, line) end)
+    |> case do
+      [_, old, new] -> {old, new}
+      nil -> {"/dev/null", "/dev/null"}
+    end
   end
 
   defp strip_path_prefix(line, prefix) do

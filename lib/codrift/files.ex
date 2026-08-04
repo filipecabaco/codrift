@@ -27,6 +27,27 @@ defmodule Codrift.Files do
   end
 
   @doc """
+  True when `dir` sits inside a git working tree.
+
+  Walks up looking for `.git` (a directory in a normal clone, a file in a
+  worktree) instead of shelling out to `git rev-parse`, because the UI asks
+  this for every directory of every initiative on every refresh — a few `stat`
+  calls, not a process spawn each.
+  """
+  @spec git_repo?(String.t()) :: boolean()
+  def git_repo?(dir) when is_binary(dir), do: dir |> Path.expand() |> walk_up_for_git()
+
+  defp walk_up_for_git(path) do
+    parent = Path.dirname(path)
+
+    cond do
+      File.exists?(Path.join(path, ".git")) -> true
+      parent == path -> false
+      true -> walk_up_for_git(parent)
+    end
+  end
+
+  @doc """
   Lists immediate subdirectories for path autocompletion in the "add directory"
   picker.
 

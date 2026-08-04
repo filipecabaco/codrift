@@ -16,6 +16,30 @@ defmodule Codrift.FilesTest do
     end
   end
 
+  describe "git_repo?/1" do
+    # ExUnit's tmp_dir lives inside this repository, so a directory with no git
+    # ancestor has to be created outside it.
+    test "is false for a directory with no git ancestor" do
+      plain =
+        Path.join(System.tmp_dir!(), "codrift-files-test-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(plain)
+      on_exit(fn -> File.rm_rf!(plain) end)
+
+      refute Codrift.Files.git_repo?(plain)
+    end
+
+    test "is true for a repository root and for directories inside it", %{tmp_dir: tmp} do
+      repo = Path.join(tmp, "repo")
+      Codrift.Test.GitRepo.init!(repo)
+      nested = Path.join([repo, "lib", "deep"])
+      File.mkdir_p!(nested)
+
+      assert Codrift.Files.git_repo?(repo)
+      assert Codrift.Files.git_repo?(nested)
+    end
+  end
+
   describe "read_within/2" do
     test "reads a file inside an allowed directory", %{tmp_dir: tmp} do
       path = Path.join(tmp, "f.txt")

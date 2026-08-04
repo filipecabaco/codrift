@@ -7,18 +7,30 @@
   import { LanguageDescription } from "@codemirror/language";
   import { languages } from "@codemirror/language-data";
   import { vim, Vim } from "@replit/codemirror-vim";
-  import { githubDark } from "@uiw/codemirror-theme-github";
   import { rpc } from "$lib/api";
+  import { editorTheme } from "$lib/editor-theme";
+  import { themeState } from "$lib/theme.svelte";
+  import { fontState } from "$lib/fonts.svelte";
   import Confirm from "$lib/Confirm.svelte";
 
   let {
     initiativeId,
     path,
     onClose,
-  }: { initiativeId: string; path: string; onClose: () => void } = $props();
+    onSaved,
+  }: {
+    initiativeId: string;
+    path: string;
+    onClose: () => void;
+    /** Called after every successful write, so stale previews can re-read. */
+    onSaved?: () => void;
+  } = $props();
 
   let host: HTMLDivElement;
   let view: EditorView | undefined;
+  // Swapped in place when the theme changes, so the buffer (and vim state)
+  // survives a re-skin.
+  const themeCompartment = new Compartment();
   let status = $state<string>("loading…");
   // What's on disk, as far as this editor knows.
   let savedDoc = "";
@@ -40,6 +52,7 @@
       savedDoc = content;
       dirty = isDirty();
       status = `saved · ${res.bytes} B`;
+      onSaved?.();
     } catch (e) {
       status = (e as Error).message;
     }
@@ -51,6 +64,13 @@
     confirmingClose = true;
     status = "unsaved changes — :w to save, :q! to discard";
   }
+
+  $effect(() => {
+    themeState.id;
+    fontState.stack;
+    fontState.size;
+    view?.dispatch({ effects: themeCompartment.reconfigure(editorTheme()) });
+  });
 
   onMount(() => {
     let destroyed = false;
@@ -106,7 +126,7 @@
           vim(),
           basicSetup,
           saveKey,
-          githubDark,
+          themeCompartment.of(editorTheme()),
           EditorView.lineWrapping,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) dirty = isDirty();

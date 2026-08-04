@@ -162,5 +162,76 @@ defmodule Codrift.DiffTest do
       init_git_repo(dir)
       assert {:error, _} = Diff.generate(dir, from: "nonexistent-ref-xyz", to: "HEAD")
     end
+
+    test "includes untracked files as all-addition diffs", %{tmp_dir: dir} do
+      init_git_repo(dir)
+      File.write!(Path.join(dir, "file.ex"), "original\n")
+      git_commit(dir, "initial")
+
+      File.write!(Path.join(dir, "file.ex"), "modified\n")
+      File.write!(Path.join(dir, "new.ex"), "brand new\n")
+
+      assert {:ok, [%FileDiff{path: "file.ex"}, %FileDiff{path: "new.ex"} = untracked]} =
+               Diff.generate(dir)
+
+      assert %FileDiff{old_path: "/dev/null", additions: 1, deletions: 0} = untracked
+    end
+
+    test "includes untracked files in nested directories", %{tmp_dir: dir} do
+      init_git_repo(dir)
+      File.write!(Path.join(dir, "file.ex"), "content\n")
+      git_commit(dir, "initial")
+
+      File.mkdir_p!(Path.join(dir, "lib/deep"))
+      File.write!(Path.join(dir, "lib/deep/mod.ex"), "defmodule Mod do\nend\n")
+
+      assert {:ok, [%FileDiff{path: "lib/deep/mod.ex", additions: 2}]} = Diff.generate(dir)
+    end
+
+    test "honours .gitignore for untracked files", %{tmp_dir: dir} do
+      init_git_repo(dir)
+      File.write!(Path.join(dir, ".gitignore"), "ignored.log\n")
+      git_commit(dir, "initial")
+
+      File.write!(Path.join(dir, "ignored.log"), "noise\n")
+      File.write!(Path.join(dir, "kept.ex"), "kept\n")
+
+      assert {:ok, [%FileDiff{path: "kept.ex"}]} = Diff.generate(dir)
+    end
+
+    test "limits untracked files to specified paths", %{tmp_dir: dir} do
+      init_git_repo(dir)
+      File.write!(Path.join(dir, "file.ex"), "content\n")
+      git_commit(dir, "initial")
+
+      File.mkdir_p!(Path.join(dir, "keep"))
+      File.write!(Path.join(dir, "keep/a.ex"), "a\n")
+      File.write!(Path.join(dir, "skip.ex"), "skip\n")
+
+      assert {:ok, [%FileDiff{path: "keep/a.ex"}]} = Diff.generate(dir, paths: ["keep"])
+    end
+
+    test "skips untracked files with include_untracked: false", %{tmp_dir: dir} do
+      init_git_repo(dir)
+      File.write!(Path.join(dir, "file.ex"), "content\n")
+      git_commit(dir, "initial")
+
+      File.write!(Path.join(dir, "new.ex"), "brand new\n")
+
+      assert {:ok, []} = Diff.generate(dir, include_untracked: false)
+    end
+
+    test "ignores untracked files for staged and ref-to-ref diffs", %{tmp_dir: dir} do
+      init_git_repo(dir)
+      File.write!(Path.join(dir, "file.ex"), "v1\n")
+      git_commit(dir, "v1")
+      File.write!(Path.join(dir, "file.ex"), "v2\n")
+      git_commit(dir, "v2")
+
+      File.write!(Path.join(dir, "new.ex"), "brand new\n")
+
+      assert {:ok, []} = Diff.generate(dir, staged: true)
+      assert {:ok, [%FileDiff{path: "file.ex"}]} = Diff.generate(dir, from: "HEAD~1", to: "HEAD")
+    end
   end
 end

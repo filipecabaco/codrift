@@ -192,13 +192,36 @@ defmodule Codrift.Web.E2ETest do
       assert msg =~ "outside"
     end
 
-    test "read_context_file rejects a name with path separators" do
+    test "read_context_file rejects a name that traverses out of the folder" do
       {id, _} = create_initiative!()
 
-      assert {422, %{"error" => msg}} =
-               rpc("read_context_file", %{"initiative_id" => id, "name" => "../secret"})
+      for name <- ["../secret", "docs/../../secret", "/etc/passwd"] do
+        assert {422, %{"error" => msg}} =
+                 rpc("read_context_file", %{"initiative_id" => id, "name" => name})
 
-      assert msg =~ "invalid file name"
+        assert msg =~ "invalid file name"
+      end
+    end
+
+    test "context files include nested paths and hide Codrift's own bookkeeping" do
+      {id, _} = create_initiative!("e2e-context-tree")
+      context = Codrift.Initiative.Store.context_path(id)
+
+      File.mkdir_p!(Path.join(context, "scripts"))
+      File.write!(Path.join(context, "scripts/deploy.sh"), "#!/bin/sh\necho deploy\n")
+      File.mkdir_p!(Path.join(context, ".agent-logs"))
+      File.write!(Path.join(context, ".agent-logs/a.log"), "noise")
+      File.write!(Path.join(context, "memory.db"), "binary")
+
+      %{"files" => files} = ok!("list_context_files", %{"initiative_id" => id})
+
+      assert "initiative.md" in files
+      assert "scripts/deploy.sh" in files
+      refute "memory.db" in files
+      refute Enum.any?(files, &String.starts_with?(&1, "."))
+
+      assert %{"content" => "#!/bin/sh\necho deploy\n"} =
+               ok!("read_context_file", %{"initiative_id" => id, "name" => "scripts/deploy.sh"})
     end
   end
 

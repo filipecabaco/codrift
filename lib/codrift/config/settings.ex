@@ -37,6 +37,30 @@ defmodule Codrift.Config.Settings do
     read() |> Map.get("adapter_starts", %{})
   end
 
+  @doc ~S(Returns the selected UI theme id, or `nil` when the user never picked one.)
+  def theme, do: read() |> Map.get("theme")
+
+  @doc "Remembers the selected UI theme id."
+  def put_theme(name) when is_binary(name) do
+    write(Map.put(read(), "theme", name))
+  end
+
+  @doc """
+  Returns the selected typeface as `%{"family" => name | nil, "size" => px | nil}`.
+
+  Both are `nil` until the user picks; the UI then falls back to the platform's
+  default monospace.
+  """
+  def font do
+    stored = read() |> Map.get("font", %{})
+    %{"family" => Map.get(stored, "family"), "size" => Map.get(stored, "size")}
+  end
+
+  @doc "Remembers the selected typeface."
+  def put_font(family, size) when is_binary(family) and is_integer(size) do
+    write(Map.put(read(), "font", %{"family" => family, "size" => size}))
+  end
+
   @doc "Increments the start count for the given adapter module."
   def increment_adapter_start(adapter) do
     name = Codrift.Agent.adapter_name(adapter)
