@@ -45,7 +45,9 @@ defmodule Codrift.Themes do
       {:error, :enoent} -> {:error, :not_found}
       {:error, :invalid_name} -> {:error, :not_found}
       {:ok, _not_a_theme} -> {:error, :invalid}
-      {:error, %JSON.DecodeError{}} -> {:error, :invalid}
+      # JSON.decode/1 reports failures as `{:error, {:invalid_byte, ...}}` and
+      # friends — it never returns a %JSON.DecodeError{} (only decode!/1 raises
+      # one), so this clause catches every decode failure.
       {:error, _reason} -> {:error, :invalid}
     end
   end

@@ -160,7 +160,20 @@ defmodule Codrift.AgentProcess do
         # than the {:args, [...]} option (which is invalid in PTY mode).
         cmd = if args == [], do: adapter.cmd(), else: [adapter.cmd() | args]
 
-        pty_opts = [:pty, :stdin, {:stdout, self()}, :monitor, {:cd, dir}, {:env, env}]
+        # stderr must be captured as well as stdout. On Linux an interactive
+        # shell writes its prompt — and every "command not found" — to stderr,
+        # so a stdout-only PTY yields a terminal that displays absolutely
+        # nothing. (macOS happens to surface the prompt on stdout, which is why
+        # this only ever showed up on Linux.)
+        pty_opts = [
+          :pty,
+          :stdin,
+          {:stdout, self()},
+          {:stderr, self()},
+          :monitor,
+          {:cd, dir},
+          {:env, env}
+        ]
 
         {:ok, exec_pid, ospid} = :exec.run(cmd, pty_opts)
 
@@ -265,8 +278,10 @@ defmodule Codrift.AgentProcess do
   end
 
   @impl true
-  # PTY / stdout from erlexec
-  def handle_info({:stdout, ospid, data}, %{exec_ospid: ospid} = state) do
+  # PTY output from erlexec. A terminal interleaves both streams on the same
+  # screen, so both are fed through the same path.
+  def handle_info({stream, ospid, data}, %{exec_ospid: ospid} = state)
+      when stream in [:stdout, :stderr] do
     {:noreply, process_output(state, data)}
   end
 
@@ -350,16 +365,20 @@ defmodule Codrift.AgentProcess do
     state = push_buffer(state, data)
     for {sub, _} <- state.subscribers, do: send(sub, {:agent_output, state.id, data})
 
-    if new_status != state.status do
-      for {sub, _} <- state.subscribers,
-          do: send(sub, {:agent_status, state.id, new_status})
-
-      if new_status == :awaiting_input do
-        for {sub, _} <- state.subscribers, do: send(sub, {:agent_ready, state.id})
-      end
-    end
+    if new_status != state.status, do: broadcast_status(state, new_status)
 
     %{state | status: new_status}
+  end
+
+  # Fans a status transition out to subscribers. `:awaiting_input` additionally
+  # emits `:agent_ready`, which orchestrators treat as "safe to send input now".
+  # Kept as two passes so every subscriber sees the status before any sees ready.
+  defp broadcast_status(state, status) do
+    for {sub, _} <- state.subscribers, do: send(sub, {:agent_status, state.id, status})
+
+    if status == :awaiting_input do
+      for {sub, _} <- state.subscribers, do: send(sub, {:agent_ready, state.id})
+    end
   end
 
   defp extract_text_delta(line) do

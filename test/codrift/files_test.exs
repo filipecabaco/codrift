@@ -2,6 +2,8 @@ defmodule Codrift.FilesTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
+  alias Codrift.Test.GitRepo
+
   @moduletag :tmp_dir
 
   describe "list_relative/1" do
@@ -31,7 +33,7 @@ defmodule Codrift.FilesTest do
 
     test "is true for a repository root and for directories inside it", %{tmp_dir: tmp} do
       repo = Path.join(tmp, "repo")
-      Codrift.Test.GitRepo.init!(repo)
+      GitRepo.init!(repo)
       nested = Path.join([repo, "lib", "deep"])
       File.mkdir_p!(nested)
 

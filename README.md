@@ -272,8 +272,8 @@ mix ex_tauri.build       # produce a platform bundle
 
 Releases are fully automated from [Conventional Commit](https://www.conventionalcommits.org)
 prefixes — there is nothing to tag by hand. On every merge to `main`,
-[`auto-release.yml`](.github/workflows/auto-release.yml) inspects the commits
-since the last `v*` tag and bumps semver accordingly:
+[`release.yml`](.github/workflows/release.yml) inspects the commits since the
+last `v*` tag and bumps semver accordingly:
 
 | Commit prefix | Bump | From `0.0.0` |
 |---|---|---|
@@ -282,11 +282,15 @@ since the last `v*` tag and bumps semver accordingly:
 | `feat!:` / `major:` / `BREAKING CHANGE` | major | `1.0.0` |
 
 The highest-priority prefix in the range wins; commits with no `fix`/`feat`/breaking
-prefix (`chore:`, `docs:`, …) don't release. The computed version drives the
-reusable [`release.yml`](.github/workflows/release.yml), which builds the macOS
-`.dmg`s + Linux bundles + CLI, cuts the `v<version>` tag and GitHub Release, and
-rewrites `Casks/codrift.rb` with the new version and checksums. To cut a specific
-version by hand, run **release.yml** via *Run workflow* with the version.
+prefix (`chore:`, `docs:`, …) don't release. From there the same workflow builds
+the macOS `.dmg`s + Linux bundles + CLI, cuts the `v<version>` tag and GitHub
+Release, and rewrites `Casks/codrift.rb` with the new version and checksums. To
+cut a specific version by hand, run **Release** via *Run workflow* and type the
+version; leave it empty to just re-derive it from the commits.
+
+The version in `mix.exs` and `src-tauri/tauri.conf.json` is a **placeholder** —
+the workflow stamps the real number in before building. Git tags, not committed
+files, decide what ships.
 
 ---
 

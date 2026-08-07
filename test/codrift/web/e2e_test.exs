@@ -20,6 +20,7 @@ defmodule Codrift.Web.E2ETest do
   import Plug.Conn
 
   alias Codrift.Initiative.Store
+  alias Codrift.Test.GitRepo
 
   @opts Codrift.init([])
 
@@ -205,7 +206,7 @@ defmodule Codrift.Web.E2ETest do
 
     test "context files include nested paths and hide Codrift's own bookkeeping" do
       {id, _} = create_initiative!("e2e-context-tree")
-      context = Codrift.Initiative.Store.context_path(id)
+      context = Store.context_path(id)
 
       File.mkdir_p!(Path.join(context, "scripts"))
       File.write!(Path.join(context, "scripts/deploy.sh"), "#!/bin/sh\necho deploy\n")
@@ -231,7 +232,7 @@ defmodule Codrift.Web.E2ETest do
     @tag :tmp_dir
     test "get_diff surfaces an uncommitted change in a tracked file", %{tmp_dir: tmp_dir} do
       repo =
-        Codrift.Test.GitRepo.init_with!(Path.join(tmp_dir, "repo"), %{
+        GitRepo.init_with!(Path.join(tmp_dir, "repo"), %{
           "app.ex" => "defmodule App do\nend\n"
         })
 

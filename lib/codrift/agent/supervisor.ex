@@ -9,6 +9,8 @@ defmodule Codrift.AgentSupervisor do
 
   use DynamicSupervisor
 
+  alias Codrift.Web.EventRelay
+
   @doc "Starts the supervisor. Accepts `:name` opt (pass `nil` for unnamed)."
   def start_link(opts \\ []) do
     case Keyword.get(opts, :name, __MODULE__) do
@@ -63,7 +65,7 @@ defmodule Codrift.AgentSupervisor do
     Registry.dispatch(Codrift.AgentWatchers, :all, fn watchers ->
       Enum.each(watchers, fn {watcher, _} ->
         Codrift.AgentProcess.subscribe(agent_pid, watcher)
-        send(watcher, {:agent_started, Codrift.Web.EventRelay.describe(agent_pid)})
+        send(watcher, {:agent_started, EventRelay.describe(agent_pid)})
       end)
     end)
   rescue

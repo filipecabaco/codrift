@@ -4,6 +4,7 @@ defmodule Codrift.Initiative.StoreTest do
 
   alias Codrift.Initiative
   alias Codrift.Initiative.{DirEntry, Store}
+  alias Codrift.Test.GitRepo
 
   @moduletag :tmp_dir
 
@@ -468,5 +469,5 @@ defmodule Codrift.Initiative.StoreTest do
     end
   end
 
-  defp init_git_repo(path), do: Codrift.Test.GitRepo.init!(path)
+  defp init_git_repo(path), do: GitRepo.init!(path)
 end
