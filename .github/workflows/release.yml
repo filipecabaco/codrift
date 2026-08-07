@@ -40,6 +40,12 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  # Exact patch (and version-type: strict): Burrito can only fetch an ERTS the
+  # BEAM Machine CDN has built. Keep in sync with ci.yml.
+  OTP_VERSION: "27.3.4.14"
+  ELIXIR_VERSION: "1.18.4"
+
 jobs:
   # ── 1. Version ───────────────────────────────────────────────────────────────
   version:
@@ -157,11 +163,12 @@ jobs:
 
       # ── Toolchains ───────────────────────────────────────────────────────────
       # OTP 27: ex_tauri wraps the Elixir sidecar with Burrito, which does not yet
-      # support OTP 28.
+      # support OTP 28. The exact patch is pinned — see the note on OTP_VERSION.
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: "27"
-          elixir-version: "1.18"
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -201,6 +208,17 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
+
+      - name: Cache Tauri CLI
+        id: tauri-cli
+        uses: actions/cache@v4
+        with:
+          path: _build/_tauri
+          key: ${{ runner.os }}-${{ matrix.target }}-tauri-cli-v2
+
+      - name: Install Tauri CLI
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "^2" --locked --root _build/_tauri
 
       # ── Build ────────────────────────────────────────────────────────────────
       # `mix ex_tauri.build` assembles the :desktop release, Burrito-wraps it as

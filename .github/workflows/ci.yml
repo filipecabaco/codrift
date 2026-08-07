@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  # Must match release.yml — see the note there before bumping.
+  OTP_VERSION: "27.3.4.14"
+  ELIXIR_VERSION: "1.18.4"
+
 jobs:
   # ── 1. Lint ──────────────────────────────────────────────────────────────────
   lint:
@@ -19,8 +24,9 @@ jobs:
       - uses: erlef/setup-beam@v1
         id: setup-beam
         with:
-          otp-version: "27"
-          elixir-version: "1.18"
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
 
       - name: Restore deps cache
         uses: actions/cache@v4
@@ -72,8 +78,9 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: "27"
-          elixir-version: "1.18"
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
 
       - name: Restore deps cache
         uses: actions/cache@v4
@@ -115,8 +122,9 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: "27"
-          elixir-version: "1.18"
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
 
       - uses: pnpm/action-setup@v4
         with:
@@ -183,8 +191,9 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: "27"
-          elixir-version: "1.18"
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          version-type: strict
 
       - uses: dtolnay/rust-toolchain@stable
 

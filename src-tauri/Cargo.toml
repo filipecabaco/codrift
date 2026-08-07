@@ -1,6 +1,6 @@
 [package]
 name = "codrift"
-version = "0.1.0"
+version = "0.0.1"
 default-run = "codrift"
 edition = "2021"
 description = ""

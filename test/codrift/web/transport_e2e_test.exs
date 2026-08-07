@@ -77,34 +77,44 @@ defmodule Codrift.Web.TransportE2ETest do
 
   # ── Raw socket helpers ────────────────────────────────────────────────────────
 
-  defp connect(port) do
+  defp ws_connect(port, path) do
     {:ok, sock} =
       :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :raw], 2_000)
 
-    sock
+    :ok = :gen_tcp.send(sock, ws_handshake(path))
+
+    {upgrade, rest} = read_until(sock, "101 Switching Protocols", "")
+    assert upgrade =~ "101 Switching Protocols"
+
+    {joined, rest} = read_until(sock, ~s("event":"connected"), rest)
+    assert joined =~ ~s("event":"connected")
+
+    {sock, rest}
   end
 
-  # Reads from the socket until `needle` appears in the accumulated bytes, or the
-  # deadline passes. Returns the accumulated string (asserts on the needle).
-  defp read_until(sock, needle, timeout_ms \\ 4_000) do
+  # Returns {read, rest}. Thread `rest` into the next call: Bandit packs the
+  # upgrade response and several frames into one segment.
+  defp read_until(sock, needle, rest, timeout_ms \\ 4_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    read_until_loop(sock, needle, "", deadline)
+    read_until_loop(sock, needle, rest, deadline)
   end
 
   defp read_until_loop(sock, needle, acc, deadline) do
-    cond do
-      String.contains?(acc, needle) ->
-        acc
+    case String.split(acc, needle, parts: 2) do
+      [_matched, tail] -> {acc, tail}
+      [_unmatched] -> read_more(sock, needle, acc, deadline)
+    end
+  end
 
-      System.monotonic_time(:millisecond) > deadline ->
-        acc
-
-      true ->
-        case :gen_tcp.recv(sock, 0, 500) do
-          {:ok, data} -> read_until_loop(sock, needle, acc <> data, deadline)
-          {:error, :timeout} -> read_until_loop(sock, needle, acc, deadline)
-          {:error, _} -> acc
-        end
+  defp read_more(sock, needle, acc, deadline) do
+    if System.monotonic_time(:millisecond) > deadline do
+      {acc, ""}
+    else
+      case :gen_tcp.recv(sock, 0, 500) do
+        {:ok, data} -> read_until_loop(sock, needle, acc <> data, deadline)
+        {:error, :timeout} -> read_until_loop(sock, needle, acc, deadline)
+        {:error, _} -> {acc, ""}
+      end
     end
   end
 
@@ -157,16 +167,12 @@ defmodule Codrift.Web.TransportE2ETest do
     } do
       {_initiative_id, agent_id} = start_live_agent(tmp_dir)
 
-      sock = connect(port)
-      :ok = :gen_tcp.send(sock, ws_handshake("/ws"))
-      assert read_until(sock, "101") =~ "101 Switching Protocols"
-
-      # Join reply.
-      assert read_until(sock, ~s("event":"connected")) =~ ~s("event":"connected")
+      {sock, rest} = ws_connect(port, "/ws")
 
       # Down: the agent's output arrives as an `output` frame.
       _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo WS_STREAM_OK\n"})
-      assert read_until(sock, ~s("event":"output")) =~ ~s("event":"output")
+      {output, _rest} = read_until(sock, ~s("event":"output"), rest)
+      assert output =~ ~s("event":"output")
 
       # Up: a keystroke frame on the same socket reaches the PTY.
       frame =
@@ -186,9 +192,7 @@ defmodule Codrift.Web.TransportE2ETest do
     test "accepts a paste larger than the default frame limit", %{port: port, tmp_dir: tmp_dir} do
       {_initiative_id, agent_id} = start_live_agent(tmp_dir)
 
-      sock = connect(port)
-      :ok = :gen_tcp.send(sock, ws_handshake("/ws"))
-      assert read_until(sock, ~s("event":"connected")) =~ ~s("event":"connected")
+      {sock, _rest} = ws_connect(port, "/ws")
 
       # ~100 KB of pasted text, with no newline so the shell just buffers it.
       big = String.duplicate("x", 100_000)
@@ -224,9 +228,7 @@ defmodule Codrift.Web.TransportE2ETest do
 
       on_exit(fn -> rpc("delete_initiative", %{"initiative_id" => initiative_id}) end)
 
-      sock = connect(port)
-      :ok = :gen_tcp.send(sock, ws_handshake("/ws"))
-      assert read_until(sock, ~s("event":"connected")) =~ ~s("event":"connected")
+      {sock, rest} = ws_connect(port, "/ws")
 
       # Started *after* the connection: the watcher registry has to wire it up.
       agent_id =
@@ -239,11 +241,13 @@ defmodule Codrift.Web.TransportE2ETest do
       on_exit(fn -> rpc("stop_agent", %{"agent_id" => agent_id}) end)
 
       # Announced without a refresh, so an orchestrator's sub-agents appear live.
-      assert read_until(sock, ~s("event":"agent_started")) =~ agent_id
+      {announced, rest} = read_until(sock, ~s("event":"agent_started"), rest)
+      assert announced =~ agent_id
 
       _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo LATE_AGENT_OK\n"})
 
-      assert read_until(sock, ~s("event":"output")) =~ ~s("event":"output")
+      {output, _rest} = read_until(sock, ~s("event":"output"), rest)
+      assert output =~ ~s("event":"output")
 
       :gen_tcp.close(sock)
     end
