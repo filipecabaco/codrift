@@ -109,6 +109,14 @@ defmodule Codrift.Initiative.Store do
   end
 
   @doc """
+  Sets which agent this initiative launches — a base adapter name or a launch
+  profile name. `nil` clears it, falling back to the global default.
+  """
+  def set_agent(id, agent, server \\ __MODULE__) do
+    GenServer.call(server, {:set_agent, id, agent})
+  end
+
+  @doc """
   Puts every git-backed directory of an initiative on its own branch.
 
   Non-repositories and directories already on the branch are skipped. Returns
@@ -251,6 +259,10 @@ defmodule Codrift.Initiative.Store do
 
   def handle_call({:set_worktree_default, id, default}, _from, state) do
     update_initiative(state, id, fn i -> %{i | worktree_default: default} end)
+  end
+
+  def handle_call({:set_agent, id, agent}, _from, state) do
+    update_initiative(state, id, fn i -> %{i | agent: agent} end)
   end
 
   def handle_call({:branch_all, id}, _from, state) do

@@ -7,11 +7,15 @@ defmodule Codrift.Config.Settings do
   overrides, so the same tool can run under different accounts/config folders
   (e.g. `claude-personal` vs `claude-work` via distinct `CLAUDE_CONFIG_DIR`s).
 
-  Profiles are stored under the `"profiles"` key, keyed by name:
+  Profiles are stored under the `"profiles"` key, keyed by name. The optional
+  `"command"` replaces the adapter's own executable, so a profile can point at
+  a wrapper script or a second install rather than the one on `PATH`, and the
+  optional `"args"` are appended to the adapter's own arguments:
 
       {
+        "default_agent": "claude-work",
         "profiles": {
-          "claude-work":     { "adapter": "claude", "env": { "CLAUDE_CONFIG_DIR": "~/.claude-work" } },
+          "claude-work":     { "adapter": "claude", "command": "claude-work", "args": ["--model", "opus"], "env": { "CLAUDE_CONFIG_DIR": "~/.claude-work" } },
           "claude-personal": { "adapter": "claude", "env": { "CLAUDE_CONFIG_DIR": "~/.claude-personal" } }
         }
       }
@@ -35,17 +39,26 @@ defmodule Codrift.Config.Settings do
   @doc """
   Creates or replaces a launch profile.
 
-  The whole profile is rewritten, so removing a variable from `env` removes it
-  from disk. Values are stored verbatim — `~` is expanded at launch, not here,
-  so the file stays readable and portable.
+  `attrs` takes `:adapter`, and optionally `:command`, `:args` and `:env`. The
+  whole profile is rewritten, so clearing any of them removes it from disk.
+  Values are stored verbatim: `~` is expanded at launch, not here, so the file
+  stays readable and portable.
   """
-  def put_profile(name, adapter, env)
-      when is_binary(name) and is_binary(adapter) and is_map(env) do
+  def put_profile(name, %{adapter: adapter} = attrs)
+      when is_binary(name) and is_binary(adapter) do
     settings = read()
     profiles = Map.get(settings, "profiles", %{})
-    profile = %{"adapter" => adapter, "env" => env}
+
+    profile =
+      %{"adapter" => adapter, "env" => Map.get(attrs, :env) || %{}}
+      |> put_unless_empty("command", Map.get(attrs, :command))
+      |> put_unless_empty("args", Map.get(attrs, :args))
+
     write(Map.put(settings, "profiles", Map.put(profiles, name, profile)))
   end
+
+  defp put_unless_empty(profile, _key, value) when value in [nil, "", []], do: profile
+  defp put_unless_empty(profile, key, value), do: Map.put(profile, key, value)
 
   @doc "Removes a launch profile, or `{:error, :not_found}` if there was none."
   def delete_profile(name) when is_binary(name) do
@@ -60,6 +73,17 @@ defmodule Codrift.Config.Settings do
         write(Map.put(settings, "profiles", rest))
         :ok
     end
+  end
+
+  @doc """
+  Returns the launch choice new initiatives start from — a base adapter name or
+  a profile name — or `nil` when the user has never picked one.
+  """
+  def default_agent, do: read() |> Map.get("default_agent")
+
+  @doc "Remembers the launch choice to seed new initiatives with."
+  def put_default_agent(choice) when is_binary(choice) do
+    write(Map.put(read(), "default_agent", choice))
   end
 
   @doc "Returns a map of adapter name → start count."

@@ -45,6 +45,8 @@ export type Initiative = {
   context_path?: string;
   /** Set when the initiative was imported from an issue tracker. */
   integration?: { service: string; item_id: string; url: string | null };
+  /** Launch choice for this initiative — a base adapter or a profile name. */
+  agent?: string | null;
 };
 
 export type Agent = {
@@ -90,6 +92,10 @@ export function listAgentProfiles(): Promise<AgentProfile[]> {
 export type AgentProfileConfig = {
   name: string;
   adapter: string;
+  /** Executable to run instead of the adapter's own — a wrapper script or a second install. */
+  command?: string | null;
+  /** Arguments appended to the adapter's own, one entry per argument. */
+  args?: string[];
   env: Record<string, string>;
 };
 
@@ -106,6 +112,19 @@ export function saveAgentProfile(
 
 export function deleteAgentProfile(name: string): Promise<unknown> {
   return rpc("delete_agent_profile", { name });
+}
+
+export async function getDefaultAgent(): Promise<string> {
+  const res = await rpc<{ agent: string }>("get_default_agent");
+  return res.agent;
+}
+
+export function setDefaultAgent(agent: string): Promise<unknown> {
+  return rpc("set_default_agent", { agent });
+}
+
+export function setInitiativeAgent(initiativeId: string, agent: string): Promise<Initiative> {
+  return rpc<Initiative>("set_initiative_agent", { initiative_id: initiativeId, agent });
 }
 
 // The variable each tool reads for "which account/config folder am I?", used to
@@ -155,6 +174,20 @@ export function revokeOAuthToken(service: string): Promise<unknown> {
 export function openUrl(url: string): Promise<unknown> {
   return rpc("open_url", { url });
 }
+
+type TauriGlobal = { core?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> } };
+
+export async function quitApp(): Promise<void> {
+  const tauri = (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
+  if (tauri?.core?.invoke) {
+    await tauri.core.invoke("quit_app");
+    return;
+  }
+  window.close();
+}
+
+/** The native menu's Quit item asks the page first — see src-tauri/src/lib.rs. */
+export const QUIT_REQUESTED = "codrift:quit-requested";
 
 export type AssignedItem = {
   service: string;

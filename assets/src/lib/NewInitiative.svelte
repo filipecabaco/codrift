@@ -1,9 +1,11 @@
 <script lang="ts">
   import Overlay from "$lib/Overlay.svelte";
   import { fuzzyMatch, highlight } from "$lib/fuzzy";
+  import { workspace as ws } from "$lib/workspace.svelte";
   import {
     listAssignedItems,
     importFromIntegration,
+    ADAPTERS,
     SERVICE_META,
     type AssignedItem,
   } from "$lib/api";
@@ -12,14 +14,19 @@
     onCreate,
     onOpen,
     onClose,
+    onManageProfiles,
   }: {
-    onCreate: (name: string) => void;
+    onCreate: (name: string, agent: string) => void;
     onOpen: (initiativeId: string) => void;
     onClose: () => void;
+    onManageProfiles?: () => void;
   } = $props();
+
+  let agent = $state(ws.agentChoiceFor(null));
 
   let query = $state("");
   let cursor = $state(0);
+  let listEl = $state<HTMLElement | null>(null);
   let loading = $state(true);
   let items = $state<AssignedItem[]>([]);
   let errors = $state<{ service: string; reason: string }[]>([]);
@@ -73,6 +80,10 @@
     cursor = 0;
   });
 
+  $effect(() => {
+    listEl?.querySelector<HTMLElement>(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
+  });
+
   (async () => {
     try {
       const res = await listAssignedItems();
@@ -88,7 +99,7 @@
   async function choose(row: number) {
     if (row === 0) {
       const name = query.trim();
-      if (name) onCreate(name);
+      if (name) onCreate(name, agent);
       return;
     }
 
@@ -139,15 +150,44 @@
     class="w-full border-b border-border bg-canvas px-3 py-2.5 text-sm text-fg outline-none"
   />
 
+  <div class="flex items-center gap-2 border-b border-border px-3 py-2">
+    <label class="text-[11px] text-muted" for="new-initiative-agent">Agent</label>
+    <select
+      id="new-initiative-agent"
+      bind:value={agent}
+      title="Which agent this initiative starts. Changeable later from the Context view."
+      class="rounded-md border border-border bg-canvas px-2 py-1 text-xs text-fg"
+    >
+      {#each ADAPTERS as a (a)}
+        <option value={a}>{a}</option>
+      {/each}
+      {#if ws.profiles.length}
+        <optgroup label="Profiles">
+          {#each ws.profiles as p (p.name)}
+            <option value={p.name}>{p.name}</option>
+          {/each}
+        </optgroup>
+      {/if}
+    </select>
+    <button
+      class="text-[11px] text-accent hover:underline"
+      onclick={() => onManageProfiles?.()}
+    >
+      manage profiles
+    </button>
+    <span class="ml-auto text-[11px] text-muted">also the default for the next one</span>
+  </div>
+
   {#if failure}
     <p class="border-b border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
       {failure}
     </p>
   {/if}
 
-  <ul class="max-h-[60vh] overflow-y-auto py-1">
+  <ul bind:this={listEl} class="max-h-[60vh] overflow-y-auto py-1">
     <li>
       <button
+        data-index={0}
         class={[
           "flex w-full items-center gap-2 px-3 py-2 text-left text-[13px]",
           cursor === 0 ? "bg-accent/20 text-white" : "text-fg/90",
@@ -188,6 +228,7 @@
     {#each filtered as item, i (key(item))}
       <li>
         <button
+          data-index={i + 1}
           class={[
             "flex w-full items-start gap-2.5 px-3 py-2 text-left",
             cursor === i + 1 ? "bg-accent/20" : "",

@@ -3,7 +3,11 @@
   "identifier": "default",
   "description": "Capability for the main application window",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:43117"]
+  },
   "permissions": [
+    "core:default",
     "notification:default",
     {
       "identifier": "shell:allow-execute",

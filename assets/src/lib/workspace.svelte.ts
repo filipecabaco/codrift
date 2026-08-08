@@ -4,6 +4,7 @@
 import {
   ADAPTERS,
   rpc,
+  getDefaultAgent,
   listAgentProfiles,
   type Agent,
   type AgentProfile,
@@ -95,10 +96,7 @@ class Workspace {
   // Launch profiles from settings.json, refreshed by every load() so a profile
   // added on disk shows up on the next refresh instead of only on a reload.
   profiles = $state<AgentProfile[]>([]);
-  // The launch adapter/profile the user picked. Shared across panes on purpose:
-  // it is a property of the person, not of a viewport, so cloning a pane (⌘D)
-  // or switching initiative must not silently drop it back to "claude".
-  launchChoice = $state<string>("claude");
+  defaultAgent = $state<string>("claude");
   // The cursor is identified by ROW KEY, not by index: rows appear and vanish
   // under it (an agent stops, an initiative is deleted, another pane's agent
   // starts) and an index would then point at an unrelated row — highlighting
@@ -383,13 +381,26 @@ class Workspace {
     } catch {
       this.profiles = [];
     }
-    // A profile can be renamed or deleted out from under the launch picker.
-    // Leaving the choice dangling would silently start nothing (unknown
-    // profile) on the next `s`, so fall back to the plain adapter.
-    const known =
-      (ADAPTERS as readonly string[]).includes(this.launchChoice) ||
-      this.profiles.some((p) => p.name === this.launchChoice);
-    if (!known) this.launchChoice = "claude";
+    try {
+      this.defaultAgent = await getDefaultAgent();
+    } catch {
+      this.defaultAgent = "claude";
+    }
+    if (!this.knownAgent(this.defaultAgent)) this.defaultAgent = "claude";
+  }
+
+  knownAgent(choice: string | null | undefined): boolean {
+    if (!choice) return false;
+    return (
+      (ADAPTERS as readonly string[]).includes(choice) ||
+      this.profiles.some((p) => p.name === choice)
+    );
+  }
+
+  /** The agent an initiative launches: its own choice, else the global default. */
+  agentChoiceFor(init: Initiative | null | undefined): string {
+    if (init && this.knownAgent(init.agent)) return init.agent as string;
+    return this.knownAgent(this.defaultAgent) ? this.defaultAgent : "claude";
   }
 
   async #ensureContextFiles(id: string) {

@@ -32,6 +32,8 @@ defmodule Codrift.AgentSupervisor do
   - `:server` — supervisor to start the child under; defaults to `__MODULE__`
   - `:profile` — the launch profile name this agent runs under, or `nil`
   - `:profile_env` — `[{"KEY", "VALUE"}]` env overrides injected at spawn
+  - `:command` — absolute executable to run instead of the adapter's own, or `nil`
+  - `:extra_args` — arguments appended to the adapter's own at spawn
   """
   def start_agent(initiative_id, dir, adapter, opts \\ []) do
     id = Keyword.get(opts, :id, Base.encode16(:crypto.strong_rand_bytes(8), case: :lower))
@@ -45,7 +47,9 @@ defmodule Codrift.AgentSupervisor do
          dir: dir,
          adapter: adapter,
          profile: Keyword.get(opts, :profile),
-         profile_env: Keyword.get(opts, :profile_env, [])
+         profile_env: Keyword.get(opts, :profile_env, []),
+         command: Keyword.get(opts, :command),
+         extra_args: Keyword.get(opts, :extra_args, [])
        ]}
 
     case DynamicSupervisor.start_child(server, spec) do

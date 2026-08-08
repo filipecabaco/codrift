@@ -384,6 +384,67 @@ defmodule Codrift.Web.E2ETest do
     end
   end
 
+  describe "default agent" do
+    setup do
+      settings = Path.join(Codrift.Paths.data_dir(), "settings.json")
+      previous = File.read(settings)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, content} -> File.write!(settings, content)
+          {:error, _} -> File.rm_rf(settings)
+        end
+      end)
+
+      :ok
+    end
+
+    test "the agent chosen at creation sticks to the initiative and seeds the next one" do
+      init = ok!("create_initiative", %{"name" => "e2e-agent-pick", "agent" => "codex"})
+      id = init["id"]
+      on_exit(fn -> rpc("delete_initiative", %{"initiative_id" => id}) end)
+
+      assert init["agent"] == "codex"
+      assert %{"agent" => "codex"} = ok!("get_default_agent")
+
+      {_other_id, other} = create_initiative!("e2e-agent-inherit")
+      assert other["agent"] == nil
+
+      assert %{"agent" => "claude"} =
+               ok!("set_initiative_agent", %{"initiative_id" => id, "agent" => "claude"})
+
+      assert %{"agent" => "claude"} = Enum.find(ok!("list_initiatives"), &(&1["id"] == id))
+    end
+
+    test "start_agent with no adapter resolves the initiative's agent, then the default" do
+      ok!("save_agent_profile", %{"name" => "e2e-vanishing", "adapter" => "claude"})
+      {id, _} = create_initiative!("e2e-agent-resolve")
+      ok!("set_initiative_agent", %{"initiative_id" => id, "agent" => "e2e-vanishing"})
+
+      ok!("save_agent_profile", %{"name" => "e2e-default-gone", "adapter" => "claude"})
+      ok!("set_default_agent", %{"agent" => "e2e-default-gone"})
+      {fallback_id, _} = create_initiative!("e2e-agent-fallback")
+
+      ok!("delete_agent_profile", %{"name" => "e2e-vanishing"})
+      ok!("delete_agent_profile", %{"name" => "e2e-default-gone"})
+
+      assert {422, %{"error" => own}} = rpc("start_agent", %{"initiative_id" => id})
+      assert own =~ "e2e-vanishing"
+
+      assert {422, %{"error" => inherited}} =
+               rpc("start_agent", %{"initiative_id" => fallback_id})
+
+      assert inherited =~ "e2e-default-gone"
+    end
+
+    test "an unknown agent is rejected rather than stored" do
+      assert {422, %{"error" => reason}} =
+               rpc("create_initiative", %{"name" => "e2e-bad-agent", "agent" => "nope"})
+
+      assert reason =~ "unknown agent"
+    end
+  end
+
   # Retries `fun` until it returns true or the deadline passes.
   defp eventually(fun, attempts \\ 60, sleep_ms \\ 50) do
     Enum.reduce_while(1..attempts, false, fn _, _ ->

@@ -66,8 +66,67 @@ defmodule Codrift.Agent.ProfilesTest do
     assert profile == %{
              name: "codex-work",
              adapter: "codex",
+             command: nil,
+             args: [],
              env: %{"CODEX_HOME" => "~/.codex-work"}
            }
+  end
+
+  test "a profile's args survive the round trip, blanks dropped", %{path: path} do
+    assert {:ok, %{"args" => ["--model", "opus"]}} =
+             Core.call("save_agent_profile", %{
+               "name" => "claude-opus",
+               "adapter" => "claude",
+               "args" => ["--model", "  ", "opus"]
+             })
+
+    assert %{"profiles" => %{"claude-opus" => %{"args" => ["--model", "opus"]}}} =
+             path |> File.read!() |> JSON.decode!()
+
+    assert {:ok, %{"profiles" => [%{args: ["--model", "opus"]}]}} =
+             Core.call("get_agent_profiles", %{})
+
+    assert {:ok, _} =
+             Core.call("save_agent_profile", %{
+               "name" => "claude-opus",
+               "adapter" => "claude",
+               "args" => []
+             })
+
+    assert %{"profiles" => %{"claude-opus" => stored}} = path |> File.read!() |> JSON.decode!()
+    refute Map.has_key?(stored, "args")
+  end
+
+  test "save_agent_profile rejects args that are not strings" do
+    assert {:error, reason} =
+             Core.call("save_agent_profile", %{
+               "name" => "bad-args",
+               "adapter" => "claude",
+               "args" => ["--model", 3]
+             })
+
+    assert reason =~ "each argument must be a string"
+  end
+
+  test "a profile's command replaces the adapter's executable, and must exist" do
+    assert {:error, reason} =
+             Core.call("save_agent_profile", %{
+               "name" => "ghost-cmd",
+               "adapter" => "claude",
+               "command" => "definitely-not-on-this-path"
+             })
+
+    assert reason =~ "command not found"
+
+    assert {:ok, _} =
+             Core.call("save_agent_profile", %{
+               "name" => "claude-sh",
+               "adapter" => "claude",
+               "command" => "sh"
+             })
+
+    assert {:ok, %{"profiles" => [%{name: "claude-sh", command: "sh"}]}} =
+             Core.call("get_agent_profiles", %{})
   end
 
   test "save_agent_profile rejects names that would shadow a base adapter" do

@@ -23,7 +23,7 @@ terminal — there, bare keys pass through to the field/PTY and only modifier co
 | `r` | Refresh (reload initiatives & agents) | `refresh` |
 | `Ctrl+P` | Open command palette | `palette` |
 | `Ctrl+B` | Collapse / expand sidebar | `toggle_sidebar` |
-| `Ctrl+Q` | Quit (handled by the native window) | `quit` |
+| `Ctrl+Q` / `⌘Q` | Quit — asks first, listing any agents still running | `quit` |
 
 ## Panes & layout
 

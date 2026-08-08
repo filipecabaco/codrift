@@ -22,7 +22,15 @@
   // Env is edited as ordered rows, not a map: a map would reorder on every
   // keystroke and drop a row the moment two keys collided mid-typing.
   type EnvRow = { key: string; value: string };
-  type Draft = { name: string; adapter: string; env: EnvRow[]; previousName: string | null };
+  type ArgRow = { value: string };
+  type Draft = {
+    name: string;
+    adapter: string;
+    command: string;
+    args: ArgRow[];
+    env: EnvRow[];
+    previousName: string | null;
+  };
 
   let profiles = $state<AgentProfileConfig[]>([]);
   let loading = $state(true);
@@ -43,10 +51,17 @@
         .filter(([key]) => key !== ""),
     );
 
-  const envSummary = (env: Record<string, string>) => {
-    const entries = Object.entries(env);
-    if (!entries.length) return "no environment overrides";
-    return entries.map(([k, v]) => `${k}=${v}`).join(" · ");
+  const toArgRows = (args: string[] | undefined): ArgRow[] =>
+    (args ?? []).map((value) => ({ value }));
+
+  const toArgs = (rows: ArgRow[]): string[] =>
+    rows.map((r) => r.value.trim()).filter((v) => v !== "");
+
+  const envSummary = (p: AgentProfileConfig) => {
+    const parts = Object.entries(p.env).map(([k, v]) => `${k}=${v}`);
+    const invocation = [p.command, ...(p.args ?? [])].filter(Boolean).join(" ");
+    if (invocation) parts.unshift(`$ ${invocation}`);
+    return parts.length ? parts.join(" · ") : "runs the base adapter, no overrides";
   };
 
   async function refresh() {
@@ -65,6 +80,8 @@
     draft = {
       name: "",
       adapter: "claude",
+      command: "",
+      args: [],
       env: [{ key: PROFILE_CONFIG_VAR.claude, value: "" }],
       previousName: null,
     };
@@ -76,6 +93,8 @@
     draft = {
       name: p.name,
       adapter: p.adapter ?? "claude",
+      command: p.command ?? "",
+      args: toArgRows(p.args),
       env: toRows(p.env),
       previousName: p.name,
     };
@@ -107,6 +126,8 @@
       await saveAgentProfile({
         name: draft.name.trim(),
         adapter: draft.adapter,
+        command: draft.command.trim(),
+        args: toArgs(draft.args),
         env: toEnv(draft.env),
         ...(draft.previousName ? { previous_name: draft.previousName } : {}),
       });
@@ -150,7 +171,9 @@
     <div>
       <h2 class="text-[13px] font-semibold text-fg">Launch profiles</h2>
       <p class="text-[11px] text-muted">
-        Run the same tool under different accounts — each profile sets its own config folder.
+        A named agent you can launch: its own command and config folder, so
+        <code class="rounded bg-canvas px-1">claude-work</code> and
+        <code class="rounded bg-canvas px-1">claude-personal</code> stay separate accounts.
       </p>
     </div>
     <button
@@ -179,8 +202,8 @@
                   {p.adapter ?? "claude"}
                 </span>
               </div>
-              <p class="truncate text-[11px] text-muted" title={envSummary(p.env)}>
-                {envSummary(p.env)}
+              <p class="truncate text-[11px] text-muted" title={envSummary(p)}>
+                {envSummary(p)}
               </p>
             </div>
             <button
@@ -250,8 +273,68 @@
             {#each ADAPTERS as a (a)}
               <option value={a}>{a}</option>
             {/each}
+            {#if !(ADAPTERS as readonly string[]).includes(draft.adapter)}
+              <option value={draft.adapter}>{draft.adapter}</option>
+            {/if}
           </select>
         </label>
+      </div>
+
+      <div class="mt-3">
+        <label class="block">
+          <span class="mb-1 block text-[11px] text-muted">
+            Command — leave empty to run the base adapter's own executable
+          </span>
+          <input
+            bind:value={draft.command}
+            placeholder={draft.adapter}
+            autocomplete="off"
+            spellcheck="false"
+            class="w-full rounded-md border border-border bg-canvas px-2 py-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
+          />
+        </label>
+        <p class="mt-1 text-[11px] text-muted">
+          A bare name is looked up in <code class="rounded bg-canvas px-1">PATH</code> (a wrapper
+          script like <code class="rounded bg-canvas px-1">claude-work</code>); anything with a
+          <code class="rounded bg-canvas px-1">/</code> is a path.
+        </p>
+      </div>
+
+      <div class="mt-3">
+        <span class="mb-1 block text-[11px] text-muted">
+          Arguments — appended to the ones {draft.adapter} passes itself, one per row
+        </span>
+        {#each draft.args as row, i (i)}
+          <div class="mb-1 flex items-center gap-2">
+            <span class="w-6 shrink-0 text-right font-mono text-[11px] text-muted">{i + 1}</span>
+            <input
+              bind:value={row.value}
+              placeholder={i === 0 ? "--model" : "opus"}
+              autocomplete="off"
+              spellcheck="false"
+              aria-label="Argument {i + 1}"
+              class="min-w-0 flex-1 rounded-md border border-border bg-canvas px-2 py-1 font-mono text-[11px] text-fg outline-none focus:border-accent"
+            />
+            <button
+              class="shrink-0 rounded-md p-1 text-muted hover:text-red-400"
+              aria-label="Remove argument {i + 1}"
+              onclick={() => (draft!.args = draft!.args.filter((_, j) => j !== i))}
+            >
+              <Icon src={Trash} class="size-3.5" />
+            </button>
+          </div>
+        {/each}
+        <button
+          class="mt-1 flex items-center gap-1 text-[11px] text-accent hover:underline"
+          onclick={() => (draft!.args = [...draft!.args, { value: "" }])}
+        >
+          <Icon src={Plus} class="size-3" /> Add argument
+        </button>
+        <p class="mt-1 text-[11px] text-muted">
+          One row per argument — <code class="rounded bg-canvas px-1">--model</code> and
+          <code class="rounded bg-canvas px-1">opus</code> are two rows, so a value with spaces
+          needs no quoting.
+        </p>
       </div>
 
       <div class="mt-3">

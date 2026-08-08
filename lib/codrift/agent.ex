@@ -112,4 +112,35 @@ defmodule Codrift.Agent do
   def module_from_name(name) do
     Enum.find(@all_adapters, fn mod -> adapter_name(mod) == name end)
   end
+
+  @doc """
+  Resolves a launch profile's command override to an absolute executable path.
+
+  A bare name is looked up in `PATH`, so a wrapper script called `claude-work`
+  works the same way it does in a shell; anything containing a slash (or `~`)
+  is treated as a path. Resolving here rather than at spawn time means a typo
+  surfaces as an error message instead of a terminal that dies on open.
+  """
+  def resolve_command(command) when is_binary(command) do
+    trimmed = String.trim(command)
+
+    cond do
+      trimmed == "" ->
+        {:error, "command can't be empty"}
+
+      String.contains?(trimmed, "/") or String.starts_with?(trimmed, "~") ->
+        path = Path.expand(trimmed)
+
+        case File.stat(path) do
+          {:ok, %File.Stat{type: :regular}} -> {:ok, path}
+          _ -> {:error, "command not found: #{trimmed}"}
+        end
+
+      true ->
+        case System.find_executable(trimmed) do
+          nil -> {:error, "command not found in PATH: #{trimmed}"}
+          path -> {:ok, path}
+        end
+    end
+  end
 end

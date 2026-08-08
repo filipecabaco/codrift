@@ -58,8 +58,10 @@ defmodule Codrift.AgentProcess do
     :raw_line_buf,
     :session_uuid,
     :profile,
+    :command,
     :log_fd,
     profile_env: [],
+    extra_args: [],
     last_size: nil
   ]
 
@@ -104,6 +106,8 @@ defmodule Codrift.AgentProcess do
     adapter = Keyword.fetch!(opts, :adapter)
     profile = Keyword.get(opts, :profile)
     profile_env = Keyword.get(opts, :profile_env, [])
+    command = Keyword.get(opts, :command)
+    extra_args = Keyword.get(opts, :extra_args, [])
     mode = adapter.mode()
 
     if Process.whereis(Codrift.AgentRegistry) do
@@ -126,6 +130,8 @@ defmodule Codrift.AgentProcess do
       raw_line_buf: "",
       profile: profile,
       profile_env: profile_env,
+      command: command,
+      extra_args: extra_args,
       log_fd: open_log(initiative_id, id)
     }
 
@@ -138,27 +144,21 @@ defmodule Codrift.AgentProcess do
       if adapter.session_persistable?(),
         do: ensure_session_id(id, initiative_id, dir, adapter)
 
-    # A profile may relocate an adapter's config dir (e.g. CLAUDE_CONFIG_DIR);
-    # pass it so session-file detection resolves under the right root.
-    config_dir =
-      case List.keyfind(profile_env, "CLAUDE_CONFIG_DIR", 0) do
-        {_, dir} -> dir
-        nil -> nil
-      end
-
     context_opts =
-      [session_id: session_id, config_dir: config_dir] ++ initiative_context_opts(initiative_id)
+      [session_id: session_id, config_dir: profile_config_dir(profile_env)] ++
+        initiative_context_opts(initiative_id)
 
     case mode do
       :pty ->
         # Profile env comes last so it overrides adapter defaults (dedup keeps
         # the last occurrence per key).
         env = dedup_env([{"TERM", "xterm-256color"} | adapter.env(dir)] ++ profile_env)
-        args = adapter.args(dir, context_opts)
+        args = adapter.args(dir, context_opts) ++ extra_args
 
         # erlexec requires args to be passed as [executable | args] list rather
         # than the {:args, [...]} option (which is invalid in PTY mode).
-        cmd = if args == [], do: adapter.cmd(), else: [adapter.cmd() | args]
+        executable = command || adapter.cmd()
+        cmd = if args == [], do: executable, else: [executable | args]
 
         # stderr must be captured as well as stdout. On Linux an interactive
         # shell writes its prompt — and every "command not found" — to stderr,
@@ -187,7 +187,8 @@ defmodule Codrift.AgentProcess do
          }}
 
       :interactive ->
-        port = open_port(adapter, dir, adapter.args(dir, context_opts), profile_env)
+        args = adapter.args(dir, context_opts) ++ extra_args
+        port = open_port(adapter, dir, args, profile_env, command)
         {:ok, %{base | port: port, status: :starting}}
 
       :once ->
@@ -238,8 +239,11 @@ defmodule Codrift.AgentProcess do
   end
 
   def handle_cast({:input, text}, %{mode: :once} = state) do
-    args = once_args(state.adapter, state.dir, state.conversation_started) ++ [text]
-    port = open_port(state.adapter, state.dir, args, state.profile_env)
+    args =
+      once_args(state.adapter, state.dir, state.conversation_started) ++
+        state.extra_args ++ [text]
+
+    port = open_port(state.adapter, state.dir, args, state.profile_env, state.command)
     {:noreply, %{state | port: port, status: :running}}
   end
 
@@ -519,7 +523,14 @@ defmodule Codrift.AgentProcess do
     base ++ if(files == [], do: [], else: [context_files: files])
   end
 
-  defp open_port(adapter, dir, args, extra_env) do
+  defp profile_config_dir(profile_env) do
+    case List.keyfind(profile_env, "CLAUDE_CONFIG_DIR", 0) do
+      {_, dir} -> dir
+      nil -> nil
+    end
+  end
+
+  defp open_port(adapter, dir, args, extra_env, command) do
     env =
       (adapter.env(dir) ++ extra_env)
       |> dedup_env()
@@ -535,6 +546,6 @@ defmodule Codrift.AgentProcess do
       {:args, args}
     ]
 
-    Port.open({:spawn_executable, adapter.cmd()}, port_opts)
+    Port.open({:spawn_executable, command || adapter.cmd()}, port_opts)
   end
 end

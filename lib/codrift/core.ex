@@ -89,14 +89,17 @@ defmodule Codrift.Core do
     end
   end
 
-  def call("start_agent", %{"initiative_id" => init_id, "adapter" => adapter} = params) do
-    with {:ok, module, profile_env, profile_name} <-
-           resolve_launch(adapter, Map.get(params, "profile")),
+  def call("start_agent", %{"initiative_id" => init_id} = params) do
+    {adapter, profile} = launch_choice(init_id, params)
+
+    with {:ok, launch} <- resolve_launch(adapter, profile),
          {:ok, dir} <- resolve_agent_dir(init_id, Map.get(params, "dir")),
          {:ok, pid} <-
-           Codrift.AgentSupervisor.start_agent(init_id, dir, module,
-             profile: profile_name,
-             profile_env: profile_env
+           Codrift.AgentSupervisor.start_agent(init_id, dir, launch.module,
+             profile: launch.profile,
+             profile_env: launch.env,
+             command: launch.command,
+             extra_args: launch.args
            ) do
       status =
         pid
@@ -129,6 +132,8 @@ defmodule Codrift.Core do
         %{
           name: name,
           adapter: Map.get(p, "adapter"),
+          command: Map.get(p, "command"),
+          args: p |> Map.get("args", []) |> Enum.map(&to_string/1),
           env: p |> Map.get("env", %{}) |> stringify_env()
         }
       end)
@@ -143,14 +148,24 @@ defmodule Codrift.Core do
   def call("save_agent_profile", %{"name" => name, "adapter" => adapter} = args) do
     with {:ok, name} <- validate_profile_name(name),
          {:ok, adapter} <- validate_profile_adapter(adapter),
+         {:ok, command} <- validate_profile_command(Map.get(args, "command")),
+         {:ok, extra_args} <- validate_profile_args(Map.get(args, "args", [])),
          {:ok, env} <- validate_profile_env(Map.get(args, "env", %{})) do
       case Map.get(args, "previous_name") do
         prev when is_binary(prev) and prev != "" and prev != name -> Settings.delete_profile(prev)
         _ -> :ok
       end
 
-      Settings.put_profile(name, adapter, env)
-      {:ok, %{"name" => name, "adapter" => adapter, "env" => env}}
+      Settings.put_profile(name, %{adapter: adapter, command: command, args: extra_args, env: env})
+
+      {:ok,
+       %{
+         "name" => name,
+         "adapter" => adapter,
+         "command" => command,
+         "args" => extra_args,
+         "env" => env
+       }}
     end
   end
 
@@ -195,9 +210,38 @@ defmodule Codrift.Core do
   def call("create_initiative", %{"name" => name} = args) do
     dirs = Map.get(args, "dirs", [])
 
-    case Store.create(name, dirs) do
-      {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
+    with {:ok, agent} <- validate_agent_choice(Map.get(args, "agent")),
+         {:ok, initiative} <- Store.create(name, dirs) do
+      if agent do
+        Settings.put_default_agent(agent)
+        {:ok, updated} = Store.set_agent(initiative.id, agent)
+        {:ok, Codrift.Initiative.to_map(updated)}
+      else
+        {:ok, Codrift.Initiative.to_map(initiative)}
+      end
+    else
+      {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  def call("set_initiative_agent", %{"initiative_id" => id} = args) do
+    with {:ok, agent} <- validate_agent_choice(Map.get(args, "agent")) do
+      case Store.set_agent(id, agent) do
+        {:ok, initiative} -> {:ok, initiative_map(initiative)}
+        {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+      end
+    end
+  end
+
+  def call("get_default_agent", _args) do
+    {:ok, %{"agent" => Settings.default_agent() || "claude"}}
+  end
+
+  def call("set_default_agent", %{"agent" => agent}) do
+    with {:ok, choice} <- validate_agent_choice(agent) do
+      Settings.put_default_agent(choice || "claude")
+      {:ok, %{"agent" => choice || "claude"}}
     end
   end
 
@@ -740,21 +784,57 @@ defmodule Codrift.Core do
     Codrift.Agent.module_from_name(name) || raise("unknown adapter: #{name}")
   end
 
-  # Resolves a launch into `{adapter_module, env_overrides, profile_name}`.
-  # Without a profile, the bare adapter runs with no extra env. With one, the
-  # profile's base adapter (falling back to the requested one) and its env
-  # overrides apply — `~`-prefixed values are expanded to absolute paths.
   defp resolve_launch(adapter, profile) when profile in [nil, ""],
-    do: {:ok, adapter_module(adapter), [], nil}
+    do: {:ok, %{module: adapter_module(adapter), env: [], profile: nil, command: nil, args: []}}
 
   defp resolve_launch(adapter, profile_name) do
-    case Settings.profile(profile_name) do
-      {:ok, profile} ->
-        base = Map.get(profile, "adapter", adapter)
-        {:ok, adapter_module(base), expand_env(Map.get(profile, "env", %{})), profile_name}
+    with {:ok, profile} <- fetch_profile(profile_name),
+         {:ok, command} <- resolve_profile_command(profile) do
+      base = Map.get(profile, "adapter", adapter)
 
-      {:error, :not_found} ->
-        {:error, "unknown launch profile: #{profile_name}"}
+      {:ok,
+       %{
+         module: adapter_module(base),
+         env: expand_env(Map.get(profile, "env", %{})),
+         profile: profile_name,
+         command: command,
+         args: profile |> Map.get("args", []) |> Enum.map(&to_string/1)
+       }}
+    end
+  end
+
+  defp launch_choice(init_id, params) do
+    case {Map.get(params, "adapter"), Map.get(params, "profile")} do
+      {nil, nil} -> split_choice(default_choice(init_id))
+      {adapter, profile} -> {adapter || "claude", profile}
+    end
+  end
+
+  defp default_choice(init_id) do
+    initiative_agent =
+      case Store.get(init_id) do
+        {:ok, initiative} -> initiative.agent
+        {:error, :not_found} -> nil
+      end
+
+    initiative_agent || Settings.default_agent() || "claude"
+  end
+
+  defp split_choice(choice) do
+    if known_adapter?(choice), do: {choice, nil}, else: {"claude", choice}
+  end
+
+  defp fetch_profile(name) do
+    case Settings.profile(name) do
+      {:ok, profile} -> {:ok, profile}
+      {:error, :not_found} -> {:error, "unknown launch profile: #{name}"}
+    end
+  end
+
+  defp resolve_profile_command(profile) do
+    case Map.get(profile, "command") do
+      cmd when is_binary(cmd) and cmd != "" -> Codrift.Agent.resolve_command(cmd)
+      _ -> {:ok, nil}
     end
   end
 
@@ -790,7 +870,36 @@ defmodule Codrift.Core do
 
   defp validate_profile_adapter(_), do: {:error, "adapter must be a string"}
 
+  defp validate_profile_command(command) when command in [nil, ""], do: {:ok, nil}
+
+  defp validate_profile_command(command) when is_binary(command) do
+    with {:ok, _resolved} <- Codrift.Agent.resolve_command(command),
+         do: {:ok, String.trim(command)}
+  end
+
+  defp validate_profile_command(_), do: {:error, "command must be a string"}
+
+  defp validate_profile_args(args) when is_list(args) do
+    if Enum.all?(args, &is_binary/1),
+      do: {:ok, args |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))},
+      else: {:error, "each argument must be a string"}
+  end
+
+  defp validate_profile_args(_), do: {:error, "args must be a list of strings"}
+
   defp known_adapter?(name), do: not is_nil(Codrift.Agent.module_from_name(name))
+
+  defp validate_agent_choice(choice) when choice in [nil, ""], do: {:ok, nil}
+
+  defp validate_agent_choice(choice) when is_binary(choice) do
+    cond do
+      known_adapter?(choice) -> {:ok, choice}
+      Map.has_key?(Settings.profiles(), choice) -> {:ok, choice}
+      true -> {:error, "unknown agent: #{choice}"}
+    end
+  end
+
+  defp validate_agent_choice(_), do: {:error, "agent must be a string"}
 
   # Env is injected into a spawned process, so keys have to be real variable
   # names and values plain strings — a map or list here would blow up at spawn
