@@ -22,6 +22,12 @@ name: Release
 # Why this isn't a tag-listening workflow: a tag pushed with the built-in
 # GITHUB_TOKEN does not trigger workflows, so "push a tag and let CI notice"
 # would silently never build. The release action creates the tag itself, last.
+#
+# Every job pins `github.sha`, and the release is tagged at that same SHA. Main
+# moves while the bundles build — the previous run's cask bump alone moves it —
+# and a tag placed on whatever HEAD happened to be would both describe code that
+# was never built and make the next run's `$LAST..HEAD` range skip the commits
+# it jumped over.
 
 on:
   push:
@@ -56,29 +62,64 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
       # fetch-depth: 0 brings the full history *and* the tags the bump reads.
+      # The SHA is pinned so `$LAST..HEAD` is measured against the same commit
+      # that gets bundled and tagged.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - id: resolve
         shell: bash
         env:
           REQUESTED: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          LAST="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+          LAST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+
+          # Published releases, not tags, are the source of truth for "what is
+          # already out there": Codrift.Updater polls /releases/latest and the
+          # cask URLs resolve against release assets. A tag can be absent from
+          # the checkout while its release is live — deleted, or never pushed —
+          # and deriving the base from tags alone then re-cuts a version that is
+          # already published. Every installed build at that version then sees
+          # `latest == current` and stays up to date forever, which is how a
+          # release can be built from fresh code and still reach nobody.
+          #
+          # Errors are NOT swallowed. If the API call fails, falling back to a
+          # tags-only baseline is precisely the bug above, so the job must die
+          # rather than quietly derive a version that is already published.
+          PUBLISHED="${RUNNER_TEMP:-/tmp}/published-tags"
+          gh release list --repo "${{ github.repository }}" --limit 100 \
+            --json tagName --jq '.[].tagName' > "$PUBLISHED"
+
+          LAST_RELEASE="$(
+            { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' "$PUBLISHED" || true; } \
+              | sort -V | tail -n1
+          )"
+
+          LAST="$(
+            printf '%s\n%s\n' "$LAST_TAG" "$LAST_RELEASE" \
+              | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+              | sort -V | tail -n1
+          )"
           BASE="${LAST#v}"
           BASE="${BASE:-0.0.0}"
-          echo "Last tag: ${LAST:-<none>} (base ${BASE})"
+          echo "Last tag: ${LAST_TAG:-<none>}  last release: ${LAST_RELEASE:-<none>}  base: ${BASE}"
 
           if [ -n "$REQUESTED" ]; then
             NEXT="$REQUESTED"
             echo "Manual dispatch: releasing ${NEXT}"
           else
             # One record per commit: subject line, then body (for BREAKING CHANGE
-            # footers). Highest-priority prefix in the range wins.
-            LOG="$(git log ${LAST:+$LAST..HEAD} --pretty=format:'%s%n%b')"
+            # footers). Highest-priority prefix in the range wins. The range is
+            # measured from LAST_TAG, not LAST: only a tag present in this
+            # checkout is a usable revision. When a release is ahead of the tags
+            # the range over-reports, which is harmless — it can only pick a
+            # bump type, and BASE above already accounts for the release.
+            LOG="$(git log ${LAST_TAG:+$LAST_TAG..HEAD} --pretty=format:'%s%n%b')"
 
             if grep -qiE '^[[:space:]]*([a-z]+(\([^)]*\))?!:|major(\([^)]*\))?:)|BREAKING[ -]CHANGE' <<<"$LOG"; then
               BUMP="major"
@@ -87,7 +128,7 @@ jobs:
             elif grep -qiE '^[[:space:]]*fix(\([^)]*\))?:' <<<"$LOG"; then
               BUMP="patch"
             else
-              echo "No fix/feat/breaking commits since ${LAST:-the start}; nothing to release."
+              echo "No fix/feat/breaking commits since ${LAST_TAG:-the start}; nothing to release."
               echo "release=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -101,8 +142,18 @@ jobs:
             echo "${BUMP} bump: ${BASE} -> ${NEXT}"
           fi
 
+          # Both halves matter. A stale tag blocks the number even with no
+          # release behind it; a live release must block it too, because
+          # softprops/action-gh-release *updates* an existing release rather
+          # than failing — it would hang new assets off the old tag, leaving the
+          # tag pointing at one commit and the binaries built from another.
           if git rev-parse -q --verify "refs/tags/v${NEXT}" >/dev/null; then
             echo "::error::tag v${NEXT} already exists"
+            exit 1
+          fi
+
+          if gh release view "v${NEXT}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::release v${NEXT} is already published"
             exit 1
           fi
 
@@ -139,7 +190,11 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
 
     steps:
+      # Pin the exact commit rather than letting the ref float: `release` tags
+      # this same SHA, so the tag and the bundles always describe one commit.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       # ── Version stamp ────────────────────────────────────────────────────────
       # Before anything reads these files:
@@ -270,11 +325,13 @@ jobs:
   # ── 3. Publish ───────────────────────────────────────────────────────────────
   # Reached only when every bundle leg succeeded, so the tag and the release are
   # created once, complete. No tag exists yet (this runs on a branch push), so
-  # the action creates `v<version>` at the current SHA and the Release together.
+  # the action creates `v<version>` and the Release together.
   release:
     name: Publish release
     needs: [version, bundle]
     runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Download every bundle
         uses: actions/download-artifact@v4
@@ -286,10 +343,51 @@ jobs:
       - name: List assets
         run: ls -l dist
 
+      # The bundle job stamps the version into mix.exs and tauri.conf.json, and
+      # every asset is named from it. If a stamp silently failed — or a cached
+      # build served an artifact from an earlier version — the names say so, and
+      # publishing it would tag v<new> over binaries that report v<old>. Fail
+      # here instead of shipping the mismatch.
+      - name: Assert every asset carries the version being tagged
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad=0
+          for f in dist/*; do
+            case "$(basename "$f")" in
+              *"${VERSION}"*) ;;
+              *) echo "::error::$(basename "$f") does not carry version ${VERSION}"; bad=1 ;;
+            esac
+          done
+          [ "$bad" -eq 0 ]
+
+      # The version job checked this an hour ago, before the bundles built. Re-
+      # check immediately before publishing: if v<version> appeared meanwhile,
+      # the action below would quietly update that release instead of creating
+      # one, and its tag would keep pointing at the older commit.
+      - name: Assert the release does not already exist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "v${VERSION}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::release v${VERSION} already exists; refusing to overwrite it"
+            exit 1
+          fi
+          echo "v${VERSION} is unpublished; safe to create."
+
+      # target_commitish is explicit: the action otherwise tags the default
+      # branch's *current* HEAD, and main can move while the bundles build (the
+      # previous run's cask bump alone does it). The tag would then name a
+      # commit that was never built, and the next run's `git log $LAST..HEAD`
+      # range would skip every commit the tag jumped over — so their feat:/fix:
+      # prefixes never trigger a release.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
           name: v${{ needs.version.outputs.version }}
           files: dist/*
           generate_release_notes: true

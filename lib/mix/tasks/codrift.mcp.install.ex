@@ -20,20 +20,5 @@ defmodule Mix.Tasks.Codrift.Mcp.Install do
   @shortdoc "Register Codrift MCP server with Claude Code (or print install command)"
 
   @impl Mix.Task
-  def run(args) do
-    # In the Mix context the application config is available, so honour any
-    # custom port set via `config :codrift, bandit_opts: [port: N]` — unless
-    # the caller already supplied an explicit --port=N flag.
-    has_port_flag = Enum.any?(args, &String.starts_with?(&1, "--port="))
-
-    port_flag =
-      if has_port_flag do
-        []
-      else
-        port = Application.get_env(:codrift, :bandit_opts, []) |> Keyword.get(:port, 43_117)
-        ["--port=#{port}"]
-      end
-
-    MCP.run(["install"] ++ port_flag ++ args)
-  end
+  def run(args), do: MCP.run(["install" | args])
 end
