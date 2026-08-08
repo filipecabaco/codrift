@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Codrift brand tokens (shared with codrift.sh): neutrals tinted toward hue 265,
+/* Codrift brand tokens (shared with codrift.app): neutrals tinted toward hue 265,
    one amber accent. Surfaced as Tailwind utilities (bg-surface, text-muted…). */
 @theme {
   --color-canvas: oklch(11% 0.01 265);

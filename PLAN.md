@@ -20,6 +20,6 @@ directories. See the docs above for the current shape of each subsystem.
   [PERSONAS.md](PERSONAS.md)) to validate all three flows through the UI. The
   sandbox must bind `43117`, since the redirect URI is registered with each
   provider and cannot change at runtime.
-- Deploy the `codrift.sh` landing page (built in `website/`, Francis + Tailwind, with per-platform download links and product screenshots).
+- Deploy the `codrift.app` landing page (built in `website/`, Francis + Tailwind, with per-platform download links and product screenshots).
 - In-app manager for [agent launch profiles](docs/agent-profiles.md) (add/edit/delete) — currently file-defined in `settings.json`, selectable from the Launch dropdown.
 </content>

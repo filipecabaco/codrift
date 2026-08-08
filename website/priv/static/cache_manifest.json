@@ -1,56 +1,166 @@
 {
   "files": {
-    "images/agent-terminal.png": {
-      "size": 119308,
-      "mtime": "2026-07-02T11:15:45",
-      "digest": "de8c0a6de24c",
-      "digested_path": "images/agent-terminal-de8c0a6de24c.png",
+    "favicon.svg": {
+      "size": 348,
+      "mtime": "2026-08-08T00:57:53",
+      "digest": "e541a95f2b12",
+      "digested_path": "favicon-e541a95f2b12.svg",
       "gzipped": {
-        "size": 101986,
-        "path": "images/agent-terminal-de8c0a6de24c.png.gz"
+        "size": 235,
+        "path": "favicon-e541a95f2b12.svg.gz"
       }
     },
-    "images/context-overview.png": {
-      "size": 176459,
-      "mtime": "2026-07-02T11:15:45",
-      "digest": "a11fa34544d5",
-      "digested_path": "images/context-overview-a11fa34544d5.png",
+    "images/agent-question.webp": {
+      "size": 66818,
+      "mtime": "2026-08-08T09:30:41",
+      "digest": "200462158005",
+      "digested_path": "images/agent-question-200462158005.webp",
       "gzipped": {
-        "size": 161876,
-        "path": "images/context-overview-a11fa34544d5.png.gz"
+        "size": 64498,
+        "path": "images/agent-question-200462158005.webp.gz"
       }
     },
-    "images/diff-view.png": {
-      "size": 130689,
-      "mtime": "2026-07-02T11:15:45",
-      "digest": "8c1d89141374",
-      "digested_path": "images/diff-view-8c1d89141374.png",
+    "images/agent-terminal.webp": {
+      "size": 220526,
+      "mtime": "2026-08-08T01:29:03",
+      "digest": "033fa7ad82b6",
+      "digested_path": "images/agent-terminal-033fa7ad82b6.webp",
       "gzipped": {
-        "size": 115525,
-        "path": "images/diff-view-8c1d89141374.png.gz"
+        "size": 218909,
+        "path": "images/agent-terminal-033fa7ad82b6.webp.gz"
       }
     },
-    "images/tree-view.png": {
-      "size": 153932,
-      "mtime": "2026-07-02T11:15:45",
-      "digest": "59ad287f8bcf",
-      "digested_path": "images/tree-view-59ad287f8bcf.png",
+    "images/command-palette.webp": {
+      "size": 67154,
+      "mtime": "2026-08-08T01:29:03",
+      "digest": "da71dd53024f",
+      "digested_path": "images/command-palette-da71dd53024f.webp",
       "gzipped": {
-        "size": 140212,
-        "path": "images/tree-view-59ad287f8bcf.png.gz"
+        "size": 64939,
+        "path": "images/command-palette-da71dd53024f.webp.gz"
+      }
+    },
+    "images/context.webp": {
+      "size": 82004,
+      "mtime": "2026-08-08T01:29:03",
+      "digest": "0fe25e6318e2",
+      "digested_path": "images/context-0fe25e6318e2.webp",
+      "gzipped": {
+        "size": 79370,
+        "path": "images/context-0fe25e6318e2.webp.gz"
+      }
+    },
+    "images/diff-view.webp": {
+      "size": 75480,
+      "mtime": "2026-08-08T01:29:03",
+      "digest": "ce090d9cc256",
+      "digested_path": "images/diff-view-ce090d9cc256.webp",
+      "gzipped": {
+        "size": 72074,
+        "path": "images/diff-view-ce090d9cc256.webp.gz"
+      }
+    },
+    "images/fonts.webp": {
+      "size": 54658,
+      "mtime": "2026-08-08T01:29:03",
+      "digest": "8d0cfb553100",
+      "digested_path": "images/fonts-8d0cfb553100.webp",
+      "gzipped": {
+        "size": 52808,
+        "path": "images/fonts-8d0cfb553100.webp.gz"
+      }
+    },
+    "images/integrations.webp": {
+      "size": 169124,
+      "mtime": "2026-08-08T01:29:03",
+      "digest": "5ac0aac8556c",
+      "digested_path": "images/integrations-5ac0aac8556c.webp",
+      "gzipped": {
+        "size": 168000,
+        "path": "images/integrations-5ac0aac8556c.webp.gz"
+      }
+    },
+    "images/memory-view.webp": {
+      "size": 95026,
+      "mtime": "2026-08-08T10:09:49",
+      "digest": "f3bc419c2bc8",
+      "digested_path": "images/memory-view-f3bc419c2bc8.webp",
+      "gzipped": {
+        "size": 92848,
+        "path": "images/memory-view-f3bc419c2bc8.webp.gz"
+      }
+    },
+    "images/split-agents.webp": {
+      "size": 240316,
+      "mtime": "2026-08-08T01:29:03",
+      "digest": "9e49010c8d20",
+      "digested_path": "images/split-agents-9e49010c8d20.webp",
+      "gzipped": {
+        "size": 239147,
+        "path": "images/split-agents-9e49010c8d20.webp.gz"
+      }
+    },
+    "images/theme-latte.webp": {
+      "size": 74954,
+      "mtime": "2026-08-08T01:29:03",
+      "digest": "e1a942dd6e04",
+      "digested_path": "images/theme-latte-e1a942dd6e04.webp",
+      "gzipped": {
+        "size": 72680,
+        "path": "images/theme-latte-e1a942dd6e04.webp.gz"
+      }
+    },
+    "images/themes.webp": {
+      "size": 52974,
+      "mtime": "2026-08-08T01:29:04",
+      "digest": "c808b3b4328a",
+      "digested_path": "images/themes-c808b3b4328a.webp",
+      "gzipped": {
+        "size": 50988,
+        "path": "images/themes-c808b3b4328a.webp.gz"
+      }
+    },
+    "images/tree-filter.webp": {
+      "size": 77838,
+      "mtime": "2026-08-08T01:29:04",
+      "digest": "c1620ce93bdc",
+      "digested_path": "images/tree-filter-c1620ce93bdc.webp",
+      "gzipped": {
+        "size": 75500,
+        "path": "images/tree-filter-c1620ce93bdc.webp.gz"
+      }
+    },
+    "images/tree-view.webp": {
+      "size": 72558,
+      "mtime": "2026-08-08T01:29:04",
+      "digest": "f7f8fb67c391",
+      "digested_path": "images/tree-view-f7f8fb67c391.webp",
+      "gzipped": {
+        "size": 70545,
+        "path": "images/tree-view-f7f8fb67c391.webp.gz"
+      }
+    },
+    "og.png": {
+      "size": 95592,
+      "mtime": "2026-08-08T11:58:14",
+      "digest": "e0a8c78b69c2",
+      "digested_path": "og-e0a8c78b69c2.png",
+      "gzipped": {
+        "size": 95043,
+        "path": "og-e0a8c78b69c2.png.gz"
       }
     },
     "tw.css": {
-      "size": 24504,
-      "mtime": "2026-07-02T11:29:22",
-      "digest": "11316e444d55",
-      "digested_path": "tw-11316e444d55.css",
+      "size": 28515,
+      "mtime": "2026-08-08T11:58:57",
+      "digest": "93e77ad0181e",
+      "digested_path": "tw-93e77ad0181e.css",
       "gzipped": {
-        "size": 4703,
-        "path": "tw-11316e444d55.css.gz"
+        "size": 5684,
+        "path": "tw-93e77ad0181e.css.gz"
       }
     }
   },
-  "generated_at": "2026-07-02T11:29:22.391286Z",
+  "generated_at": "2026-08-08T11:58:57.209907Z",
   "version": 1
 }

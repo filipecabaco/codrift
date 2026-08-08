@@ -39,14 +39,20 @@ cask "codrift" do
                    sudo: false
   end
 
-  uninstall quit: "sh.codrift.app"
+  uninstall quit: "app.codrift.desktop"
 
+  # sh.codrift.app was the identifier up to 0.0.1; keep zapping its leftovers.
   zap trash: [
     "~/.codrift",
+    "~/Library/Application Support/app.codrift.desktop",
     "~/Library/Application Support/sh.codrift.app",
+    "~/Library/Caches/app.codrift.desktop",
     "~/Library/Caches/sh.codrift.app",
+    "~/Library/Preferences/app.codrift.desktop.plist",
     "~/Library/Preferences/sh.codrift.app.plist",
+    "~/Library/Saved Application State/app.codrift.desktop.savedState",
     "~/Library/Saved Application State/sh.codrift.app.savedState",
+    "~/Library/WebKit/app.codrift.desktop",
     "~/Library/WebKit/sh.codrift.app",
   ]
 end

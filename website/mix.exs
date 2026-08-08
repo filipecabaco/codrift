@@ -18,7 +18,10 @@ defmodule Website.MixProject do
 
   defp aliases do
     [
-      "assets.build": ["tailwind default", "francis.digest priv/static --clean"]
+      "assets.build": [
+        "tailwind default",
+        "francis.digest priv/static --clean --exclude *.sh"
+      ]
     ]
   end
 

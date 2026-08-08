@@ -2,36 +2,244 @@
 @source "../../priv/templates/index.html.eex";
 
 @theme {
-  --color-bg: oklch(11% 0.01 265);
-  --color-raised: oklch(15% 0.012 265);
-  --color-border: oklch(22% 0.012 265);
-  --color-ink: oklch(93% 0.008 265);
-  --color-muted: oklch(52% 0.01 265);
-  --color-faint: oklch(35% 0.008 265);
-  --color-amber: oklch(72% 0.18 65);
-  --color-amber-dim: oklch(62% 0.15 65);
-  --color-terminal: oklch(9% 0.008 265);
-  --font-sans: "Onest", system-ui, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "Fira Code", "Menlo", monospace;
+  --color-ink: oklch(10.5% 0.012 265);
+  --color-panel: oklch(14% 0.014 265);
+  --color-raised: oklch(18% 0.014 265);
+  --color-rule: oklch(24% 0.014 265);
+  --color-fg: oklch(94% 0.008 265);
+  --color-muted: oklch(66% 0.012 265);
+  --color-faint: oklch(57% 0.011 265);
+
+  --color-amber: oklch(75% 0.17 62);
+  --color-amber-hot: oklch(83% 0.16 68);
+  --color-amber-ink: oklch(17% 0.045 58);
+
+  --color-ok: oklch(74% 0.17 150);
+  --color-wait: oklch(72% 0.15 232);
+  --color-done: oklch(70% 0.16 295);
+  --color-stop: oklch(68% 0.18 22);
+
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
   body {
-    @apply bg-bg text-ink font-sans antialiased;
+    @apply bg-ink text-fg antialiased;
+    font-family: var(--font-sans);
+    font-size: 1.0625rem;
+    line-height: 1.6;
+  }
+
+  ::selection {
+    background: var(--color-amber);
+    color: var(--color-amber-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-amber);
+    outline-offset: 3px;
+    border-radius: 3px;
+  }
+
+  a {
+    text-decoration: none;
+    color: inherit;
   }
 }
 
 @layer components {
-  .nav-link {
-    @apply text-muted text-sm transition-colors hover:text-ink no-underline;
+  /* Archivo = Codrift's voice. JetBrains Mono = the machine's. Never both. */
+  .t-display {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-stretch: 125%;
+    font-size: clamp(2.6rem, 6.6vw, 5.5rem);
+    line-height: 0.94;
+    letter-spacing: -0.032em;
+    text-wrap: balance;
   }
 
-  .install-row {
-    @apply flex items-center gap-3 bg-raised border border-border rounded-md px-4 py-2.5
-           font-mono text-sm cursor-pointer transition-colors hover:border-amber relative;
+  .t-section {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-stretch: 118%;
+    font-size: clamp(1.9rem, 3.9vw, 3.1rem);
+    line-height: 1.02;
+    letter-spacing: -0.024em;
+    text-wrap: balance;
   }
 
-  .feature-cell {
-    @apply p-8 bg-bg transition-colors hover:bg-raised;
+  .t-lead {
+    font-size: clamp(1.0625rem, 1.5vw, 1.25rem);
+    line-height: 1.62;
+    color: var(--color-muted);
+    max-width: 62ch;
+  }
+
+  .t-body {
+    line-height: 1.68;
+    color: var(--color-muted);
+    max-width: 68ch;
+  }
+
+  .t-tag {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  /* Section index lives in the grid's left column, not above the heading. */
+  .channel {
+    display: grid;
+    gap: clamp(1.5rem, 4vw, 3.5rem);
+    grid-template-columns: 1fr;
+  }
+  @media (min-width: 1024px) {
+    .channel {
+      grid-template-columns: 8rem minmax(0, 1fr);
+    }
+  }
+  .channel-id {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-amber);
+    border-top: 1px solid var(--color-amber);
+    padding-top: 0.625rem;
+    align-self: start;
+    white-space: nowrap;
+  }
+
+  .panel {
+    background: var(--color-panel);
+    border: 1px solid var(--color-rule);
+    border-radius: 10px;
+  }
+
+  .shot {
+    display: block;
+    width: 100%;
+    border: 1px solid var(--color-rule);
+    border-radius: 10px;
+    background: var(--color-ink);
+  }
+
+  .keycap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.55em;
+    padding: 0.12em 0.42em;
+    border: 1px solid var(--color-rule);
+    border-radius: 4px;
+    background: var(--color-raised);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--color-fg);
+  }
+
+  .cmd {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    position: relative;
+    padding: 0.7rem 0.95rem;
+    border: 1px solid var(--color-rule);
+    background: var(--color-panel);
+    border-radius: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: border-color 180ms var(--ease-out-quint);
+  }
+  .cmd:hover {
+    border-color: var(--color-amber);
+  }
+
+  .link-u {
+    color: var(--color-fg);
+    border-bottom: 1px solid var(--color-faint);
+    transition: border-color 160ms var(--ease-out-quint);
+  }
+  .link-u:hover {
+    border-color: var(--color-amber);
+  }
+
+  /* Always paired with a text label; colour never carries state alone. */
+  .dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    flex: none;
+  }
+
+  .drench {
+    background: var(--color-amber);
+    color: var(--color-amber-ink);
+  }
+  .drench .t-body,
+  .drench .t-lead {
+    color: color-mix(in oklab, var(--color-amber-ink) 82%, transparent);
+  }
+  .drench .t-tag {
+    color: color-mix(in oklab, var(--color-amber-ink) 82%, transparent);
+  }
+}
+
+@layer utilities {
+  .rule-t {
+    border-top: 1px solid var(--color-rule);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .rise {
+      animation: rise 900ms var(--ease-out-quint) both;
+    }
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .caret::after {
+    content: "▌";
+    color: var(--color-amber);
+    animation: blink 1.05s steps(1) infinite;
+  }
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
   }
 }

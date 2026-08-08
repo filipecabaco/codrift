@@ -8,11 +8,14 @@
     initiativeId,
     selectedPath = $bindable<string | null>(null),
     onEdit,
+    onLeave,
     revision = 0,
   }: {
     initiativeId: string;
     selectedPath?: string | null;
     onEdit: (path: string) => void;
+    /** Called on Escape with no active filter. */
+    onLeave?: () => void;
     /** Bumped by the editor on save; re-reads the previewed file when it changes. */
     revision?: number;
   } = $props();
@@ -25,6 +28,14 @@
     children: Node[];
   };
 
+  type Row = {
+    key: string;
+    node: Node;
+    depth: number;
+    /** Filter results only: full path, shown instead of the bare name. */
+    label?: string;
+  };
+
   let roots = $state<Node[]>([]);
   let expanded = $state<Set<string>>(new Set());
   let loading = $state(true);
@@ -32,6 +43,10 @@
   let selected = $state<string | null>(null);
   let previewHtml = $state<string>("");
   let previewError = $state<string | null>(null);
+  let query = $state("");
+  let cursor = $state(0);
+  let paneEl = $state<HTMLElement | null>(null);
+  let filterEl = $state<HTMLInputElement | null>(null);
 
   const base = (dir: string) => dir.split("/").filter(Boolean).pop() ?? dir;
 
@@ -63,24 +78,204 @@
     n.children.forEach(sortNode);
   }
 
-  function visibleRows(): { node: Node; depth: number }[] {
-    const out: { node: Node; depth: number }[] = [];
+  /** Subsequence score; consecutive and segment-start hits rank higher. Null = no match. */
+  function fuzzyScore(q: string, s: string): number | null {
+    const hay = s.toLowerCase();
+    let at = 0;
+    let score = 0;
+    let prev = -2;
+    for (const ch of q.toLowerCase()) {
+      const idx = hay.indexOf(ch, at);
+      if (idx === -1) return null;
+      if (idx === prev + 1) score += 4;
+      if (idx === 0 || "/._- ".includes(hay[idx - 1])) score += 3;
+      score += 1;
+      prev = idx;
+      at = idx + 1;
+    }
+    return score - hay.length * 0.02;
+  }
+
+  /** Every file, flattened, for filtering. */
+  const files = $derived.by(() => {
+    const out: { node: Node; label: string }[] = [];
+    const walk = (n: Node, prefix: string) => {
+      for (const c of n.children) {
+        const label = prefix ? `${prefix}/${c.name}` : c.name;
+        if (c.isFile) out.push({ node: c, label });
+        else walk(c, label);
+      }
+    };
+    roots.forEach((r) => walk(r, r.name));
+    return out;
+  });
+
+  const MAX_RESULTS = 200;
+
+  const rows = $derived.by((): Row[] => {
+    const q = query.trim();
+    if (q) {
+      return files
+        .map((f) => ({ f, score: fuzzyScore(q, f.label) }))
+        .filter((r): r is { f: (typeof files)[number]; score: number } => r.score !== null)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX_RESULTS)
+        .map(({ f }) => ({ key: f.node.key, node: f.node, depth: 0, label: f.label }));
+    }
+    const out: Row[] = [];
     const walk = (n: Node, depth: number) => {
-      out.push({ node: n, depth });
+      out.push({ key: n.key, node: n, depth });
       if (!n.isFile && expanded.has(n.key)) n.children.forEach((c) => walk(c, depth + 1));
     };
     roots.forEach((r) => walk(r, 0));
     return out;
+  });
+
+  let seenQuery = "";
+  $effect(() => {
+    if (query !== seenQuery) {
+      const wasFiltering = seenQuery !== "";
+      seenQuery = query;
+      const landing = !query && wasFiltering ? rows.findIndex((r) => r.key === selected) : -1;
+      cursor = landing === -1 ? 0 : landing;
+      scrollCursorIntoView();
+    } else if (cursor > rows.length - 1) {
+      cursor = Math.max(0, rows.length - 1);
+    }
+  });
+
+  function moveCursor(delta: number) {
+    if (rows.length === 0) return;
+    cursor = Math.min(rows.length - 1, Math.max(0, cursor + delta));
+    scrollCursorIntoView();
+  }
+
+  function scrollCursorIntoView() {
+    requestAnimationFrame(() => {
+      paneEl?.querySelector<HTMLElement>("[data-cursor]")?.scrollIntoView({ block: "nearest" });
+    });
   }
 
   function toggle(node: Node) {
     if (node.isFile) {
-      openFile(node);
+      void openFile(node);
       return;
     }
     const next = new Set(expanded);
     next.has(node.key) ? next.delete(node.key) : next.add(node.key);
     expanded = next;
+  }
+
+  /** Expands the path to `node` so clearing the filter keeps it visible. */
+  function revealInTree(node: Node) {
+    const next = new Set(expanded);
+    for (const root of roots) {
+      if (!node.fullPath.startsWith(`${root.fullPath}/`)) continue;
+      const rel = node.fullPath.slice(root.fullPath.length + 1).split("/");
+      let path = root.fullPath;
+      next.add(path);
+      for (const seg of rel.slice(0, -1)) {
+        path = `${path}/${seg}`;
+        next.add(path);
+      }
+    }
+    expanded = next;
+  }
+
+  function activate(row: Row) {
+    if (row.label && row.node.isFile) revealInTree(row.node);
+    toggle(row.node);
+  }
+
+  function expandRow(row: Row) {
+    if (row.node.isFile || expanded.has(row.key)) {
+      moveCursor(1);
+      return;
+    }
+    expanded = new Set(expanded).add(row.key);
+  }
+
+  function collapseRow(row: Row) {
+    if (!row.node.isFile && expanded.has(row.key)) {
+      const next = new Set(expanded);
+      next.delete(row.key);
+      expanded = next;
+      return;
+    }
+    for (let i = cursor - 1; i >= 0; i--) {
+      if (rows[i].depth < row.depth) {
+        cursor = i;
+        scrollCursorIntoView();
+        return;
+      }
+    }
+  }
+
+  function onPaneKeydown(e: KeyboardEvent) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const row = rows[cursor];
+    const inFilter = e.target === filterEl;
+
+    switch (e.key) {
+      case "ArrowDown":
+        moveCursor(1);
+        break;
+      case "ArrowUp":
+        moveCursor(-1);
+        break;
+      case "j":
+        if (inFilter) return;
+        moveCursor(1);
+        break;
+      case "k":
+        if (inFilter) return;
+        moveCursor(-1);
+        break;
+      case "Home":
+        cursor = 0;
+        scrollCursorIntoView();
+        break;
+      case "End":
+        cursor = Math.max(0, rows.length - 1);
+        scrollCursorIntoView();
+        break;
+      case "ArrowRight":
+        if (inFilter) return;
+        if (row) expandRow(row);
+        break;
+      case "ArrowLeft":
+        if (inFilter) return;
+        if (row) collapseRow(row);
+        break;
+      case "Enter":
+        if (row) activate(row);
+        if (inFilter && row?.node.isFile) paneEl?.focus();
+        break;
+      case "e":
+        if (inFilter) return;
+        if (row?.node.isFile) onEdit(row.node.fullPath);
+        break;
+      case "/":
+        if (inFilter) return;
+        filterEl?.focus();
+        filterEl?.select();
+        break;
+      case "Escape":
+        if (query) {
+          query = "";
+          paneEl?.focus();
+        } else if (inFilter) {
+          paneEl?.focus();
+        } else {
+          onLeave?.();
+        }
+        break;
+      default:
+        return;
+    }
+    // Bare keys are global actions; stop the ones the tree consumed.
+    e.preventDefault();
+    e.stopPropagation();
   }
 
   async function openFile(node: Node) {
@@ -126,6 +321,8 @@
     selected = null;
     selectedPath = null;
     previewHtml = "";
+    query = "";
+    cursor = 0;
     rpc<{ dirs: { dir: string; files: string[] }[] }>("list_tree", { initiative_id: id })
       .then((res) => {
         roots = res.dirs.map((d) => buildTree(d.dir, d.files));
@@ -137,32 +334,77 @@
 </script>
 
 <div class="flex h-full">
-  <div class="w-1/2 max-w-md overflow-y-auto border-r border-border p-2 text-[13px]">
-    {#if loading}
-      <p class="text-muted">Loading tree…</p>
-    {:else if error}
-      <p class="text-red-400">{error}</p>
-    {:else if roots.length === 0}
-      <p class="text-muted">No files to show.</p>
-    {:else}
-      {#each visibleRows() as { node, depth } (node.key)}
-        <button
-          class={[
-            "flex w-full items-center gap-1 rounded py-0.5 text-left hover:bg-surface",
-            selected === node.key ? "bg-accent/20 text-white" : "text-fg/90",
-          ]}
-          style="padding-left: {depth * 14 + 4}px"
-          onclick={() => toggle(node)}
-        >
-          {#if node.isFile}
-            <span class="text-muted">·</span>{node.name}
-          {:else}
-            <span class="text-muted">{expanded.has(node.key) ? "▾" : "▸"}</span>
-            <span class="font-semibold">{node.name}</span>
-          {/if}
-        </button>
-      {/each}
-    {/if}
+  <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+  <div
+    bind:this={paneEl}
+    data-tree-pane
+    role="tree"
+    aria-label="Files"
+    tabindex="0"
+    onkeydown={onPaneKeydown}
+    class="flex w-1/2 max-w-md flex-col border-r border-border text-[13px] outline-none focus-within:border-accent/50"
+  >
+    <div class="flex items-center gap-2 border-b border-border px-2 py-1.5">
+      <span class="text-[11px] text-muted">/</span>
+      <input
+        bind:this={filterEl}
+        bind:value={query}
+        placeholder="Filter files…"
+        aria-label="Filter files"
+        spellcheck="false"
+        autocomplete="off"
+        class="min-w-0 flex-1 bg-transparent text-[12px] text-fg outline-none placeholder:text-muted"
+      />
+      {#if query}
+        <span class="shrink-0 text-[11px] text-muted">
+          {rows.length}{rows.length === MAX_RESULTS ? "+" : ""}
+        </span>
+      {/if}
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-y-auto p-2">
+      {#if loading}
+        <p class="text-muted">Loading tree…</p>
+      {:else if error}
+        <p class="text-red-400">{error}</p>
+      {:else if roots.length === 0}
+        <p class="text-muted">No files to show.</p>
+      {:else if rows.length === 0}
+        <p class="text-muted">No file matches “{query}”.</p>
+      {:else}
+        {#each rows as row, i (row.key)}
+          <button
+            data-cursor={i === cursor ? "" : undefined}
+            role="treeitem"
+            aria-selected={selected === row.key}
+            tabindex="-1"
+            class={[
+              "flex w-full items-center gap-1 rounded py-0.5 text-left hover:bg-surface",
+              selected === row.key ? "bg-accent/20 text-white" : "text-fg/90",
+              i === cursor ? "ring-1 ring-inset ring-accent/60" : "",
+            ]}
+            style="padding-left: {row.depth * 14 + 4}px"
+            onclick={() => {
+              cursor = i;
+              activate(row);
+            }}
+          >
+            {#if row.label}
+              {@const cut = row.label.lastIndexOf("/")}
+              <span class="text-muted">·</span>
+              <span class="truncate">
+                {#if cut > -1}<span class="text-muted">{row.label.slice(0, cut + 1)}</span>{/if}{row.label.slice(cut + 1)}
+              </span>
+            {:else if row.node.isFile}
+              <span class="text-muted">·</span>{row.node.name}
+            {:else}
+              <span class="text-muted">{expanded.has(row.key) ? "▾" : "▸"}</span>
+              <span class="font-semibold">{row.node.name}</span>
+            {/if}
+          </button>
+        {/each}
+      {/if}
+    </div>
   </div>
 
   <div class="flex min-w-0 flex-1 flex-col overflow-hidden">

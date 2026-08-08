@@ -45,7 +45,7 @@ defmodule Codrift.Branch do
       Worktree.status(dir).branch == branch ->
         {:ok, branch}
 
-      Worktree.status(dir).dirty? ->
+      dirty?(dir) ->
         {:error, "#{Path.basename(dir)} has uncommitted changes — commit or stash them first"}
 
       true ->
@@ -62,6 +62,25 @@ defmodule Codrift.Branch do
       %{branch: branch} -> branch
     end
   end
+
+  # Codrift writes `.claude/settings.json` into every directory it manages, so
+  # an untracked `.claude/` is our own noise rather than the user's work — it
+  # must not block the switch.
+  defp dirty?(dir) do
+    case git(dir, ["status", "--porcelain"]) do
+      {output, 0} ->
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.reject(&codrift_artifact?/1)
+        |> Enum.any?()
+
+      _ ->
+        false
+    end
+  end
+
+  defp codrift_artifact?("?? " <> path), do: String.starts_with?(path, ".claude/")
+  defp codrift_artifact?(_), do: false
 
   defp checkout(dir, branch) do
     case git(dir, ["checkout", branch]) do

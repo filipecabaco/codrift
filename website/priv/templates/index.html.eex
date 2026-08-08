@@ -3,244 +3,891 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Drive multiple AI coding agents across your projects from one keyboard-driven desktop app." />
-    <title>Codrift: One workspace. Every agent.</title>
+    <title>Codrift: run many AI coding agents at once</title>
+    <meta
+      name="description"
+      content="A desktop control surface for running many AI coding agents at once. Live terminals, isolated worktrees, one diff, one shared memory, driven from the keyboard."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href="<%= site_url %>/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Codrift" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content="<%= site_url %>/" />
+    <meta property="og:title" content="Codrift: run many AI coding agents at once" />
+    <meta
+      property="og:description"
+      content="Run Claude Code, Codex, Gemini, Copilot and shells across every repo in a project at once. Live terminals, isolated branches, one diff, one shared memory."
+    />
+    <meta property="og:image" content="<%= og_image %>" />
+    <meta property="og:image:secure_url" content="<%= og_image %>" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Codrift wordmark over a dark terminal backdrop, with three agent status lines: claude on atlas-api running, claude on atlas-edge needs input, codex on dashboard running."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Codrift: run many AI coding agents at once" />
+    <meta
+      name="twitter:description"
+      content="Run Claude Code, Codex, Gemini, Copilot and shells across every repo in a project at once. Live terminals, isolated branches, one diff, one shared memory."
+    />
+    <meta name="twitter:image" content="<%= og_image %>" />
+    <meta
+      name="twitter:image:alt"
+      content="Codrift wordmark over a dark terminal backdrop, with three agent status lines: claude on atlas-api running, claude on atlas-edge needs input, codex on dashboard running."
+    />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Onest:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,400..900&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="<%= tw_css %>" />
   </head>
   <body>
+    <a href="#floor" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:bg-amber focus:px-3 focus:py-2 focus:text-amber-ink">Skip to content</a>
 
-    <!-- NAV -->
-    <nav class="sticky top-0 z-50 border-b border-border bg-bg/90 backdrop-blur-md">
-      <div class="mx-auto flex h-14 max-w-screen-xl items-center justify-between px-6 lg:px-10">
-        <a href="/" class="text-sm font-semibold tracking-tight text-ink no-underline">
-          co<span class="text-amber">drift</span>
+    <!-- ══ NAV ══════════════════════════════════════════════════════════ -->
+    <nav class="sticky top-0 z-50 border-b border-rule bg-ink/88 backdrop-blur-md">
+      <div class="mx-auto flex h-14 max-w-[86rem] items-center gap-6 px-5 lg:px-8">
+        <a href="/" class="flex items-center gap-2.5" aria-label="Codrift home">
+          <svg width="20" height="20" viewBox="0 0 512 512" aria-hidden="true">
+            <g stroke="oklch(75% 0.17 62)" fill="none" stroke-width="54" stroke-linecap="round">
+              <path d="M94 326 L163.1 170.7" /><path d="M202 352 L290.7 152.9" /><path d="M310 378 L418.2 135" />
+            </g>
+          </svg>
+          <span class="font-display text-[0.95rem] font-bold" style="font-stretch: 118%">codrift</span>
         </a>
-        <div class="flex items-center gap-6">
-          <a href="#features" class="nav-link hidden sm:block">Features</a>
-          <a href="#install" class="nav-link hidden sm:block">Install</a>
-          <a href="https://github.com/filipecabaco/codrift" class="nav-link hidden sm:flex items-center gap-1.5">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>
-            </svg>
-            GitHub
-          </a>
-          <a href="https://github.com/filipecabaco/codrift" class="rounded bg-amber px-3.5 py-1.5 text-sm font-semibold text-bg no-underline transition-colors hover:bg-amber-dim">
-            Get started
-          </a>
+        <div class="ml-auto flex items-center gap-5 text-sm text-muted">
+          <a href="#floor" class="hidden hover:text-fg md:block">The floor</a>
+          <a href="#conductor" class="hidden hover:text-fg md:block">Conductor</a>
+          <a href="#keys" class="hidden hover:text-fg md:block">Keys</a>
+          <a href="https://github.com/filipecabaco/codrift" class="hidden hover:text-fg sm:block">GitHub</a>
+          <a
+            href="#install"
+            class="rounded bg-amber px-3 py-1.5 text-[0.8125rem] font-semibold text-amber-ink transition-colors hover:bg-amber-hot"
+            >Install</a
+          >
         </div>
       </div>
     </nav>
 
-    <!-- HERO -->
-    <div class="mx-auto grid max-w-screen-xl grid-cols-1 items-center gap-12 px-6 py-20 lg:grid-cols-2 lg:gap-20 lg:px-10 lg:py-28">
-      <div>
-        <div class="mb-5 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-amber">
-          <span class="block h-px w-5 bg-amber"></span>
-          Desktop AI agent orchestration
-        </div>
-        <h1 class="mb-5 text-5xl font-bold leading-[1.08] tracking-tight lg:text-6xl">
-          One workspace.<br /><span class="text-amber">Every agent.</span>
-        </h1>
-        <p class="mb-10 max-w-[46ch] text-lg leading-relaxed text-muted">
-          Drive Claude, Codex, Opencode, Gemini, and Copilot side by side,
-          or let one conduct the rest. Keyboard-driven and worktree-isolated,
-          in one native desktop app.
-        </p>
-        <div class="flex flex-wrap items-center gap-3">
-          <div class="install-row" id="hero-cmd" onclick="copyText('hero-cmd-text', 'hero-toast')">
-            <span class="text-amber select-none">$</span>
-            <span id="hero-cmd-text">curl -fsSL https://codrift.sh/install.sh | sh</span>
-            <button class="ml-2 text-faint transition-colors hover:text-amber" aria-label="Copy install command">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                <rect x="5" y="5" width="9" height="9" rx="1.5"/>
-                <path d="M3 11H2a1 1 0 01-1-1V2a1 1 0 011-1h8a1 1 0 011 1v1"/>
-              </svg>
-            </button>
-            <span class="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-amber px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-bg opacity-0 transition-opacity" id="hero-toast">Copied</span>
-          </div>
-          <a href="https://github.com/filipecabaco/codrift" class="nav-link flex items-center gap-1.5 text-sm">
-            View on GitHub
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M2 10L10 2M10 2H4M10 2v6"/>
-            </svg>
-          </a>
-        </div>
-      </div>
-
-      <!-- APP PREVIEW -->
-      <div class="relative">
-        <div class="pointer-events-none absolute inset-0 -m-10 rounded-full bg-amber/5 blur-3xl"></div>
-        <div class="relative overflow-hidden rounded-xl border border-border bg-terminal shadow-2xl">
-          <div class="flex items-center gap-2 border-b border-border bg-raised px-4 py-2.5">
-            <span class="h-2.5 w-2.5 rounded-full bg-[oklch(62%_0.2_25)]"></span>
-            <span class="h-2.5 w-2.5 rounded-full bg-[oklch(78%_0.17_75)]"></span>
-            <span class="h-2.5 w-2.5 rounded-full bg-[oklch(70%_0.2_145)]"></span>
-            <span class="flex-1 text-center font-mono text-[0.65rem] text-faint tracking-wide">Codrift</span>
-          </div>
-          <img
-            src="/images/agent-terminal.png"
-            alt="Codrift running a live agent terminal beside the initiative sidebar"
-            width="1440" height="900"
-            class="block w-full"
-            loading="eager"
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- FEATURES -->
-    <section id="features" class="mx-auto max-w-screen-xl px-6 pb-24 lg:px-10">
-      <div class="mb-3 text-xs font-semibold uppercase tracking-widest text-amber">Capabilities</div>
-      <h2 class="mb-4 text-4xl font-bold tracking-tight lg:text-5xl">Everything a multi-agent<br class="hidden lg:block" /> workflow needs</h2>
-      <p class="mb-12 max-w-[52ch] text-lg leading-relaxed text-muted">
-        From launching agents to reviewing diffs, every decision stays in one window.
-        No tab-switching, no lost context.
+    <!-- ══ HERO ═════════════════════════════════════════════════════════ -->
+    <header class="mx-auto max-w-[86rem] px-5 pb-16 pt-14 lg:px-8 lg:pb-24 lg:pt-24">
+      <p class="t-tag rise mb-7" style="animation-delay: 40ms">
+        Desktop · macOS &amp; Linux · <span class="text-amber">v0.0.1</span>
       </p>
-      <div class="overflow-hidden rounded-lg border border-border">
-        <div class="grid grid-cols-1 gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
-          <div class="feature-cell">
-            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">01</div>
-            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Conductor</h3>
-            <p class="text-sm leading-relaxed text-muted">Hand one agent a goal and let it plan, launch, and direct sub-agents across the whole initiative, over MCP with no glue code.</p>
-          </div>
-          <div class="feature-cell">
-            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">02</div>
-            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Multiple agents per dir</h3>
-            <p class="text-sm leading-relaxed text-muted">Claude Code, Codex, Opencode, Gemini, Copilot, and a raw shell all running simultaneously.</p>
-          </div>
-          <div class="feature-cell">
-            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">03</div>
-            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Git worktrees</h3>
-            <p class="text-sm leading-relaxed text-muted">Each directory gets an isolated branch. Agents never touch your main checkout.</p>
-          </div>
-          <div class="feature-cell">
-            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">04</div>
-            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Diff &amp; tree view</h3>
-            <p class="text-sm leading-relaxed text-muted">Syntax-highlighted diffs across every directory, a browsable file tree, and an in-app Vim editor, all updated as agents work.</p>
-          </div>
-          <div class="feature-cell">
-            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">05</div>
-            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">Shared memory</h3>
-            <p class="text-sm leading-relaxed text-muted">FTS5 knowledge base per initiative. Agents search it before starting, write to it when done.</p>
-          </div>
-          <div class="feature-cell">
-            <div class="mb-3 font-mono text-[0.65rem] text-amber opacity-70">06</div>
-            <h3 class="mb-2 text-[0.9375rem] font-semibold text-ink">MCP server + integrations</h3>
-            <p class="text-sm leading-relaxed text-muted">Agents connect over SSE and call Codrift's tools. Pull context from GitHub, Linear, GitLab, Jira, and Notion.</p>
+      <h1 class="rise flex items-center gap-5 lg:gap-7" style="animation-delay: 90ms">
+        <svg class="h-[0.78em] w-auto shrink-0 text-[clamp(3.4rem,9vw,7.5rem)]" viewBox="0 0 512 512" aria-hidden="true">
+          <g stroke="currentColor" fill="none" stroke-width="54" stroke-linecap="round" style="color: var(--color-amber)">
+            <path d="M94 326 L163.1 170.7" /><path d="M202 352 L290.7 152.9" /><path d="M310 378 L418.2 135" />
+          </g>
+        </svg>
+        <span class="t-display" style="font-size: clamp(3.4rem, 9vw, 7.5rem)">codrift</span>
+      </h1>
+      <div class="mt-10 grid gap-10 lg:grid-cols-[minmax(0,32rem)_minmax(0,1fr)] lg:items-end lg:gap-16">
+        <div class="rise" style="animation-delay: 160ms">
+          <p class="t-lead text-fg">
+            A desktop control surface for running many AI coding agents at once. Claude Code, Codex,
+            Opencode, Gemini, Copilot and raw shells, against every repo in a project at the same
+            time.
+          </p>
+          <p class="t-lead mt-4">
+            Live terminals, a branch per directory, one diff across all of it, and a memory store
+            the agents share.
+          </p>
+          <div class="mt-7 flex flex-wrap items-center gap-4">
+            <button class="cmd" type="button" data-copy="curl -fsSL https://codrift.app/install.sh | sh">
+              <span class="text-amber">$</span>
+              <span>curl -fsSL https://codrift.app/install.sh | sh</span>
+              <span class="ml-1 text-faint" aria-hidden="true">⧉</span>
+              <span class="sr-only">Copy install command</span>
+            </button>
+            <a href="https://github.com/filipecabaco/codrift" class="link-u text-sm">Source on GitHub</a>
           </div>
         </div>
-      </div>
-    </section>
 
-    <!-- SCREENS -->
-    <section class="border-t border-border">
-      <div class="mx-auto max-w-screen-xl px-6 py-24 lg:px-10">
-        <div class="mb-3 text-xs font-semibold uppercase tracking-widest text-amber">A look inside</div>
-        <h2 class="mb-12 text-4xl font-bold tracking-tight lg:text-5xl">One window, every view</h2>
-        <div class="grid grid-cols-1 gap-8 lg:grid-cols-3">
-          <figure class="m-0 overflow-hidden rounded-lg border border-border bg-terminal">
-            <img src="/images/context-overview.png" alt="Context view: initiative sidebar, directories, and rendered context notes" width="1440" height="900" class="block w-full" loading="lazy" />
-            <figcaption class="border-t border-border px-4 py-3 text-sm text-muted"><span class="font-semibold text-ink">Context:</span> goals, agents, and notes per initiative.</figcaption>
-          </figure>
-          <figure class="m-0 overflow-hidden rounded-lg border border-border bg-terminal">
-            <img src="/images/diff-view.png" alt="Diff view: syntax-highlighted additions and deletions" width="1440" height="900" class="block w-full" loading="lazy" />
-            <figcaption class="border-t border-border px-4 py-3 text-sm text-muted"><span class="font-semibold text-ink">Diff:</span> every change across the initiative, highlighted.</figcaption>
-          </figure>
-          <figure class="m-0 overflow-hidden rounded-lg border border-border bg-terminal">
-            <img src="/images/tree-view.png" alt="Tree view: file tree with a syntax-highlighted preview" width="1440" height="900" class="block w-full" loading="lazy" />
-            <figcaption class="border-t border-border px-4 py-3 text-sm text-muted"><span class="font-semibold text-ink">Tree:</span> browse and edit files without leaving the app.</figcaption>
-          </figure>
-        </div>
-      </div>
-    </section>
-
-    <!-- HOW IT WORKS -->
-    <section class="border-t border-border">
-      <div class="mx-auto max-w-screen-xl px-6 py-24 lg:px-10">
-        <div class="mb-3 text-xs font-semibold uppercase tracking-widest text-amber">Workflow</div>
-        <h2 class="mb-14 text-4xl font-bold tracking-tight lg:text-5xl">How it fits your day</h2>
-        <div class="grid grid-cols-1 gap-10 lg:grid-cols-3 lg:gap-16">
-          <div>
-            <div class="mb-4 text-6xl font-bold leading-none tracking-tighter text-border lg:text-7xl">01</div>
-            <h3 class="mb-2 font-semibold text-ink">Create an initiative</h3>
-            <p class="text-sm leading-relaxed text-muted">Group related directories into one initiative. Each gets its own context folder at <code class="rounded border border-border bg-raised px-1 py-0.5 font-mono text-[0.75em] text-amber">~/.codrift/initiatives/{id}/</code>.</p>
-          </div>
-          <div>
-            <div class="mb-4 text-6xl font-bold leading-none tracking-tighter text-border lg:text-7xl">02</div>
-            <h3 class="mb-2 font-semibold text-ink">Launch agents</h3>
-            <p class="text-sm leading-relaxed text-muted">Press <code class="rounded border border-border bg-raised px-1 py-0.5 font-mono text-[0.75em] text-amber">s</code> to start any agent against any directory. Agents run in isolated worktrees so nothing collides.</p>
-          </div>
-          <div>
-            <div class="mb-4 text-6xl font-bold leading-none tracking-tighter text-border lg:text-7xl">03</div>
-            <h3 class="mb-2 font-semibold text-ink">Review and merge</h3>
-            <p class="text-sm leading-relaxed text-muted">Switch to Diff mode, inspect what changed, and merge the work you want. Discard the rest without touching main.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- INSTALL -->
-    <section id="install" class="border-t border-border">
-      <div class="mx-auto max-w-screen-xl px-6 py-24 lg:px-10">
-        <div class="mb-3 text-xs font-semibold uppercase tracking-widest text-amber">Quick start</div>
-        <h2 class="mb-10 text-4xl font-bold tracking-tight lg:text-5xl">Up in 30 seconds</h2>
-        <div class="grid grid-cols-1 items-center gap-8 rounded-lg border border-border bg-raised p-8 lg:grid-cols-2 lg:gap-16">
-          <div>
-            <h3 class="mb-2 text-lg font-semibold tracking-tight text-ink">Download the app</h3>
-            <p class="text-sm leading-relaxed text-muted">A native desktop app for macOS and Linux. No Node, no Ruby, no runtime prerequisites. Download, open, and start driving agents.</p>
-          </div>
-          <div class="flex flex-col gap-3">
-            <a href="https://github.com/filipecabaco/codrift/releases/latest" class="flex items-center gap-3 rounded border border-border bg-bg px-4 py-3 text-sm no-underline transition-colors hover:border-amber">
-              <span class="text-amber">⌘</span>
-              <span class="text-ink">macOS</span>
-              <span class="ml-auto font-mono text-xs text-faint">.dmg</span>
-            </a>
-            <a href="https://github.com/filipecabaco/codrift/releases/latest" class="flex items-center gap-3 rounded border border-border bg-bg px-4 py-3 text-sm no-underline transition-colors hover:border-amber">
-              <span class="text-amber">🐧</span>
-              <span class="text-ink">Linux</span>
-              <span class="ml-auto font-mono text-xs text-faint">.AppImage</span>
-            </a>
-            <div class="install-row mt-1" onclick="copyText('install-cmd-1', 'install-toast-1')">
-              <span class="text-amber select-none">$</span>
-              <span id="install-cmd-1">curl -fsSL https://codrift.sh/install.sh | sh</span>
-              <button class="ml-auto text-faint transition-colors hover:text-amber" aria-label="Copy">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <rect x="5" y="5" width="9" height="9" rx="1.5"/>
-                  <path d="M3 11H2a1 1 0 01-1-1V2a1 1 0 011-1h8a1 1 0 011 1v1"/>
-                </svg>
-              </button>
-              <span class="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-amber px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-bg opacity-0 transition-opacity" id="install-toast-1">Copied</span>
+        <div class="rise" style="animation-delay: 240ms">
+          <div class="panel overflow-hidden" id="rig" aria-hidden="true">
+            <div class="flex items-center gap-3 border-b border-rule px-4 py-2">
+              <span class="t-tag">initiative</span>
+              <span class="font-mono text-[0.8125rem] text-fg">rate limits everywhere</span>
+              <span class="t-tag ml-auto" id="rig-summary">4 agents</span>
             </div>
-            <p class="text-xs leading-relaxed text-faint">macOS &amp; Linux one-liner that installs the latest release.</p>
+            <div id="rig-lanes" class="divide-y divide-rule"></div>
+          </div>
+          <p class="mt-3 font-mono text-[0.6875rem] text-faint">
+            Four agents, three repos, one window. Live, from a real session.
+          </p>
+        </div>
+      </div>
+    </header>
+
+    <!-- ══ 01 · THE FLOOR ═══════════════════════════════════════════════ -->
+    <section id="floor" class="rule-t">
+      <div class="mx-auto max-w-[86rem] px-5 py-20 lg:px-8 lg:py-28">
+        <div class="channel">
+          <p class="channel-id">01 / floor</p>
+          <div>
+            <h2 class="t-section max-w-[16ch]">Every agent, in its own terminal, on screen at once.</h2>
+            <p class="t-body mt-6">
+              Codrift does not wrap your agents or paraphrase them. Each one runs in a real PTY and
+              renders byte-for-byte in an embedded terminal, so Claude Code looks like Claude Code
+              and Codex looks like Codex. Split the pane and watch two of them at the same time.
+            </p>
+            <figure class="mt-10">
+              <img
+                src="/images/split-agents.webp"
+                alt="Two Claude Code agents running side by side in Codrift: the left pane is proposing a Go edit, the right has just finished writing a failure-modes document"
+                width="2000"
+                height="1225"
+                class="shot"
+                loading="eager"
+                fetchpriority="high"
+              />
+              <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">
+                ⌘D splits the content area. Each half keeps its own initiative, agent and view.
+              </figcaption>
+            </figure>
+
+            <div class="mt-12 grid gap-px overflow-hidden rounded-lg border border-rule bg-rule sm:grid-cols-2">
+              <div class="bg-ink p-6">
+                <h3 class="font-display text-[1.0625rem] font-semibold">Six adapters, one launcher</h3>
+                <p class="t-body mt-2 text-[0.9375rem]">
+                  Claude Code, Codex, Opencode, Gemini, Copilot, and a raw
+                  <code class="font-mono text-amber">$SHELL</code>. Start any of them against any
+                  directory; run several in the same one if you want a second opinion.
+                </p>
+              </div>
+              <div class="bg-ink p-6">
+                <h3 class="font-display text-[1.0625rem] font-semibold">Sessions outlive the window</h3>
+                <p class="t-body mt-2 text-[0.9375rem]">
+                  Claude sessions are persisted and resumed. Quit Codrift, come back, and the agent
+                  picks up the conversation instead of starting over.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- FOOTER -->
-    <footer class="border-t border-border">
-      <div class="mx-auto flex max-w-screen-xl flex-wrap items-center justify-between gap-4 px-6 py-8 lg:px-10">
-        <a href="/" class="text-sm font-semibold text-muted no-underline">co<span class="text-amber">drift</span></a>
-        <ul class="flex list-none gap-6">
-          <li><a href="https://github.com/filipecabaco/codrift" class="text-xs text-faint transition-colors hover:text-muted no-underline">GitHub</a></li>
-          <li><a href="https://github.com/filipecabaco/codrift/blob/main/README.md" class="text-xs text-faint transition-colors hover:text-muted no-underline">Docs</a></li>
-          <li><a href="https://github.com/filipecabaco/codrift/issues" class="text-xs text-faint transition-colors hover:text-muted no-underline">Issues</a></li>
-        </ul>
+    <!-- ══ 02 · ATTENTION ════════════════════════════════════════════════ -->
+    <section class="drench">
+      <div class="mx-auto max-w-[86rem] px-5 py-20 lg:px-8 lg:py-28">
+        <div class="channel">
+          <p class="channel-id" style="color: inherit; border-color: currentColor; opacity: 0.72">02 / attention</p>
+          <div>
+            <h2 class="t-section max-w-[18ch]">
+              Output stopped being scarce. Your attention didn’t.
+            </h2>
+            <p class="t-lead mt-6">
+              Six agents will produce more work than you can read. The job is no longer typing, it
+              is routing yourself to the one that is actually stuck. Codrift makes that a glance:
+              every agent carries a state, the sidebar rolls them up per initiative, and anything
+              waiting on a human says so in words, not just colour.
+            </p>
+
+            <ul class="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <li class="rounded-lg border border-amber-ink/25 p-4">
+                <p class="font-mono text-[0.6875rem] font-bold uppercase tracking-[0.14em]">running</p>
+                <p class="mt-2 text-[0.9375rem] leading-relaxed opacity-80">Working. Leave it alone.</p>
+              </li>
+              <li class="rounded-lg border border-amber-ink/25 bg-amber-ink/10 p-4">
+                <p class="font-mono text-[0.6875rem] font-bold uppercase tracking-[0.14em]">needs input</p>
+                <p class="mt-2 text-[0.9375rem] leading-relaxed opacity-80">
+                  Asked you something. This is the only one that costs you time.
+                </p>
+              </li>
+              <li class="rounded-lg border border-amber-ink/25 p-4">
+                <p class="font-mono text-[0.6875rem] font-bold uppercase tracking-[0.14em]">idle</p>
+                <p class="mt-2 text-[0.9375rem] leading-relaxed opacity-80">Finished its turn, holding the session.</p>
+              </li>
+              <li class="rounded-lg border border-amber-ink/25 p-4">
+                <p class="font-mono text-[0.6875rem] font-bold uppercase tracking-[0.14em]">stopped</p>
+                <p class="mt-2 text-[0.9375rem] leading-relaxed opacity-80">Exited or crashed, with its exit code.</p>
+              </li>
+            </ul>
+
+            <figure class="mt-10">
+              <img
+                src="/images/agent-question.webp"
+                alt="Codrift sidebar showing an initiative with 3 waiting, while an agent asks how the usage endpoint should carry two rate-limit scopes"
+                width="2000"
+                height="1010"
+                class="shot" style="border-color: color-mix(in oklab, var(--color-amber-ink) 32%, transparent); background: color-mix(in oklab, var(--color-amber-ink) 6%, transparent)"
+                loading="lazy"
+              />
+              <figcaption class="mt-3 font-mono text-[0.6875rem] opacity-70">
+                “3 waiting” on the initiative row. You go straight there.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ 03 · CONDUCTOR ═══════════════════════════════════════════════ -->
+    <section id="conductor">
+      <div class="mx-auto max-w-[86rem] px-5 py-20 lg:px-8 lg:py-28">
+        <div class="channel">
+          <p class="channel-id">03 / conductor</p>
+          <div>
+            <h2 class="t-section max-w-[17ch]">Hand the plan to an agent and let it run the others.</h2>
+            <p class="t-body mt-6">
+              Codrift ships an MCP server. Point one agent at it, give it the initiative, and it
+              plans the work, starts sub-agents in the other directories, sends them instructions,
+              reads their output, and writes what it learns to the shared memory. There is no glue
+              code and no orchestration DSL: the conductor is just an agent with tools.
+            </p>
+
+            <div class="mt-10 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] lg:gap-12">
+              <div>
+              <svg viewBox="0 0 664 332" class="w-full" role="img" aria-labelledby="orch-title orch-desc">
+                <title id="orch-title">How orchestration works in Codrift</title>
+                <desc id="orch-desc">
+                  A conductor agent calls Codrift’s MCP server over SSE. The server starts one
+                  sub-agent per project directory, each in its own git worktree, and all of them read
+                  and write a shared FTS5 memory store.
+                </desc>
+                <defs>
+                  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M0 0 L10 5 L0 10 z" fill="oklch(46% 0.01 265)" />
+                  </marker>
+                  <marker id="ar-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M0 0 L10 5 L0 10 z" fill="oklch(75% 0.17 62)" />
+                  </marker>
+                </defs>
+
+                <g font-family="JetBrains Mono, monospace">
+                  <!-- conductor -->
+                  <rect x="4" y="14" width="176" height="58" rx="8" fill="oklch(14% 0.014 265)" stroke="oklch(75% 0.17 62)" />
+                  <text x="20" y="39" fill="oklch(94% 0.008 265)" font-size="13">conductor</text>
+                  <text x="20" y="57" fill="oklch(66% 0.012 265)" font-size="10">claude · context dir</text>
+
+                  <!-- mcp -->
+                  <rect x="244" y="8" width="176" height="76" rx="8" fill="oklch(14% 0.014 265)" stroke="oklch(24% 0.014 265)" />
+                  <text x="260" y="32" fill="oklch(94% 0.008 265)" font-size="13">Codrift MCP</text>
+                  <text x="260" y="50" fill="oklch(66% 0.012 265)" font-size="10">:43117/mcp/sse</text>
+                  <text x="260" y="70" fill="oklch(75% 0.17 62)" font-size="9">start_agent · send_to_agent</text>
+
+                  <path d="M180 46 H236" stroke="oklch(75% 0.17 62)" stroke-width="1.5" marker-end="url(#ar-a)" />
+                  <text x="186" y="38" fill="oklch(75% 0.17 62)" font-size="9">calls</text>
+
+                  <!-- workers -->
+                  <rect x="244" y="118" width="196" height="48" rx="8" fill="oklch(14% 0.014 265)" stroke="oklch(24% 0.014 265)" />
+                  <circle cx="262" cy="142" r="4" fill="oklch(74% 0.17 150)" />
+                  <text x="278" y="139" fill="oklch(94% 0.008 265)" font-size="12">claude · atlas-api</text>
+                  <text x="278" y="155" fill="oklch(66% 0.012 265)" font-size="9">codrift/9e66/atlas-api</text>
+
+                  <rect x="244" y="178" width="196" height="48" rx="8" fill="oklch(14% 0.014 265)" stroke="oklch(24% 0.014 265)" />
+                  <circle cx="262" cy="202" r="4" fill="oklch(74% 0.17 150)" />
+                  <text x="278" y="199" fill="oklch(94% 0.008 265)" font-size="12">codex · atlas-edge</text>
+                  <text x="278" y="215" fill="oklch(66% 0.012 265)" font-size="9">codrift/9e66/atlas-edge</text>
+
+                  <rect x="244" y="238" width="196" height="48" rx="8" fill="oklch(14% 0.014 265)" stroke="oklch(24% 0.014 265)" />
+                  <circle cx="262" cy="262" r="4" fill="oklch(72% 0.15 232)" />
+                  <text x="278" y="259" fill="oklch(94% 0.008 265)" font-size="12">claude · dashboard</text>
+                  <text x="278" y="275" fill="oklch(66% 0.012 265)" font-size="9">codrift/9e66/dashboard</text>
+
+                  <path d="M332 84 V110" stroke="oklch(46% 0.01 265)" stroke-width="1.5" marker-end="url(#ar)" />
+                  <path d="M332 96 H216 V202 H236" fill="none" stroke="oklch(46% 0.01 265)" stroke-width="1.5" marker-end="url(#ar)" opacity="0.5" />
+                  <path d="M216 202 V262 H236" fill="none" stroke="oklch(46% 0.01 265)" stroke-width="1.5" marker-end="url(#ar)" opacity="0.5" />
+
+                  <!-- memory -->
+                  <rect x="482" y="118" width="178" height="108" rx="8" fill="oklch(14% 0.014 265)" stroke="oklch(24% 0.014 265)" />
+                  <text x="498" y="144" fill="oklch(94% 0.008 265)" font-size="13">shared memory</text>
+                  <text x="498" y="165" fill="oklch(66% 0.012 265)" font-size="10">sqlite fts5</text>
+                  <text x="498" y="184" fill="oklch(66% 0.012 265)" font-size="10">decision · summary</text>
+                  <text x="498" y="202" fill="oklch(66% 0.012 265)" font-size="10">snippet · note</text>
+
+                  <path d="M440 142 H474" stroke="oklch(46% 0.01 265)" stroke-width="1.5" marker-end="url(#ar)" marker-start="url(#ar)" />
+                  <path d="M440 202 H460 V172 H474" fill="none" stroke="oklch(46% 0.01 265)" stroke-width="1.5" marker-end="url(#ar)" opacity="0.5" />
+                  <path d="M440 262 H460 V172" fill="none" stroke="oklch(46% 0.01 265)" stroke-width="1.5" opacity="0.5" />
+                </g>
+                <p class="t-body mt-8 max-w-[46ch] text-[0.9375rem]">
+                  Press <span class="keycap">o</span> to start orchestration on the selected
+                  initiative, or wire the MCP server into your own tooling with
+                  <code class="font-mono text-amber">codrift mcp install</code>.
+                </p>
+              </div>
+
+              <div>
+                <p class="t-tag mb-3">orchestration.md, read by the conductor</p>
+                <pre class="panel overflow-x-auto p-4 font-mono text-[0.75rem] leading-relaxed text-muted"><code><span class="text-amber"># Rules for workers</span>
+
+- Read the initiative memory
+  before touching anything.
+- Write a <span class="text-fg">decision</span> entry the
+  moment you pick between
+  two approaches.
+- Never widen the public API
+  without saying so in memory
+  first.
+- Stop and report if a change
+  would need a migration.
+
+<span class="text-amber">## Merge order</span>
+
+edge -&gt; api -&gt; dashboard</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ 04 · ISOLATION ═══════════════════════════════════════════════ -->
+    <section class="rule-t bg-panel/40">
+      <div class="mx-auto max-w-[86rem] px-5 py-20 lg:px-8 lg:py-28">
+        <div class="channel">
+          <p class="channel-id">04 / isolation</p>
+          <div>
+            <h2 class="t-section max-w-[16ch]">Six agents. Six branches. Your checkout untouched.</h2>
+            <p class="t-body mt-6">
+              Turn on worktrees for a directory and Codrift checks it out on
+              <code class="font-mono text-amber">codrift/{id}/{slug}</code> before any agent starts.
+              Parallel agents stop colliding, and nothing lands in your working tree until you
+              decide it should. The diff view shows every change across the whole initiative in one
+              scroll, so review is one pass, not six.
+            </p>
+
+            <div class="mt-10 grid gap-8 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-12">
+              <svg viewBox="0 0 300 210" class="w-full max-w-sm" role="img" aria-labelledby="wt-title wt-desc">
+                <title id="wt-title">One trunk, three isolated branches</title>
+                <desc id="wt-desc">
+                  Your main branch continues untouched while Codrift creates one worktree branch per
+                  project directory, each holding a single agent’s changes.
+                </desc>
+                <g font-family="JetBrains Mono, monospace" font-size="11">
+                  <path d="M26 22 V188" stroke="oklch(46% 0.01 265)" stroke-width="2" />
+                  <text x="40" y="20" fill="oklch(66% 0.012 265)">main · yours</text>
+                  <circle cx="26" cy="34" r="4.5" fill="oklch(46% 0.01 265)" />
+                  <circle cx="26" cy="188" r="4.5" fill="oklch(46% 0.01 265)" />
+
+                  <path d="M26 70 C 78 70 78 62 122 62 H236" fill="none" stroke="oklch(75% 0.17 62)" stroke-width="2" />
+                  <circle cx="236" cy="62" r="5" fill="oklch(75% 0.17 62)" />
+                  <text x="122" y="52" fill="oklch(94% 0.008 265)">atlas-api</text>
+                  <text x="122" y="80" fill="oklch(74% 0.17 150)">+30 −2</text>
+
+                  <path d="M26 118 C 78 118 78 110 122 110 H236" fill="none" stroke="oklch(75% 0.17 62)" stroke-width="2" />
+                  <circle cx="236" cy="110" r="5" fill="oklch(75% 0.17 62)" />
+                  <text x="122" y="100" fill="oklch(94% 0.008 265)">atlas-edge</text>
+                  <text x="122" y="128" fill="oklch(74% 0.17 150)">+41 −6</text>
+
+                  <path d="M26 166 C 78 166 78 158 122 158 H236" fill="none" stroke="oklch(75% 0.17 62)" stroke-width="2" />
+                  <circle cx="236" cy="158" r="5" fill="oklch(75% 0.17 62)" />
+                  <text x="122" y="148" fill="oklch(94% 0.008 265)">atlas-dashboard</text>
+                  <text x="122" y="176" fill="oklch(74% 0.17 150)">+22 −4</text>
+                </g>
+              </svg>
+
+              <figure>
+                <img
+                  src="/images/diff-view.webp"
+                  alt="Codrift diff view showing syntax-highlighted additions and deletions in lib/atlas/rate_limit.ex with a plus thirty, minus two summary"
+                  width="2000"
+                  height="1225"
+                  class="shot"
+                  loading="lazy"
+                />
+                <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">
+                  <span class="keycap">2</span> shows every changed file across every directory, highlighted.
+                </figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ 05 · MEMORY ══════════════════════════════════════════════════ -->
+    <section class="rule-t">
+      <div class="mx-auto max-w-[86rem] px-5 py-20 lg:px-8 lg:py-28">
+        <div class="channel">
+          <p class="channel-id">05 / memory</p>
+          <div>
+            <h2 class="t-section max-w-[16ch]">The context you keep re-typing, written down once.</h2>
+            <p class="t-body mt-6">
+              Every initiative carries a searchable SQLite FTS5 store. Agents read it before they
+              start and write to it when they decide something. The next agent inherits the
+              reasoning instead of rediscovering it, which is cheaper in tokens and much cheaper in
+              contradictions.
+            </p>
+
+            <div class="mt-10 grid gap-8 lg:grid-cols-2 lg:gap-12">
+              <div class="space-y-3">
+                <article class="panel p-4">
+                  <p class="mb-2 flex items-center gap-2 font-mono text-[0.625rem] uppercase tracking-[0.12em]">
+                    <span class="rounded bg-done/20 px-1.5 py-0.5 text-done">decision</span>
+                    <span class="text-faint">claude/atlas-api</span>
+                  </p>
+                  <p class="font-mono text-[0.8125rem] leading-relaxed text-muted">
+                    Bucket key is <span class="text-fg">{api_token, route_class}</span>, not
+                    api_token alone. A read loop must never starve a payout. Rejected: one global
+                    bucket per token (simpler, but it couples the two failure modes).
+                  </p>
+                </article>
+                <article class="panel p-4">
+                  <p class="mb-2 flex items-center gap-2 font-mono text-[0.625rem] uppercase tracking-[0.12em]">
+                    <span class="rounded bg-ok/20 px-1.5 py-0.5 text-ok">snippet</span>
+                    <span class="text-faint">claude/atlas-api</span>
+                  </p>
+                  <p class="font-mono text-[0.8125rem] leading-relaxed text-muted">
+                    <span class="text-fg">defp encode({token, class}), do: "rl:#{class}:#{token}"</span><br />
+                    The edge must produce the identical key or the two layers count separately.
+                  </p>
+                </article>
+                <article class="panel p-4">
+                  <p class="mb-2 flex items-center gap-2 font-mono text-[0.625rem] uppercase tracking-[0.12em]">
+                    <span class="rounded bg-wait/20 px-1.5 py-0.5 text-wait">note</span>
+                    <span class="text-faint">conductor</span>
+                  </p>
+                  <p class="font-mono text-[0.8125rem] leading-relaxed text-muted">
+                    Two accounts poll on a fixed 200ms interval with no jitter, so the sliding
+                    window fills at exactly the same instant on every edge node.
+                  </p>
+                </article>
+              </div>
+
+              <figure>
+                <img
+                  src="/images/memory-view.webp"
+                  alt="Codrift memory view listing decision, summary, snippet and note entries with a full-text search box"
+                  width="2000"
+                  height="1225"
+                  class="shot"
+                  loading="lazy"
+                />
+                <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">
+                  FTS5 query syntax, straight through:
+                  <span class="text-muted">redis AND fallback NOT dashboard</span>.
+                </figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ 06 · VIEWS ════════════════════════════════════════════════════ -->
+    <section id="keys" class="rule-t bg-panel/40">
+      <div class="mx-auto max-w-[86rem] px-5 py-20 lg:px-8 lg:py-28">
+        <div class="channel">
+          <p class="channel-id">06 / keys</p>
+          <div>
+            <h2 class="t-section max-w-[15ch]">Three views. Press the number.</h2>
+            <p class="t-body mt-6">
+              The keyboard is the interface, not a shortcut layer bolted on top. Everything
+              (navigation, view switching, launching, splitting, the palette) is reachable by key,
+              and the map comes from <code class="font-mono text-amber">~/.codrift/keybindings.json</code>
+              so you can rebind all of it.
+              <span class="text-fg">Try it here: press 1, 2 or 3.</span>
+            </p>
+
+            <div class="mt-8" data-viewer>
+              <div class="mb-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="Codrift views">
+                <button
+                  type="button"
+                  role="tab"
+                  data-view="context"
+                  aria-selected="true"
+                  class="flex items-center gap-2 rounded-md border border-rule px-3 py-1.5 font-mono text-[0.8125rem] text-muted aria-selected:border-amber aria-selected:bg-amber/12 aria-selected:text-fg"
+                >
+                  <span class="keycap">1</span> Context
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  data-view="diff"
+                  aria-selected="false"
+                  class="flex items-center gap-2 rounded-md border border-rule px-3 py-1.5 font-mono text-[0.8125rem] text-muted aria-selected:border-amber aria-selected:bg-amber/12 aria-selected:text-fg"
+                >
+                  <span class="keycap">2</span> Diff
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  data-view="tree"
+                  aria-selected="false"
+                  class="flex items-center gap-2 rounded-md border border-rule px-3 py-1.5 font-mono text-[0.8125rem] text-muted aria-selected:border-amber aria-selected:bg-amber/12 aria-selected:text-fg"
+                >
+                  <span class="keycap">3</span> Tree
+                </button>
+                <span class="ml-auto font-mono text-[0.6875rem] text-faint" data-viewer-caption></span>
+              </div>
+              <img
+                data-viewer-img
+                src="/images/context.webp"
+                alt="Codrift context view: the initiative brief rendered as markdown beside the directory list"
+                width="2000"
+                height="1225"
+                class="shot"
+                loading="lazy"
+              />
+            </div>
+
+            <div class="mt-12 grid gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+              <div>
+                <p class="t-tag mb-3">move</p>
+                <dl class="space-y-1.5 font-mono text-[0.8125rem]">
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">j</span> <span class="keycap">k</span></dt><dd class="text-muted">sidebar cursor</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">←</span> <span class="keycap">→</span></dt><dd class="text-muted">collapse / expand</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⇥</span></dt><dd class="text-muted">sidebar ⇄ pane</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">/</span></dt><dd class="text-muted">fuzzy file filter</dd></div>
+                </dl>
+              </div>
+              <div>
+                <p class="t-tag mb-3">work</p>
+                <dl class="space-y-1.5 font-mono text-[0.8125rem]">
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">s</span></dt><dd class="text-muted">start an agent</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">t</span></dt><dd class="text-muted">start a shell</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">o</span></dt><dd class="text-muted">start orchestration</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">b</span></dt><dd class="text-muted">branch the directories</dd></div>
+                </dl>
+              </div>
+              <div>
+                <p class="t-tag mb-3">window</p>
+                <dl class="space-y-1.5 font-mono text-[0.8125rem]">
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⌘D</span></dt><dd class="text-muted">split side by side</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⌘⇧D</span></dt><dd class="text-muted">split stacked</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⌃B</span></dt><dd class="text-muted">collapse sidebar</dd></div>
+                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⌃P</span></dt><dd class="text-muted">command palette</dd></div>
+                </dl>
+              </div>
+            </div>
+
+            <figure class="mt-10">
+              <img
+                src="/images/command-palette.webp"
+                alt="Codrift command palette listing every action with its current key binding"
+                width="2000"
+                height="1225"
+                class="shot"
+                loading="lazy"
+              />
+              <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">
+                <span class="keycap">⌃P</span> lists every action, with whatever key it is bound to right now.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ 07 · SURFACE ═════════════════════════════════════════════════ -->
+    <section class="rule-t">
+      <div class="mx-auto max-w-[86rem] px-5 py-20 lg:px-8 lg:py-28">
+        <div class="channel">
+          <p class="channel-id">07 / surface</p>
+          <div>
+            <h2 class="t-section max-w-[17ch]">Sixty-six themes, and the one you already use.</h2>
+            <p class="t-body mt-6">
+              Codrift reads VS Code theme JSON. Sixty-six are bundled; drop any other into
+              <code class="font-mono text-amber">~/.codrift/themes</code> and it shows up in the
+              picker. Theme and font apply live to the whole surface, terminals included, so the
+              agent panes match everything else on your screen.
+            </p>
+
+            <div class="mt-10 grid gap-6 lg:grid-cols-3">
+              <figure>
+                <img src="/images/themes.webp" alt="Codrift theme picker filtering sixty-six bundled VS Code themes" width="2000" height="1225" class="shot" loading="lazy" />
+                <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">Live preview with <span class="keycap">↑</span><span class="keycap">↓</span>, <span class="keycap">⏎</span> keeps, <span class="keycap">esc</span> reverts.</figcaption>
+              </figure>
+              <figure>
+                <img src="/images/fonts.webp" alt="Codrift font picker showing installed monospace families and a size stepper" width="2000" height="1225" class="shot" loading="lazy" />
+                <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">Your installed monospace families, with a size stepper.</figcaption>
+              </figure>
+              <figure>
+                <img src="/images/theme-latte.webp" alt="The same Codrift tree view rendered in the light Catppuccin Latte theme" width="2000" height="1225" class="shot" loading="lazy" />
+                <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">Same window, Catppuccin Latte. Light works too.</figcaption>
+              </figure>
+            </div>
+
+            <div class="mt-12 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-12">
+              <div>
+                <h3 class="font-display text-[1.0625rem] font-semibold">Pull the work in, don’t retype it</h3>
+                <p class="t-body mt-2">
+                  Connect GitHub, GitHub Projects, GitLab, Linear or Linear Projects and import an
+                  issue straight into an initiative’s context folder, where every agent picks it up
+                  automatically through <code class="font-mono text-amber">--add-dir</code>.
+                </p>
+                <h3 class="mt-8 font-display text-[1.0625rem] font-semibold">Browse and edit without leaving</h3>
+                <p class="t-body mt-2">
+                  <span class="keycap">3</span> opens a gitignore-aware file tree with
+                  syntax-highlighted previews, a fuzzy filter on <span class="keycap">/</span>, and a
+                  CodeMirror editor with vim bindings on <span class="keycap">e</span>.
+                </p>
+              </div>
+              <figure>
+                <img src="/images/tree-filter.webp" alt="Fuzzy file filter in the Codrift tree view narrowing to three rate limit files" width="2000" height="1225" class="shot" loading="lazy" />
+                <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">Typing <span class="text-muted">ratlim</span> finds <span class="text-muted">lib/atlas/rate_limit.ex</span>.</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ 08 · INSTALL ═════════════════════════════════════════════════ -->
+    <section id="install" class="rule-t bg-panel/40">
+      <div class="mx-auto max-w-[86rem] px-5 py-20 lg:px-8 lg:py-28">
+        <div class="channel">
+          <p class="channel-id">08 / install</p>
+          <div>
+            <h2 class="t-section max-w-[14ch]">One binary. No runtime to install.</h2>
+            <p class="t-body mt-6">
+              A native desktop app for macOS and Linux. No Node, no Erlang, no Ruby on your machine
+              because the runtime ships inside. Bring your own agent CLIs and Codrift drives them.
+            </p>
+
+            <div class="mt-10 grid gap-3 sm:grid-cols-2 lg:max-w-3xl">
+              <button class="cmd" type="button" data-copy="brew tap filipecabaco/codrift https://github.com/filipecabaco/codrift">
+                <span class="text-amber">$</span>
+                <span class="truncate">brew tap filipecabaco/codrift …</span>
+                <span class="ml-auto text-faint" aria-hidden="true">⧉</span>
+                <span class="sr-only">Copy Homebrew tap command</span>
+              </button>
+              <button class="cmd" type="button" data-copy="brew install --cask codrift">
+                <span class="text-amber">$</span>
+                <span>brew install --cask codrift</span>
+                <span class="ml-auto text-faint" aria-hidden="true">⧉</span>
+                <span class="sr-only">Copy Homebrew install command</span>
+              </button>
+              <a
+                href="https://github.com/filipecabaco/codrift/releases/latest"
+                class="flex items-center gap-3 rounded-lg border border-rule bg-panel px-4 py-3 text-sm transition-colors hover:border-amber"
+              >
+                <span class="font-mono text-amber">↓</span>
+                <span>macOS</span>
+                <span class="ml-auto font-mono text-xs text-faint">.dmg</span>
+              </a>
+              <a
+                href="https://github.com/filipecabaco/codrift/releases/latest"
+                class="flex items-center gap-3 rounded-lg border border-rule bg-panel px-4 py-3 text-sm transition-colors hover:border-amber"
+              >
+                <span class="font-mono text-amber">↓</span>
+                <span>Linux</span>
+                <span class="ml-auto font-mono text-xs text-faint">.AppImage / .deb</span>
+              </a>
+            </div>
+
+            <p class="mt-6 font-mono text-[0.75rem] leading-relaxed text-faint lg:max-w-3xl">
+              Not yet code-signed or notarized. The cask strips the download quarantine; if macOS
+              still objects, right-click → Open once. Then
+              <span class="text-muted">codrift mcp install</span> registers the MCP server with
+              Claude Code.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ FOOTER ═══════════════════════════════════════════════════════ -->
+    <footer class="rule-t">
+      <div class="mx-auto flex max-w-[86rem] flex-wrap items-center gap-x-8 gap-y-4 px-5 py-10 lg:px-8">
+        <a href="/" class="flex items-center gap-2.5" aria-label="Codrift home">
+          <svg width="18" height="18" viewBox="0 0 512 512" aria-hidden="true">
+            <g stroke="oklch(75% 0.17 62)" fill="none" stroke-width="54" stroke-linecap="round">
+              <path d="M94 326 L163.1 170.7" /><path d="M202 352 L290.7 152.9" /><path d="M310 378 L418.2 135" />
+            </g>
+          </svg>
+          <span class="font-display text-sm font-bold text-muted" style="font-stretch: 118%">codrift</span>
+        </a>
+        <nav class="flex flex-wrap gap-6 font-mono text-[0.75rem] text-faint">
+          <a href="https://github.com/filipecabaco/codrift" class="hover:text-muted">GitHub</a>
+          <a href="https://github.com/filipecabaco/codrift/blob/main/README.md" class="hover:text-muted">Docs</a>
+          <a href="https://github.com/filipecabaco/codrift/blob/main/docs/keyboard.md" class="hover:text-muted">Keyboard</a>
+          <a href="https://github.com/filipecabaco/codrift/issues" class="hover:text-muted">Issues</a>
+        </nav>
+        <p class="ml-auto font-mono text-[0.75rem] text-faint">Elixir · Rust · Svelte</p>
       </div>
     </footer>
 
     <script>
-      function copyText(srcId, toastId) {
-        const text = document.getElementById(srcId).textContent.trim();
-        navigator.clipboard.writeText(text).then(() => {
-          const toast = document.getElementById(toastId);
-          toast.style.opacity = '1';
-          setTimeout(() => { toast.style.opacity = '0'; }, 1500);
+      for (const el of document.querySelectorAll("[data-copy]")) {
+        el.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(el.dataset.copy);
+          } catch {
+            return;
+          }
+          const mark = el.querySelector("[aria-hidden]");
+          if (!mark) return;
+          const was = mark.textContent;
+          mark.textContent = "copied";
+          mark.classList.add("text-amber");
+          setTimeout(() => {
+            mark.textContent = was;
+            mark.classList.remove("text-amber");
+          }, 1400);
         });
       }
+
+      // The app's own 1/2/3 keys, on the page.
+      (() => {
+        const root = document.querySelector("[data-viewer]");
+        if (!root) return;
+        const img = root.querySelector("[data-viewer-img]");
+        const caption = root.querySelector("[data-viewer-caption]");
+        const tabs = [...root.querySelectorAll("[data-view]")];
+        const VIEWS = {
+          context: {
+            src: "/images/context.webp",
+            alt: "Codrift context view: the initiative brief rendered as markdown beside the directory list",
+            caption: "initiative.md, orchestration.md, notes and memory",
+          },
+          diff: {
+            src: "/images/diff-view.webp",
+            alt: "Codrift diff view showing syntax-highlighted additions and deletions across the initiative",
+            caption: "every changed file, every directory",
+          },
+          tree: {
+            src: "/images/tree-view.webp",
+            alt: "Codrift tree view with a file tree on the left and a syntax-highlighted preview on the right",
+            caption: "gitignore-aware tree with previews",
+          },
+        };
+        const show = (id) => {
+          const v = VIEWS[id];
+          if (!v) return;
+          img.src = v.src;
+          img.alt = v.alt;
+          caption.textContent = v.caption;
+          for (const t of tabs) t.setAttribute("aria-selected", String(t.dataset.view === id));
+        };
+        for (const t of tabs) t.addEventListener("click", () => show(t.dataset.view));
+        addEventListener("keydown", (e) => {
+          if (e.metaKey || e.ctrlKey || e.altKey) return;
+          const target = e.target;
+          if (target instanceof HTMLElement && target.closest("input, textarea, [contenteditable]")) return;
+          const id = { 1: "context", 2: "diff", 3: "tree" }[e.key];
+          if (!id) return;
+          show(id);
+          root.scrollIntoView({ block: "center", behavior: "smooth" });
+        });
+        show("context");
+      })();
+
+      (() => {
+        const host = document.getElementById("rig-lanes");
+        const summary = document.getElementById("rig-summary");
+        if (!host) return;
+
+        const STATES = {
+          running: ["running", "var(--color-ok)"],
+          waiting: ["needs input", "var(--color-amber)"],
+          idle: ["idle", "var(--color-muted)"],
+          done: ["done", "var(--color-done)"],
+        };
+
+        const LANES = [
+          {
+            agent: "claude",
+            dir: "atlas-api",
+            steps: [
+              ["running", "Read lib/atlas/rate_limit.ex"],
+              ["running", "Read lib/atlas/redis.ex"],
+              ["running", "Bash  rg -n 'CL.THROTTLE' lib/"],
+              ["running", "14 failure modes traced from the fallback"],
+              ["running", "Write docs/failure-modes.md"],
+              ["running", "Edit test/atlas/rate_limit_test.exs  +58"],
+              ["done", "Worked for 3m 27s"],
+            ],
+          },
+          {
+            agent: "claude",
+            dir: "atlas-edge",
+            steps: [
+              ["running", "Read proxy/limiter.go"],
+              ["running", "Retry-After is whole seconds (RFC 9110 §10.2.3)"],
+              ["running", "Edit proxy/limiter.go  +21 −3"],
+              ["waiting", "Do you want to make this edit to limiter.go?"],
+              ["running", "go test ./proxy -run Jitter"],
+              ["done", "ok  github.com/atlas/edge/proxy  0.31s"],
+            ],
+          },
+          {
+            agent: "claude",
+            dir: "atlas-dashboard",
+            steps: [
+              ["running", "Read src/lib/quota.ts"],
+              ["running", "Grep x-ratelimit-scope   3 hits"],
+              ["waiting", "How does /v1/usage carry both scopes' quotas?"],
+              ["running", "Edit src/routes/usage/+page.svelte  +34 −7"],
+              ["running", "vitest run src/lib/quota.test.ts"],
+              ["done", "3 files changed, 12 tests passing"],
+            ],
+          },
+          {
+            agent: "codex",
+            dir: "atlas-edge",
+            steps: [
+              ["running", "reap goroutine: keys older than window deleted"],
+              ["running", "memory_add decision  #5"],
+              ["idle", "waiting on merge order: edge → api → dashboard"],
+            ],
+          },
+        ];
+
+        const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+        const lanes = LANES.map((lane, i) => {
+          const el = document.createElement("div");
+          el.className = "flex items-start gap-3 px-4 py-2.5";
+          el.innerHTML =
+            '<span class="dot mt-[0.42rem]"></span>' +
+            '<div class="min-w-0 flex-1">' +
+            '<p class="font-mono text-[0.6875rem] text-faint">' +
+            '<span class="text-muted">' + lane.agent + "</span> · " + lane.dir +
+            "</p>" +
+            '<p class="mt-0.5 truncate font-mono text-[0.75rem] text-fg" data-line></p>' +
+            "</div>" +
+            '<span class="mt-[0.15rem] shrink-0 font-mono text-[0.625rem] uppercase tracking-[0.1em]" data-state></span>';
+          host.appendChild(el);
+          return {
+            ...lane,
+            dot: el.querySelector(".dot"),
+            line: el.querySelector("[data-line]"),
+            state: el.querySelector("[data-state]"),
+            at: reduced ? lane.steps.length - 1 : 0,
+          };
+        });
+
+        function paint(lane) {
+          const [state, text] = lane.steps[lane.at];
+          const [label, color] = STATES[state];
+          lane.dot.style.background = color;
+          lane.state.textContent = label;
+          lane.state.style.color = color;
+          lane.line.textContent = text;
+          lane.line.classList.toggle("caret", state === "running" && !reduced);
+        }
+
+        function refreshSummary() {
+          const waiting = lanes.filter((l) => l.steps[l.at][0] === "waiting").length;
+          summary.textContent = waiting ? waiting + " waiting" : lanes.length + " agents";
+          summary.style.color = waiting ? "var(--color-amber)" : "";
+        }
+
+        lanes.forEach(paint);
+        refreshSummary();
+        if (reduced) return;
+
+        // Independent clocks per lane, so the panel never marches in step.
+        lanes.forEach((lane, i) => {
+          const tick = () => {
+            lane.at = (lane.at + 1) % lane.steps.length;
+            paint(lane);
+            refreshSummary();
+            setTimeout(tick, 1900 + i * 430 + (lane.at % 3) * 520);
+          };
+          setTimeout(tick, 900 + i * 620);
+        });
+      })();
     </script>
   </body>
 </html>

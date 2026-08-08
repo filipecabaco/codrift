@@ -81,13 +81,25 @@
     // Scope to the active pane so focus lands on the right terminal when split.
     return document.querySelector(`#pane-${activePane} .xterm-helper-textarea`);
   }
+  // Null means the view has nothing focusable, so ⇥ stays on the sidebar.
+  function mainFocusTarget(): HTMLElement | null {
+    if (active.tab === "tree") {
+      return document.querySelector(`#pane-${activePane} [data-tree-pane]`);
+    }
+    return active.agentId ? termTextarea() : null;
+  }
   function focusMain() {
     paneFocus = "main";
-    requestAnimationFrame(() => termTextarea()?.focus());
+    requestAnimationFrame(() => mainFocusTarget()?.focus());
   }
   function focusSidebar() {
     paneFocus = "sidebar";
     (document.activeElement as HTMLElement | null)?.blur?.();
+  }
+  function setTab(tab: PaneView["tab"]) {
+    active.tab = tab;
+    if (tab === "tree") focusMain();
+    else focusSidebar();
   }
 
   type Modal =
@@ -348,14 +360,14 @@
     if (modal) modal = null;
     switch (id) {
       case "context_mode":
-        active.tab = "context";
+        setTab("context");
         break;
       case "diff_mode":
       case "diff_all_files":
-        active.tab = "diff";
+        setTab("diff");
         break;
       case "tree_mode":
-        active.tab = "tree";
+        setTab("tree");
         break;
       case "navigate_down":
         moveCursor(1);
@@ -587,7 +599,7 @@
       e.preventDefault();
       e.stopPropagation();
       if (paneFocus === "main") focusSidebar();
-      else if (active.agentId && active.tab === "context") focusMain();
+      else if (mainFocusTarget()) focusMain();
       return;
     }
 
@@ -622,7 +634,8 @@
       return [{ spec: "⇥", label: "Sidebar" }, palette];
     }
     const hints = [{ spec: "↑↓", label: "Move" }];
-    if (active.agentId && active.tab === "context") hints.push({ spec: "⇥", label: "Terminal" });
+    if (active.tab === "tree") hints.push({ spec: "⇥", label: "Sidebar" }, { spec: "/", label: "Filter files" });
+    else if (active.agentId && active.tab === "context") hints.push({ spec: "⇥", label: "Terminal" });
     if (ws.initiatives.length === 0) hints.push({ spec: k("new_initiative"), label: "New initiative" });
     else hints.push({ spec: k("start_agent"), label: "Start agent" }, { spec: k("add_dir"), label: "Add dir" });
     if (selectedInitiative?.dirs.some((d) => d.git && !d.branch)) {
@@ -695,7 +708,7 @@
             active.tab === t.id ? "border-border bg-canvas text-fg" : "border-transparent text-muted hover:text-fg",
           ]}
           aria-current={active.tab === t.id ? "page" : undefined}
-          onclick={() => (active.tab = t.id)}
+          onclick={() => setTab(t.id)}
         >
           {t.label}
         </button>
@@ -703,8 +716,10 @@
     </nav>
     <!-- Announced, so feedback isn't purely visual. -->
     <span class="text-[11px] text-fg/70" role="status" aria-live="polite">{status ?? ""}</span>
-    {#if active.agentId && active.tab === "context"}
-      <span class="text-[11px] text-fg/70">⇥ focus: {paneFocus === "main" ? "terminal" : "sidebar"}</span>
+    {#if active.tab === "tree" || (active.agentId && active.tab === "context")}
+      <span class="text-[11px] text-fg/70">
+        ⇥ focus: {paneFocus === "sidebar" ? "sidebar" : active.tab === "tree" ? "files" : "terminal"}
+      </span>
     {/if}
     <button
       class="ml-auto rounded-md p-1 text-muted hover:text-fg"
@@ -869,6 +884,7 @@
             initiativeId={init.id}
             revision={fileRevision}
             bind:selectedPath={view.treeSelectedPath}
+            onLeave={focusSidebar}
             onEdit={(p) => {
               activePane = idx;
               editing = { path: p };

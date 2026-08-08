@@ -66,6 +66,19 @@ defmodule Codrift.BranchTest do
       refute Branch.current(repo) == "codrift/real-1"
     end
 
+    test "does not count codrift's own .claude/ files as uncommitted work", %{tmp_dir: tmp_dir} do
+      repo = GitRepo.init!(Path.join(tmp_dir, "repo"))
+      File.mkdir_p!(Path.join(repo, ".claude"))
+
+      File.write!(
+        Path.join(repo, ".claude/settings.json"),
+        ~s({"permissions":{"allow":["Read"]}})
+      )
+
+      assert {:ok, "codrift/real-1"} = Branch.ensure(repo, "codrift/real-1")
+      assert Branch.current(repo) == "codrift/real-1"
+    end
+
     test "rejects a directory that is not a repository", %{tmp_dir: tmp_dir} do
       plain = Path.join(tmp_dir, "plain")
       File.mkdir_p!(plain)

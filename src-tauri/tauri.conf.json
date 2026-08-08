@@ -38,7 +38,7 @@
     ],
     "targets": "all"
   },
-  "identifier": "sh.codrift.app",
+  "identifier": "app.codrift.desktop",
   "productName": "Codrift",
   "version": "0.0.1"
 }

@@ -1,0 +1,15 @@
+.git
+.gitignore
+.expert
+_build
+deps
+doc
+cover
+tmp
+.elixir_ls
+.elixir-tools
+*.ez
+erl_crash.dump
+fly.toml
+Dockerfile
+.dockerignore

@@ -279,3 +279,18 @@ jobs:
 
       - name: Compile Tauri shell
         run: cargo build --release --manifest-path src-tauri/Cargo.toml
+
+  # ── 5. Website ───────────────────────────────────────────────────────────────
+  website_install_script:
+    name: Website install.sh in sync
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare install.sh with the copy served by the website
+        run: |
+          if ! diff -u install.sh website/priv/static/install.sh; then
+            echo "::error file=website/priv/static/install.sh::Out of sync with install.sh — run 'cp install.sh website/priv/static/install.sh' and commit."
+            exit 1
+          fi

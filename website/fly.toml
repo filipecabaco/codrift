@@ -1,0 +1,23 @@
+app = "codrift"
+primary_region = "lhr"
+
+[build]
+
+[http_service]
+  internal_port = 4001
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  path = "/"
+  timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

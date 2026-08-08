@@ -30,6 +30,7 @@ erl_crash.dump
 # The diff.html / term.html prototypes are hand-written and stay tracked.
 /priv/static/index.html
 /priv/static/assets/
+/priv/static/favicon.svg
 
 # Tauri Rust build output
 /assets/src-tauri/target/
