@@ -1,0 +1,64 @@
+name: Cask
+
+# Guards the Homebrew tap this repo doubles as (Casks/codrift.rb).
+#
+# Two failures got past CI before this existed:
+#
+#   * a release was deleted and re-cut, so the same v<version> URLs began
+#     serving different bytes and every `brew install` died with "Cask reports
+#     different checksum". The release workflow had already written a correct
+#     cask, then the assets moved out from under it.
+#   * `depends_on macos: ">= :ventura"` shipped for a whole release, printing a
+#     deprecation warning on every brew invocation.
+#
+# The scheduled run is the point of the first job: drift arrives after the merge
+# that would have tested it, so a daily fetch is the only thing that catches it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Casks/**"
+      - ".github/scripts/verify-cask.sh"
+      - ".github/workflows/cask.yml"
+  pull_request:
+    paths:
+      - "Casks/**"
+      - ".github/scripts/verify-cask.sh"
+      - ".github/workflows/cask.yml"
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cask-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checksums:
+    name: Cask matches the published release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download both DMGs and compare against the cask
+        run: bash .github/scripts/verify-cask.sh Casks/codrift.rb
+
+  style:
+    name: Cask style
+    # `brew style` needs the Homebrew cask cops, which only load on macOS.
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: brew style
+        run: |
+          if ! brew style Casks/codrift.rb; then
+            echo "::error file=Casks/codrift.rb::run 'brew style --fix Casks/codrift.rb' and commit the result"
+            exit 1
+          fi

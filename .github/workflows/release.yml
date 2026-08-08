@@ -399,6 +399,13 @@ jobs:
           PY
           git --no-pager diff -- Casks/codrift.rb || true
 
+      # The step above trusts the .sha256 sidecars this same run published. This
+      # one re-checks the rewritten cask by downloading both DMGs over the very
+      # URL Homebrew will use, so a bad sidecar or a half-uploaded asset fails
+      # here instead of in a user's `brew install`.
+      - name: Verify the rewritten cask against the published DMGs
+        run: bash .github/scripts/verify-cask.sh Casks/codrift.rb
+
       - name: Commit and push
         run: |
           if git diff --quiet Casks/codrift.rb; then

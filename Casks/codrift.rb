@@ -7,7 +7,6 @@ cask "codrift" do
     url "https://github.com/filipecabaco/codrift/releases/download/v#{version}/Codrift_#{version}_aarch64.dmg",
         verified: "github.com/filipecabaco/codrift/"
   end
-
   on_intel do
     sha256 "d9d0223674dc6a0425b9ea4f778ad8ca47e2f5aee7745e7ee6ba50ecce4c9590"
 
@@ -24,7 +23,7 @@ cask "codrift" do
     strategy :github_latest
   end
 
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Codrift.app"
 
