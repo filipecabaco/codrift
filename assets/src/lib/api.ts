@@ -86,6 +86,35 @@ export function listAgentProfiles(): Promise<AgentProfile[]> {
   return rpc<AgentProfile[]>("list_agent_profiles");
 }
 
+// The same profile with the env it sets — what the Profiles view edits.
+export type AgentProfileConfig = {
+  name: string;
+  adapter: string;
+  env: Record<string, string>;
+};
+
+export async function getAgentProfiles(): Promise<AgentProfileConfig[]> {
+  const res = await rpc<{ profiles: AgentProfileConfig[] }>("get_agent_profiles");
+  return res.profiles;
+}
+
+export function saveAgentProfile(
+  profile: AgentProfileConfig & { previous_name?: string },
+): Promise<AgentProfileConfig> {
+  return rpc<AgentProfileConfig>("save_agent_profile", { ...profile });
+}
+
+export function deleteAgentProfile(name: string): Promise<unknown> {
+  return rpc("delete_agent_profile", { name });
+}
+
+// The variable each tool reads for "which account/config folder am I?", used to
+// prefill a new profile. Adapters without a documented one start with no rows.
+export const PROFILE_CONFIG_VAR: Record<string, string> = {
+  claude: "CLAUDE_CONFIG_DIR",
+  codex: "CODEX_HOME",
+};
+
 // ── Integrations / OAuth ────────────────────────────────────────────────────
 
 export type OAuthFlow = "pkce_browser" | "device_flow";

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
-  import { ArrowPath, CommandLine, Link, Swatch } from "@steeze-ui/heroicons";
+  import { ArrowPath, CommandLine, Identification, Link, Swatch } from "@steeze-ui/heroicons";
   import { rpc } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
   import { workspace as ws, type Row } from "$lib/workspace.svelte";
@@ -28,6 +28,7 @@
   import Integrations from "$lib/Integrations.svelte";
   import NewInitiative from "$lib/NewInitiative.svelte";
   import Appearance from "$lib/Appearance.svelte";
+  import Profiles from "$lib/Profiles.svelte";
   import { initTheme, themeState } from "$lib/theme.svelte";
   import { initFonts } from "$lib/fonts.svelte";
 
@@ -110,6 +111,7 @@
     | { kind: "integrations" }
     | { kind: "new_initiative" }
     | { kind: "appearance" }
+    | { kind: "profiles" }
     | null;
   let modal = $state<Modal>(null);
 
@@ -430,6 +432,9 @@
       case "appearance":
         modal = { kind: "appearance" };
         break;
+      case "agent_profiles":
+        modal = { kind: "profiles" };
+        break;
       case "quit":
         toast("Quit is handled by the window — nothing to do here.");
         break;
@@ -731,6 +736,14 @@
     </button>
     <button
       class="rounded-md p-1 text-muted hover:text-fg"
+      title="Launch profiles — run agents under different accounts"
+      onclick={() => (modal = { kind: "profiles" })}
+      aria-label="Launch profiles"
+    >
+      <Icon src={Identification} class="size-4" />
+    </button>
+    <button
+      class="rounded-md p-1 text-muted hover:text-fg"
       title="Integrations"
       onclick={() => (modal = { kind: "integrations" })}
       aria-label="Integrations"
@@ -917,6 +930,8 @@
 
 {#if modal?.kind === "appearance"}
   <Appearance onClose={() => (modal = null)} />
+{:else if modal?.kind === "profiles"}
+  <Profiles onClose={() => (modal = null)} onChanged={() => ws.refreshProfiles()} />
 {:else if modal?.kind === "integrations"}
   <Integrations onClose={() => (modal = null)} />
 {:else if modal?.kind === "new_initiative"}

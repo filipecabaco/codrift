@@ -119,6 +119,48 @@ defmodule Codrift.Core do
     {:ok, profiles}
   end
 
+  # The launch-facing list above stays deliberately thin (name + adapter): it is
+  # an MCP tool, so its result lands in agent context. This one is the config
+  # view's, and carries the env each profile sets.
+  def call("get_agent_profiles", _args) do
+    profiles =
+      Settings.profiles()
+      |> Enum.map(fn {name, p} ->
+        %{
+          name: name,
+          adapter: Map.get(p, "adapter"),
+          env: p |> Map.get("env", %{}) |> stringify_env()
+        }
+      end)
+      |> Enum.sort_by(& &1.name)
+
+    {:ok, %{"profiles" => profiles}}
+  end
+
+  # Upsert. `previous_name` (optional) is the profile being renamed, dropped
+  # only once the new one validates — a rejected rename leaves the original in
+  # place rather than deleting a working profile.
+  def call("save_agent_profile", %{"name" => name, "adapter" => adapter} = args) do
+    with {:ok, name} <- validate_profile_name(name),
+         {:ok, adapter} <- validate_profile_adapter(adapter),
+         {:ok, env} <- validate_profile_env(Map.get(args, "env", %{})) do
+      case Map.get(args, "previous_name") do
+        prev when is_binary(prev) and prev != "" and prev != name -> Settings.delete_profile(prev)
+        _ -> :ok
+      end
+
+      Settings.put_profile(name, adapter, env)
+      {:ok, %{"name" => name, "adapter" => adapter, "env" => env}}
+    end
+  end
+
+  def call("delete_agent_profile", %{"name" => name}) when is_binary(name) do
+    case Settings.delete_profile(name) do
+      :ok -> {:ok, %{"deleted" => name}}
+      {:error, :not_found} -> {:error, "unknown launch profile: #{name}"}
+    end
+  end
+
   def call("send_to_agent", %{"agent_id" => agent_id, "input" => input}) do
     case Codrift.AgentSupervisor.find_agent(agent_id) do
       {:ok, pid} ->
@@ -715,6 +757,68 @@ defmodule Codrift.Core do
         {:error, "unknown launch profile: #{profile_name}"}
     end
   end
+
+  # A profile name shares the Launch dropdown with the base adapters and is
+  # matched against them by name, so one called "claude" would silently shadow
+  # the real adapter. Keep it identifier-shaped: it also shows as a badge and
+  # travels as a `--profile` argument.
+  defp validate_profile_name(name) when is_binary(name) do
+    trimmed = String.trim(name)
+
+    cond do
+      trimmed == "" ->
+        {:error, "profile name can't be empty"}
+
+      not Regex.match?(~r/^[\w.-]+$/u, trimmed) ->
+        {:error, "profile name may only contain letters, digits, '-', '_' and '.'"}
+
+      known_adapter?(trimmed) ->
+        {:error, "'#{trimmed}' is a base adapter — pick a different profile name"}
+
+      true ->
+        {:ok, trimmed}
+    end
+  end
+
+  defp validate_profile_name(_), do: {:error, "profile name must be a string"}
+
+  defp validate_profile_adapter(adapter) when is_binary(adapter) do
+    if known_adapter?(adapter),
+      do: {:ok, adapter},
+      else: {:error, "unknown adapter: #{adapter}"}
+  end
+
+  defp validate_profile_adapter(_), do: {:error, "adapter must be a string"}
+
+  defp known_adapter?(name), do: not is_nil(Codrift.Agent.module_from_name(name))
+
+  # Env is injected into a spawned process, so keys have to be real variable
+  # names and values plain strings — a map or list here would blow up at spawn
+  # time, far from the form that accepted it.
+  defp validate_profile_env(env) when is_map(env) do
+    Enum.reduce_while(env, {:ok, %{}}, fn {key, value}, {:ok, acc} ->
+      key = key |> to_string() |> String.trim()
+
+      cond do
+        not Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*$/, key) ->
+          {:halt, {:error, "invalid environment variable name: #{inspect(key)}"}}
+
+        not is_binary(value) ->
+          {:halt, {:error, "value for #{key} must be a string"}}
+
+        true ->
+          {:cont, {:ok, Map.put(acc, key, value)}}
+      end
+    end)
+  end
+
+  defp validate_profile_env(_), do: {:error, "env must be an object of NAME → value"}
+
+  defp stringify_env(env) when is_map(env) do
+    Map.new(env, fn {k, v} -> {to_string(k), to_string(v)} end)
+  end
+
+  defp stringify_env(_), do: %{}
 
   defp expand_env(env) when is_map(env) do
     Enum.map(env, fn {k, v} -> {to_string(k), expand_value(to_string(v))} end)

@@ -325,6 +325,9 @@
   .min-w-0 {
     min-width: calc(var(--spacing) * 0);
   }
+  .min-w-\[42rem\] {
+    min-width: 42rem;
+  }
   .flex-1 {
     flex: 1;
   }
@@ -333,6 +336,9 @@
   }
   .transform {
     transform: var(--tw-rotate-x,) var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,);
+  }
+  .grid-cols-\[minmax\(0\,1fr\)\] {
+    grid-template-columns: minmax(0,1fr);
   }
   .flex-wrap {
     flex-wrap: wrap;
@@ -920,7 +926,7 @@
   .channel {
     display: grid;
     gap: clamp(1.5rem, 4vw, 3.5rem);
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   @media (min-width: 1024px) {
     .channel {
@@ -969,14 +975,20 @@
     align-items: center;
     gap: 0.75rem;
     position: relative;
+    max-width: 100%;
     padding: 0.7rem 0.95rem;
     border: 1px solid var(--color-rule);
     background: var(--color-panel);
     border-radius: 8px;
     font-family: var(--font-mono);
     font-size: 0.8125rem;
+    text-align: left;
     cursor: pointer;
     transition: border-color 180ms var(--ease-out-quint);
+  }
+  .cmd > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .cmd:hover {
     border-color: var(--color-amber);

@@ -112,10 +112,13 @@
   }
 
   /* Section index lives in the grid's left column, not above the heading. */
+  /* minmax(0,1fr), not 1fr: a 1fr track floors at min-content, so one long
+     unbreakable string (a shell command, a URL) widens the track past the
+     phone's viewport and takes the whole page's horizontal scroll with it. */
   .channel {
     display: grid;
     gap: clamp(1.5rem, 4vw, 3.5rem);
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   @media (min-width: 1024px) {
     .channel {
@@ -163,19 +166,29 @@
     color: var(--color-fg);
   }
 
+  /* A shell command is the longest unbreakable string on the page. On a phone
+     it is wider than the viewport, and as a flex item it refuses to shrink —
+     which used to push the whole hero column past the screen edge. So: never
+     wider than its parent, and let the command itself wrap instead. */
   .cmd {
     display: flex;
     align-items: center;
     gap: 0.75rem;
     position: relative;
+    max-width: 100%;
     padding: 0.7rem 0.95rem;
     border: 1px solid var(--color-rule);
     background: var(--color-panel);
     border-radius: 8px;
     font-family: var(--font-mono);
     font-size: 0.8125rem;
+    text-align: left;
     cursor: pointer;
     transition: border-color 180ms var(--ease-out-quint);
+  }
+  .cmd > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .cmd:hover {
     border-color: var(--color-amber);

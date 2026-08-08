@@ -24,7 +24,8 @@ export type ActionId =
   | "palette"
   | "start_orchestration"
   | "branch_initiative"
-  | "appearance";
+  | "appearance"
+  | "agent_profiles";
 
 export const ACTION_LABELS: Record<ActionId, string> = {
   navigate_down: "Navigate down",
@@ -50,6 +51,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   start_orchestration: "Start orchestration",
   branch_initiative: "Branch git directories for this initiative",
   appearance: "Appearance (theme & font)",
+  agent_profiles: "Launch profiles (accounts & env)",
 };
 
 // Actions the desktop UI actually performs. The keymap itself is wider — it is
@@ -75,6 +77,7 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "diff_all_files",
   "toggle_sidebar",
   "appearance",
+  "agent_profiles",
   "palette",
   "quit",
 ];

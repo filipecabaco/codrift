@@ -1,7 +1,14 @@
 // The sidebar's data model: initiatives, their agents, expansion state, and the
 // flat cursor-navigable row list derived from them. App.svelte owns interaction.
 
-import { rpc, listAgentProfiles, type Agent, type AgentProfile, type Initiative } from "$lib/api";
+import {
+  ADAPTERS,
+  rpc,
+  listAgentProfiles,
+  type Agent,
+  type AgentProfile,
+  type Initiative,
+} from "$lib/api";
 import { connect, onAgent, onAgentStatus, type AgentInfo, type AgentStatus } from "$lib/stream";
 
 export type Row =
@@ -359,7 +366,7 @@ class Workspace {
         ),
       );
       this.agentsByInit = Object.fromEntries(entries);
-      await this.#loadProfiles();
+      await this.refreshProfiles();
     } catch (e) {
       this.error = (e as Error).message;
     } finally {
@@ -367,15 +374,22 @@ class Workspace {
     }
   }
 
-  // Profiles live in settings.json, which the user edits by hand — so a refresh
-  // has to re-read them. A failure here must not fail the whole load: the
-  // initiative list is what the sidebar needs.
-  async #loadProfiles() {
+  // Profiles live in settings.json, editable in the Profiles view or by hand —
+  // so a refresh has to re-read them. A failure here must not fail the whole
+  // load: the initiative list is what the sidebar needs.
+  async refreshProfiles() {
     try {
       this.profiles = await listAgentProfiles();
     } catch {
       this.profiles = [];
     }
+    // A profile can be renamed or deleted out from under the launch picker.
+    // Leaving the choice dangling would silently start nothing (unknown
+    // profile) on the next `s`, so fall back to the plain adapter.
+    const known =
+      (ADAPTERS as readonly string[]).includes(this.launchChoice) ||
+      this.profiles.some((p) => p.name === this.launchChoice);
+    if (!known) this.launchChoice = "claude";
   }
 
   async #ensureContextFiles(id: string) {

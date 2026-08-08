@@ -32,6 +32,36 @@ defmodule Codrift.Config.Settings do
     end
   end
 
+  @doc """
+  Creates or replaces a launch profile.
+
+  The whole profile is rewritten, so removing a variable from `env` removes it
+  from disk. Values are stored verbatim — `~` is expanded at launch, not here,
+  so the file stays readable and portable.
+  """
+  def put_profile(name, adapter, env)
+      when is_binary(name) and is_binary(adapter) and is_map(env) do
+    settings = read()
+    profiles = Map.get(settings, "profiles", %{})
+    profile = %{"adapter" => adapter, "env" => env}
+    write(Map.put(settings, "profiles", Map.put(profiles, name, profile)))
+  end
+
+  @doc "Removes a launch profile, or `{:error, :not_found}` if there was none."
+  def delete_profile(name) when is_binary(name) do
+    settings = read()
+    profiles = Map.get(settings, "profiles", %{})
+
+    case Map.pop(profiles, name) do
+      {nil, _} ->
+        {:error, :not_found}
+
+      {_removed, rest} ->
+        write(Map.put(settings, "profiles", rest))
+        :ok
+    end
+  end
+
   @doc "Returns a map of adapter name → start count."
   def adapter_start_counts do
     read() |> Map.get("adapter_starts", %{})

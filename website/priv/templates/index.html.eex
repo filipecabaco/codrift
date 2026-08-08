@@ -88,7 +88,7 @@
         </svg>
         <span class="t-display" style="font-size: clamp(3.4rem, 9vw, 7.5rem)">codrift</span>
       </h1>
-      <div class="mt-10 grid gap-10 lg:grid-cols-[minmax(0,32rem)_minmax(0,1fr)] lg:items-end lg:gap-16">
+      <div class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,32rem)_minmax(0,1fr)] lg:items-end lg:gap-16">
         <div class="rise" style="animation-delay: 160ms">
           <p class="t-lead text-fg">
             A desktop control surface for running many AI coding agents at once. Claude Code, Codex,
@@ -113,9 +113,9 @@
         <div class="rise" style="animation-delay: 240ms">
           <div class="panel overflow-hidden" id="rig" aria-hidden="true">
             <div class="flex items-center gap-3 border-b border-rule px-4 py-2">
-              <span class="t-tag">initiative</span>
-              <span class="font-mono text-[0.8125rem] text-fg">rate limits everywhere</span>
-              <span class="t-tag ml-auto" id="rig-summary">4 agents</span>
+              <span class="t-tag shrink-0">initiative</span>
+              <span class="min-w-0 flex-1 truncate font-mono text-[0.8125rem] text-fg">rate limits everywhere</span>
+              <span class="t-tag shrink-0" id="rig-summary">4 agents</span>
             </div>
             <div id="rig-lanes" class="divide-y divide-rule"></div>
           </div>
@@ -153,7 +153,7 @@
               </figcaption>
             </figure>
 
-            <div class="mt-12 grid gap-px overflow-hidden rounded-lg border border-rule bg-rule sm:grid-cols-2">
+            <div class="mt-12 grid grid-cols-[minmax(0,1fr)] gap-px overflow-hidden rounded-lg border border-rule bg-rule sm:grid-cols-2">
               <div class="bg-ink p-6">
                 <h3 class="font-display text-[1.0625rem] font-semibold">Six adapters, one launcher</h3>
                 <p class="t-body mt-2 text-[0.9375rem]">
@@ -191,7 +191,7 @@
               waiting on a human says so in words, not just colour.
             </p>
 
-            <ul class="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <ul class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <li class="rounded-lg border border-amber-ink/25 p-4">
                 <p class="font-mono text-[0.6875rem] font-bold uppercase tracking-[0.14em]">running</p>
                 <p class="mt-2 text-[0.9375rem] leading-relaxed opacity-80">Working. Leave it alone.</p>
@@ -244,9 +244,12 @@
               code and no orchestration DSL: the conductor is just an agent with tools.
             </p>
 
-            <div class="mt-10 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] lg:gap-12">
+            <div class="mt-10 grid grid-cols-[minmax(0,1fr)] items-start gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] lg:gap-12">
               <div>
-              <svg viewBox="0 0 664 332" class="w-full" role="img" aria-labelledby="orch-title orch-desc">
+              <!-- Scrolls sideways on a phone rather than scaling down: at 350px
+                   the diagram's labels render at ~5px, which is not readable. -->
+              <div class="overflow-x-auto">
+              <svg viewBox="0 0 664 332" class="w-full min-w-[42rem]" role="img" aria-labelledby="orch-title orch-desc">
                 <title id="orch-title">How orchestration works in Codrift</title>
                 <desc id="orch-desc">
                   A conductor agent calls Codrift’s MCP server over SSE. The server starts one
@@ -308,11 +311,13 @@
                   <path d="M440 202 H460 V172 H474" fill="none" stroke="oklch(46% 0.01 265)" stroke-width="1.5" marker-end="url(#ar)" opacity="0.5" />
                   <path d="M440 262 H460 V172" fill="none" stroke="oklch(46% 0.01 265)" stroke-width="1.5" opacity="0.5" />
                 </g>
-                <p class="t-body mt-8 max-w-[46ch] text-[0.9375rem]">
-                  Press <span class="keycap">o</span> to start orchestration on the selected
-                  initiative, or wire the MCP server into your own tooling with
-                  <code class="font-mono text-amber">codrift mcp install</code>.
-                </p>
+              </svg>
+              </div>
+              <p class="t-body mt-8 max-w-[46ch] text-[0.9375rem]">
+                Press <span class="keycap">o</span> to start orchestration on the selected
+                initiative, or wire the MCP server into your own tooling with
+                <code class="font-mono text-amber">codrift mcp install</code>.
+              </p>
               </div>
 
               <div>
@@ -355,7 +360,7 @@ edge -&gt; api -&gt; dashboard</code></pre>
               scroll, so review is one pass, not six.
             </p>
 
-            <div class="mt-10 grid gap-8 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-12">
+            <div class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-12">
               <svg viewBox="0 0 300 210" class="w-full max-w-sm" role="img" aria-labelledby="wt-title wt-desc">
                 <title id="wt-title">One trunk, three isolated branches</title>
                 <desc id="wt-desc">
@@ -418,7 +423,7 @@ edge -&gt; api -&gt; dashboard</code></pre>
               contradictions.
             </p>
 
-            <div class="mt-10 grid gap-8 lg:grid-cols-2 lg:gap-12">
+            <div class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-2 lg:gap-12">
               <div class="space-y-3">
                 <article class="panel p-4">
                   <p class="mb-2 flex items-center gap-2 font-mono text-[0.625rem] uppercase tracking-[0.12em]">
@@ -530,7 +535,7 @@ edge -&gt; api -&gt; dashboard</code></pre>
               />
             </div>
 
-            <div class="mt-12 grid gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+            <div class="mt-12 grid grid-cols-[minmax(0,1fr)] gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
               <div>
                 <p class="t-tag mb-3">move</p>
                 <dl class="space-y-1.5 font-mono text-[0.8125rem]">
@@ -592,7 +597,7 @@ edge -&gt; api -&gt; dashboard</code></pre>
               agent panes match everything else on your screen.
             </p>
 
-            <div class="mt-10 grid gap-6 lg:grid-cols-3">
+            <div class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-3">
               <figure>
                 <img src="/images/themes.webp" alt="Codrift theme picker filtering sixty-six bundled VS Code themes" width="2000" height="1225" class="shot" loading="lazy" />
                 <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">Live preview with <span class="keycap">↑</span><span class="keycap">↓</span>, <span class="keycap">⏎</span> keeps, <span class="keycap">esc</span> reverts.</figcaption>
@@ -607,7 +612,7 @@ edge -&gt; api -&gt; dashboard</code></pre>
               </figure>
             </div>
 
-            <div class="mt-12 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-12">
+            <div class="mt-12 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-12">
               <div>
                 <h3 class="font-display text-[1.0625rem] font-semibold">Pull the work in, don’t retype it</h3>
                 <p class="t-body mt-2">
@@ -644,7 +649,7 @@ edge -&gt; api -&gt; dashboard</code></pre>
               because the runtime ships inside. Bring your own agent CLIs and Codrift drives them.
             </p>
 
-            <div class="mt-10 grid gap-3 sm:grid-cols-2 lg:max-w-3xl">
+            <div class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 lg:max-w-3xl">
               <button class="cmd" type="button" data-copy="brew tap filipecabaco/codrift https://github.com/filipecabaco/codrift">
                 <span class="text-amber">$</span>
                 <span class="truncate">brew tap filipecabaco/codrift …</span>
