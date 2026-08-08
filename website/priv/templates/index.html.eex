@@ -17,7 +17,7 @@
     <meta property="og:title" content="Codrift: run many AI coding agents at once" />
     <meta
       property="og:description"
-      content="Run Claude Code, Codex, Gemini, Copilot and shells across every repo in a project at once. Live terminals, isolated branches, one diff, one shared memory."
+      content="Run Claude Code, Codex, Gemini and Copilot across every repo at once — isolated branches, one diff, one shared memory."
     />
     <meta property="og:image" content="<%= og_image %>" />
     <meta property="og:image:secure_url" content="<%= og_image %>" />
@@ -26,18 +26,18 @@
     <meta property="og:image:height" content="630" />
     <meta
       property="og:image:alt"
-      content="Codrift wordmark over a dark terminal backdrop, with three agent status lines: claude on atlas-api running, claude on atlas-edge needs input, codex on dashboard running."
+      content="Codrift wordmark above the headline &quot;Run many AI coding agents at once&quot;, over three dark terminal panels: claude on atlas-api running tests, claude on atlas-edge waiting for approval, codex on dashboard building."
     />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Codrift: run many AI coding agents at once" />
     <meta
       name="twitter:description"
-      content="Run Claude Code, Codex, Gemini, Copilot and shells across every repo in a project at once. Live terminals, isolated branches, one diff, one shared memory."
+      content="Run Claude Code, Codex, Gemini and Copilot across every repo at once — isolated branches, one diff, one shared memory."
     />
     <meta name="twitter:image" content="<%= og_image %>" />
     <meta
       name="twitter:image:alt"
-      content="Codrift wordmark over a dark terminal backdrop, with three agent status lines: claude on atlas-api running, claude on atlas-edge needs input, codex on dashboard running."
+      content="Codrift wordmark above the headline &quot;Run many AI coding agents at once&quot;, over three dark terminal panels: claude on atlas-api running tests, claude on atlas-edge waiting for approval, codex on dashboard building."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

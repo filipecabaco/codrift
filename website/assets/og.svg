@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="glow" cx="0.14" cy="0.1" r="0.9">
+      <stop offset="0%" stop-color="#f8910e" stop-opacity="0.13" />
+      <stop offset="100%" stop-color="#f8910e" stop-opacity="0" />
+    </radialGradient>
+    <!-- dissolves the panel scrollback into the background so X's title
+         overlay only ever covers faded, non-essential pixels -->
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#080a0f" stop-opacity="0" />
+      <stop offset="45%" stop-color="#080a0f" stop-opacity="0.55" />
+      <stop offset="78%" stop-color="#080a0f" stop-opacity="1" />
+      <stop offset="100%" stop-color="#080a0f" stop-opacity="1" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#080a0f" />
+  <rect width="1200" height="630" fill="url(#glow)" />
+  <rect x="0" y="0" width="1200" height="5" fill="#f8910e" />
+
+  <g transform="translate(58.4 28.95) scale(0.23)" stroke="#f8910e" fill="none" stroke-width="54" stroke-linecap="round">
+    <path d="M94 326 L163.1 170.7" />
+    <path d="M202 352 L290.7 152.9" />
+    <path d="M310 378 L418.2 135" />
+  </g>
+  <text x="178" y="116" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="64" font-weight="700" fill="#e8ebf1" letter-spacing="-1.5">codrift</text>
+  <text x="1120" y="110" text-anchor="end" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="17" fill="#74777e">macOS &amp; Linux · open source</text>
+
+  <text x="80" y="198" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="42" font-weight="700" fill="#e8ebf1" letter-spacing="-0.8">Run many AI coding agents at once.</text>
+  <text x="80" y="238" font-family="Menlo, DejaVu Sans Mono, monospace" font-size="20" fill="#8f929a">Live terminals · isolated worktrees · one diff · one shared memory</text>
+
+  <!-- agent floor: three panels, bottoms bleeding off the frame -->
+  <g font-family="Menlo, DejaVu Sans Mono, monospace">
+    <g>
+      <rect x="80" y="274" width="330" height="310" rx="10" fill="#0f1218" stroke="#1c1f26" />
+      <circle cx="107" cy="311" r="5" fill="#47c86e" />
+      <text x="121" y="317" font-size="16" fill="#e8ebf1">claude</text>
+      <text x="388" y="316" text-anchor="end" font-size="13" fill="#47c86e">running</text>
+      <text x="102" y="345" font-size="14" fill="#8f929a">atlas-api</text>
+      <line x1="102" y1="368" x2="388" y2="368" stroke="#1c1f26" />
+      <text x="102" y="398" font-size="13" fill="#c9ccd4">› running tests</text>
+      <text x="102" y="422" font-size="13" fill="#74777e">  47 passed, 0 failed</text>
+      <text x="102" y="446" font-size="13" fill="#c9ccd4">› patching api/router.ex</text>
+      <text x="102" y="470" font-size="13" fill="#74777e">  +18 −4 in 2 files</text>
+      <text x="102" y="494" font-size="13" fill="#74777e">› mix format</text>
+      <text x="102" y="518" font-size="13" fill="#74777e">› git commit -m "wip"</text>
+    </g>
+
+    <g>
+      <rect x="435" y="274" width="330" height="310" rx="10" fill="#0f1218" stroke="#f8910e" stroke-opacity="0.55" />
+      <circle cx="462" cy="311" r="5" fill="#f8910e" />
+      <text x="476" y="317" font-size="16" fill="#e8ebf1">claude</text>
+      <text x="743" y="316" text-anchor="end" font-size="13" fill="#f8910e">needs input</text>
+      <text x="457" y="345" font-size="14" fill="#8f929a">atlas-edge</text>
+      <line x1="457" y1="368" x2="743" y2="368" stroke="#1c1f26" />
+      <text x="457" y="398" font-size="13" fill="#c9ccd4">› write config/prod.exs?</text>
+      <text x="457" y="422" font-size="13" fill="#74777e">  [y] approve   [n] deny</text>
+      <text x="457" y="446" font-size="13" fill="#f8910e">  ▍</text>
+      <text x="457" y="494" font-size="13" fill="#74777e">› waiting on you</text>
+      <text x="457" y="518" font-size="13" fill="#74777e">  2 agents still running</text>
+    </g>
+
+    <g>
+      <rect x="790" y="274" width="330" height="310" rx="10" fill="#0f1218" stroke="#1c1f26" />
+      <circle cx="817" cy="311" r="5" fill="#47c86e" />
+      <text x="831" y="317" font-size="16" fill="#e8ebf1">codex</text>
+      <text x="1098" y="316" text-anchor="end" font-size="13" fill="#47c86e">running</text>
+      <text x="812" y="345" font-size="14" fill="#8f929a">dashboard</text>
+      <line x1="812" y1="368" x2="1098" y2="368" stroke="#1c1f26" />
+      <text x="812" y="398" font-size="13" fill="#c9ccd4">› npm run build</text>
+      <text x="812" y="422" font-size="13" fill="#74777e">  vite v6 building…</text>
+      <text x="812" y="446" font-size="13" fill="#c9ccd4">› 312 modules transformed</text>
+      <text x="812" y="470" font-size="13" fill="#74777e">  dist/index.js  84.2 kB</text>
+      <text x="812" y="494" font-size="13" fill="#74777e">› tsc --noEmit</text>
+      <text x="812" y="518" font-size="13" fill="#74777e">  no errors</text>
+    </g>
+  </g>
+
+  <rect x="0" y="430" width="1200" height="200" fill="url(#fade)" />
+</svg>
