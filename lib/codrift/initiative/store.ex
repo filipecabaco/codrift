@@ -477,7 +477,29 @@ defmodule Codrift.Initiative.Store do
               "expected a direct child of #{base}"
     end
 
-    File.rm_rf!(expanded)
+    rm_rf_with_retry(expanded)
+  end
+
+  # An agent (or the OS process behind it) can drop a fresh transcript file into
+  # the tree while it is being removed, so the final rmdir sees a non-empty
+  # directory (:eexist). Retry, then give up quietly rather than taking the
+  # store down: `clean_orphaned_context_dirs/2` prunes the leftover on boot.
+  defp rm_rf_with_retry(path, attempts \\ 3) do
+    case File.rm_rf(path) do
+      {:ok, _} ->
+        :ok
+
+      {:error, _reason, _file} when attempts > 1 ->
+        Process.sleep(25)
+        rm_rf_with_retry(path, attempts - 1)
+
+      {:error, reason, file} ->
+        Logger.warning(
+          "Codrift.Initiative.Store: could not remove #{path} (#{inspect(reason)} at #{file})"
+        )
+
+        :ok
+    end
   end
 
   @doc """

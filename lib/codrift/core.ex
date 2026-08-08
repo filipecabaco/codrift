@@ -265,10 +265,21 @@ defmodule Codrift.Core do
   end
 
   def call("delete_initiative", %{"initiative_id" => id}) do
-    case Store.delete(id) do
-      :ok ->
+    case Store.get(id) do
+      {:ok, _initiative} ->
+        # Processes must go before files: a live conductor or sub-agent keeps
+        # writing into the context dir (transcript logs), which makes the
+        # recursive delete race with new files appearing under it.
         :ok = Codrift.ConductorSupervisor.stop_conductor(id)
-        {:ok, %{"deleted" => id}}
+
+        id
+        |> Codrift.AgentSupervisor.list_agents_for_initiative()
+        |> Enum.each(&Codrift.AgentSupervisor.stop_agent/1)
+
+        case Store.delete(id) do
+          :ok -> {:ok, %{"deleted" => id}}
+          {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+        end
 
       {:error, :not_found} ->
         {:error, "initiative not found: #{id}"}
