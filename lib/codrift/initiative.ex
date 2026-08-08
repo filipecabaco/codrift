@@ -19,7 +19,16 @@ defmodule Codrift.Initiative do
 
   alias Codrift.Initiative.DirEntry
 
-  defstruct [:id, :name, :dirs, :created_at, :status, integration: nil, worktree_default: false]
+  defstruct [
+    :id,
+    :name,
+    :dirs,
+    :created_at,
+    :status,
+    integration: nil,
+    worktree_default: false,
+    agent: nil
+  ]
 
   @type integration ::
           %{service: String.t(), item_id: String.t(), url: String.t() | nil} | nil
@@ -32,7 +41,8 @@ defmodule Codrift.Initiative do
           created_at: DateTime.t(),
           status: status(),
           integration: integration(),
-          worktree_default: boolean()
+          worktree_default: boolean(),
+          agent: String.t() | nil
         }
 
   @doc """
@@ -95,7 +105,8 @@ defmodule Codrift.Initiative do
       "dirs" => Enum.map(i.dirs, &DirEntry.to_map/1),
       "created_at" => DateTime.to_iso8601(i.created_at),
       "status" => Atom.to_string(i.status || :ongoing),
-      "worktree_default" => i.worktree_default || false
+      "worktree_default" => i.worktree_default || false,
+      "agent" => i.agent
     }
 
     case i.integration do
@@ -139,7 +150,8 @@ defmodule Codrift.Initiative do
            created_at: dt,
            status: status,
            integration: integration,
-           worktree_default: Map.get(data, "worktree_default", false)
+           worktree_default: Map.get(data, "worktree_default", false),
+           agent: Map.get(data, "agent")
          }}
 
       error ->

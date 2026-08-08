@@ -9,6 +9,7 @@
   let query = $state("");
   let cursor = $state(0);
   let input: HTMLInputElement;
+  let listEl = $state<HTMLElement | null>(null);
 
   const filtered = $derived(
     items.filter((i) => i.label.toLowerCase().includes(query.toLowerCase())),
@@ -21,6 +22,10 @@
   $effect(() => {
     query;
     cursor = 0;
+  });
+
+  $effect(() => {
+    listEl?.querySelector<HTMLElement>(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
   });
 
   function onkeydown(e: KeyboardEvent) {
@@ -48,10 +53,13 @@
     placeholder="Run a command…"
     class="w-full border-b border-border bg-canvas px-3 py-2.5 text-sm text-fg outline-none"
   />
-  <ul class="max-h-80 overflow-y-auto py-1">
+  <ul bind:this={listEl} class="max-h-80 overflow-y-auto py-1" role="listbox" aria-label="Commands">
     {#each filtered as item, i (item.id)}
       <li>
         <button
+          data-index={i}
+          role="option"
+          aria-selected={i === cursor}
           class={["flex w-full items-center justify-between px-3 py-1.5 text-left text-[13px]", i === cursor ? "bg-accent/20 text-white" : "text-fg/90"]}
           onmouseenter={() => (cursor = i)}
           onclick={() => onRun(item.id)}

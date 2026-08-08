@@ -2,7 +2,7 @@
   import { onMount, untrack } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
   import { ArrowPath, CommandLine, Identification, Link, Swatch } from "@steeze-ui/heroicons";
-  import { rpc } from "$lib/api";
+  import { rpc, quitApp, QUIT_REQUESTED } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
   import { workspace as ws, type Row } from "$lib/workspace.svelte";
   import {
@@ -107,7 +107,7 @@
     | { kind: "palette" }
     | { kind: "prompt"; title: string; placeholder?: string; submit: (v: string) => void }
     | { kind: "dirpicker"; submit: (v: string) => void }
-    | { kind: "confirm"; message: string; onConfirm: () => void }
+    | { kind: "confirm"; message: string; confirmLabel?: string; onConfirm: () => void }
     | { kind: "integrations" }
     | { kind: "new_initiative" }
     | { kind: "appearance" }
@@ -271,8 +271,13 @@
     };
   }
 
-  async function startAgent(adapter: string) {
+  async function startAgent(choice?: string) {
     if (!selectedInitiative) return toast("Select an initiative first.");
+    const agent = choice ?? ws.agentChoiceFor(selectedInitiative);
+    const profile = ws.profiles.find((p) => p.name === agent);
+    const launch = profile
+      ? { adapter: profile.adapter ?? "claude", profile: profile.name }
+      : { adapter: agent };
     // Prefer the directory under the cursor (so you can start agents per dir).
     // With the cursor on the initiative itself — or one of its context files —
     // run at the initiative root (its context folder), so the agent can edit
@@ -287,16 +292,31 @@
     try {
       await rpc("start_agent", {
         initiative_id: selectedInitiative.id,
-        adapter,
+        ...launch,
         ...(dir ? { dir } : {}),
       });
       const where =
         dir && dir === rootDir ? "at initiative root" : dir ? `in ${base(dir)}` : "in scratchpad";
-      toast(`Started ${adapter} ${where}`);
+      toast(`Started ${agent} ${where}`);
       await load();
     } catch (e) {
       toast((e as Error).message);
     }
+  }
+
+  function confirmQuit() {
+    const running = Object.values(ws.agentsByInit).reduce((n, list) => n + list.length, 0);
+    modal = {
+      kind: "confirm",
+      message: running
+        ? `Quit Codrift? ${running} agent${running === 1 ? "" : "s"} still running.`
+        : "Quit Codrift?",
+      confirmLabel: "Quit",
+      onConfirm: () => {
+        modal = null;
+        void quitApp();
+      },
+    };
   }
 
   async function cycleStatus(delta: number) {
@@ -348,9 +368,10 @@
     }
   }
 
-  async function createInitiative(name: string) {
+  async function createInitiative(name: string, agent: string) {
     try {
-      const created = await rpc<{ id: string }>("create_initiative", { name });
+      const created = await rpc<{ id: string }>("create_initiative", { name, agent });
+      await ws.refreshProfiles();
       await revealInitiative(created.id);
     } catch (e) {
       modal = null;
@@ -394,7 +415,7 @@
         await cycleStatus(1);
         break;
       case "start_agent":
-        await startAgent("claude");
+        await startAgent();
         break;
       case "start_terminal":
         await startAgent("terminal");
@@ -436,7 +457,7 @@
         modal = { kind: "profiles" };
         break;
       case "quit":
-        toast("Quit is handled by the window — nothing to do here.");
+        confirmQuit();
         break;
     }
   }
@@ -698,6 +719,11 @@
     }
     await load();
   });
+
+  $effect(() => {
+    window.addEventListener(QUIT_REQUESTED, confirmQuit);
+    return () => window.removeEventListener(QUIT_REQUESTED, confirmQuit);
+  });
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
@@ -736,7 +762,7 @@
     </button>
     <button
       class="rounded-md p-1 text-muted hover:text-fg"
-      title="Launch profiles — run agents under different accounts"
+      title="Launch profiles — named agents with their own command and account"
       onclick={() => (modal = { kind: "profiles" })}
       aria-label="Launch profiles"
     >
@@ -885,6 +911,7 @@
             wantFile={view.wantFile}
             wantPanel={view.wantPanel}
             onChanged={load}
+            onManageProfiles={() => (modal = { kind: "profiles" })}
           />
         {/if}
       {:else if view.tab === "diff"}
@@ -938,6 +965,7 @@
   <NewInitiative
     onCreate={createInitiative}
     onOpen={revealInitiative}
+    onManageProfiles={() => (modal = { kind: "profiles" })}
     onClose={() => (modal = null)}
   />
 {:else if modal?.kind === "palette"}
@@ -952,5 +980,10 @@
 {:else if modal?.kind === "dirpicker"}
   <DirPicker onSubmit={modal.submit} onClose={() => (modal = null)} />
 {:else if modal?.kind === "confirm"}
-  <Confirm message={modal.message} onConfirm={modal.onConfirm} onClose={() => (modal = null)} />
+  <Confirm
+    message={modal.message}
+    confirmLabel={modal.confirmLabel ?? "Confirm"}
+    onConfirm={modal.onConfirm}
+    onClose={() => (modal = null)}
+  />
 {/if}

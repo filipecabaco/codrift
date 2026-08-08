@@ -1,9 +1,11 @@
 <script lang="ts">
   import { marked } from "marked";
   import { Icon } from "@steeze-ui/svelte-icon";
+  import { Cog6Tooth } from "@steeze-ui/heroicons";
   import {
     rpc,
     openUrl,
+    setInitiativeAgent,
     ADAPTERS,
     SERVICE_META,
     type Initiative,
@@ -19,6 +21,7 @@
     wantFile = null,
     wantPanel = "file",
     onChanged,
+    onManageProfiles,
   }: {
     initiative: Initiative;
     agents: Agent[];
@@ -26,12 +29,9 @@
     /** Which half the sidebar asked for: a context document or the memory store. */
     wantPanel?: "file" | "memory";
     onChanged: () => void;
+    onManageProfiles?: () => void;
   } = $props();
 
-  // The selected launch choice (a base adapter name or a profile name) and the
-  // profile list both live in the workspace: the choice so it survives a pane
-  // clone or an initiative switch, the list so a plain refresh picks up a
-  // profile the user just added to settings.json.
   let starting = $state<string | null>(null);
   let addingScratch = $state(false);
   let branching = $state<string | null>(null);
@@ -50,14 +50,24 @@
     }
   }
 
-  const choice = $derived(ws.launchChoice);
   const profiles = $derived(ws.profiles);
+  const choice = $derived(ws.agentChoiceFor(initiative));
 
   // Resolve the selected choice into start_agent params: a profile passes its
   // base adapter plus its name; a bare adapter passes just itself.
   function launchParams(): { adapter: string; profile?: string } {
     const p = profiles.find((x) => x.name === choice);
     return p ? { adapter: p.adapter ?? "claude", profile: p.name } : { adapter: choice };
+  }
+
+  async function pickAgent(next: string) {
+    error = null;
+    try {
+      await setInitiativeAgent(initiative.id, next);
+      onChanged();
+    } catch (e) {
+      error = (e as Error).message;
+    }
   }
 
   const sourceLabel = (service: string) => SERVICE_META[service]?.label ?? service;
@@ -204,11 +214,12 @@
     <div class="mb-2 flex items-center justify-between gap-3">
       <span class="text-[11px] font-semibold tracking-wider text-muted uppercase">Directories</span>
       <div class="flex items-center gap-2">
-        <label class="text-[11px] text-muted" for="adapter">Launch</label>
+        <label class="text-[11px] text-muted" for="adapter">Agent</label>
         <select
           id="adapter"
           value={choice}
-          onchange={(e) => (ws.launchChoice = e.currentTarget.value)}
+          title="The agent this initiative starts. Profiles carry their own command and account."
+          onchange={(e) => pickAgent(e.currentTarget.value)}
           class="rounded-md border border-border bg-canvas px-2 py-1 text-xs text-fg"
         >
           {#each ADAPTERS as a}
@@ -222,6 +233,14 @@
             </optgroup>
           {/if}
         </select>
+        <button
+          class="rounded-md p-1 text-muted hover:text-fg"
+          title="Manage launch profiles — add an agent with its own command and account"
+          aria-label="Manage launch profiles"
+          onclick={() => onManageProfiles?.()}
+        >
+          <Icon src={Cog6Tooth} class="size-3.5" />
+        </button>
       </div>
     </div>
     {#if error}<p class="mb-2 text-xs text-red-400">{error}</p>{/if}
