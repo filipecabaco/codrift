@@ -23,77 +23,48 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
   def name, do: "linear_projects"
 
   @impl true
-  def list_items(_opts \\ []) do
-    case api_key() do
-      {:error, _} = err ->
-        err
+  def credentials?,
+    do: Codrift.OAuth.connected?(name()) or System.get_env("LINEAR_API_KEY") != nil
 
-      {:ok, key} ->
-        query = """
-        query ListProjects {
-          projects(first: 50, orderBy: updatedAt) {
-            nodes {
-              id
-              name
-              description
-              url
-              state
-              progress
-              teams { nodes { name key } }
-              issues(first: 5) { nodes { identifier title } }
-            }
-          }
-        }
-        """
+  @impl true
+  def list_items(_opts \\ []), do: query_projects(nil)
 
-        case HTTP.graphql(@graphql_url, query, %{}, auth_headers(key)) do
-          {:ok, %{"data" => %{"projects" => %{"nodes" => nodes}}}} ->
-            {:ok, Enum.map(nodes, &project_to_item/1)}
-
-          {:ok, %{"errors" => errors}} ->
-            {:error, format_gql_errors(errors)}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-    end
+  @impl true
+  def list_assigned(_opts \\ []) do
+    query_projects(%{lead: %{isMe: %{eq: true}}, state: %{nin: ["completed", "canceled"]}})
   end
 
   @impl true
   def get_item(project_id, _opts \\ []) do
-    case api_key() do
-      {:error, _} = err ->
-        err
-
-      {:ok, key} ->
-        query = """
-        query GetProject($id: String!) {
-          project(id: $id) {
-            id name description url state progress
-            teams { nodes { name key } }
-            issues(first: 50, orderBy: updatedAt) {
-              nodes {
-                identifier title state { name }
-                assignee { name }
-              }
+    with {:ok, headers} <- auth() do
+      query = """
+      query GetProject($id: String!) {
+        project(id: $id) {
+          id name description url state progress
+          teams { nodes { name key } }
+          issues(first: 50, orderBy: updatedAt) {
+            nodes {
+              identifier title state { name }
+              assignee { name }
             }
           }
         }
-        """
+      }
+      """
 
-        case HTTP.graphql(@graphql_url, query, %{id: project_id}, auth_headers(key)) do
-          {:ok, %{"data" => %{"project" => project}}} when not is_nil(project) ->
-            {:ok, project_to_item(project)}
+      case HTTP.graphql(@graphql_url, query, %{id: project_id}, headers) do
+        {:ok, %{"data" => %{"project" => project}}} when not is_nil(project) ->
+          {:ok, project_to_item(project)}
 
-          {:ok, %{"errors" => errors}} ->
-            {:error, format_gql_errors(errors)}
+        {:ok, %{"errors" => errors}} ->
+          {:error, format_gql_errors(errors)}
 
-          {:ok, _} ->
-            {:error, "project not found: #{project_id}"}
+        {:ok, _} ->
+          {:error, "project not found: #{project_id}"}
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -127,6 +98,40 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
 
   # ── Private ──────────────────────────────────────────────────────────────────
 
+  defp query_projects(filter) do
+    with {:ok, headers} <- auth() do
+      query = """
+      query ListProjects($filter: ProjectFilter) {
+        projects(filter: $filter, first: 50, orderBy: updatedAt) {
+          nodes {
+            id
+            name
+            description
+            url
+            state
+            progress
+            teams { nodes { name key } }
+            issues(first: 5) { nodes { identifier title } }
+          }
+        }
+      }
+      """
+
+      vars = if filter, do: %{filter: filter}, else: %{}
+
+      case HTTP.graphql(@graphql_url, query, vars, headers) do
+        {:ok, %{"data" => %{"projects" => %{"nodes" => nodes}}}} ->
+          {:ok, Enum.map(nodes, &project_to_item/1)}
+
+        {:ok, %{"errors" => errors}} ->
+          {:error, format_gql_errors(errors)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
   defp project_to_item(project) do
     teams = Enum.map(get_in(project, ["teams", "nodes"]) || [], & &1["key"])
 
@@ -138,7 +143,7 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
     %Item{
       id: project["id"],
       title: project["name"] || "(untitled)",
-      description: project["description"],
+      description: Item.presence(project["description"]),
       url: project["url"] || "",
       labels: teams,
       status: project["state"],
@@ -152,17 +157,16 @@ defmodule Codrift.Integration.Adapters.LinearProjects do
   defp format_progress(p) when is_float(p), do: "#{round(p * 100)}%"
   defp format_progress(p), do: "#{p}%"
 
-  defp api_key do
-    case System.get_env("LINEAR_API_KEY") do
-      nil -> {:error, "LINEAR_API_KEY env var is required"}
-      key -> {:ok, key}
-    end
-  end
-
-  defp auth_headers(env_key) do
+  defp auth do
     case Codrift.OAuth.get_token(name()) do
-      {:ok, %{"access_token" => t}} -> [{"authorization", "Bearer #{t}"}]
-      _ -> [{"authorization", env_key}]
+      {:ok, %{"access_token" => t}} ->
+        {:ok, [{"authorization", "Bearer #{t}"}]}
+
+      _ ->
+        case System.get_env("LINEAR_API_KEY") do
+          nil -> {:error, "LINEAR_API_KEY env var is required"}
+          key -> {:ok, [{"authorization", key}]}
+        end
     end
   end
 

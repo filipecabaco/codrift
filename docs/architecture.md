@@ -67,7 +67,7 @@ Codrift (Application)
 | `Codrift.Agent` | Behaviour for CLI adapters; `available_adapters/0` detects installed CLIs; `tui?/0` callback for Ink/Bubble Tea adapters |
 | `Codrift.Integration` | Behaviour for external service adapters |
 | `Codrift.Integration.HTTP` | Req wrapper — GET/POST/GraphQL with JSON, 15s timeout |
-| `Codrift.Integration.Sync` | Re-fetch item and rewrite `integration.md` |
+| `Codrift.Integration.Sync` | Re-fetch item and refresh the `source` block of `initiative.md` |
 | `Codrift.OAuth` | Token acquisition: PKCE browser, device flow |
 | `Codrift.OAuth.Config` | Per-service OAuth parameters, env var names, endpoints |
 | `Codrift.MCP.Handler` | JSON-RPC 2.0 dispatch |

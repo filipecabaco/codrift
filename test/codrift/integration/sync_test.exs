@@ -28,7 +28,13 @@ defmodule Codrift.Integration.SyncTest do
     test "logs a warning and leaves status unchanged", %{tmp_dir: tmp_dir} do
       store = start_store(tmp_dir)
       {:ok, initiative} = Store.create("linked", [], store)
-      {:ok, _} = Store.link_integration(initiative.id, "no_such_service", "item-1", store)
+
+      {:ok, _} =
+        Store.link_integration(
+          initiative.id,
+          %{service: "no_such_service", item_id: "item-1"},
+          store
+        )
 
       # Must not raise even though the service is invalid
       assert :ok == Sync.run(store)
@@ -43,7 +49,9 @@ defmodule Codrift.Integration.SyncTest do
       {:ok, plain} = Store.create("no-link", [], store)
       {:ok, linked} = Store.create("linked", [], store)
       Store.set_status(plain.id, :planning, store)
-      {:ok, _} = Store.link_integration(linked.id, "no_such_service", "item-1", store)
+
+      {:ok, _} =
+        Store.link_integration(linked.id, %{service: "no_such_service", item_id: "item-1"}, store)
 
       Sync.run(store)
 

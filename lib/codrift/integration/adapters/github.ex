@@ -22,6 +22,19 @@ defmodule Codrift.Integration.Adapters.GitHub do
   def name, do: "github"
 
   @impl true
+  def credentials?, do: Codrift.OAuth.connected?(name()) or System.get_env("GITHUB_TOKEN") != nil
+
+  @impl true
+  def list_assigned(opts \\ []) do
+    state = opts[:filter] || "open"
+
+    Codrift.Integration.merge_sources([
+      {"assigned", my_issues("assigned", state)},
+      {"created", my_issues("created", state)}
+    ])
+  end
+
+  @impl true
   def list_items(opts \\ []) do
     case resolve_repo(opts) do
       {:error, _} = err ->
@@ -33,8 +46,7 @@ defmodule Codrift.Integration.Adapters.GitHub do
 
         case HTTP.get(url, auth_headers()) do
           {:ok, issues} when is_list(issues) ->
-            {:ok,
-             issues |> Enum.reject(&Map.has_key?(&1, "pull_request")) |> Enum.map(&to_item/1)}
+            {:ok, to_issue_items(issues)}
 
           {:ok, _} ->
             {:error, "unexpected response from GitHub Issues API"}
@@ -75,11 +87,25 @@ defmodule Codrift.Integration.Adapters.GitHub do
 
   # ── Private ──────────────────────────────────────────────────────────────────
 
+  defp my_issues(filter, state) do
+    url = "#{@base}/issues?filter=#{filter}&state=#{state}&sort=updated&per_page=50"
+
+    case HTTP.get(url, auth_headers()) do
+      {:ok, issues} when is_list(issues) -> {:ok, to_issue_items(issues)}
+      {:ok, _} -> {:error, "unexpected response from GitHub Issues API"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp to_issue_items(issues) do
+    issues |> Enum.reject(&Map.has_key?(&1, "pull_request")) |> Enum.map(&to_item/1)
+  end
+
   defp to_item(issue) do
     %Item{
-      id: to_string(issue["number"]),
+      id: qualified_id(issue),
       title: issue["title"] || "(untitled)",
-      description: issue["body"],
+      description: Item.presence(issue["body"]),
       url: issue["html_url"],
       labels: Enum.map(issue["labels"] || [], & &1["name"]),
       status: issue["state"],
@@ -87,6 +113,27 @@ defmodule Codrift.Integration.Adapters.GitHub do
       linked_prs: []
     }
   end
+
+  defp qualified_id(issue) do
+    number = to_string(issue["number"])
+
+    case repo_of(issue) do
+      nil -> number
+      repo -> "#{repo}##{number}"
+    end
+  end
+
+  defp repo_of(%{"repository" => %{"full_name" => full_name}}) when is_binary(full_name),
+    do: full_name
+
+  defp repo_of(%{"repository_url" => url}) when is_binary(url) do
+    case String.split(url, "/repos/", parts: 2) do
+      [_, repo] -> repo
+      _ -> nil
+    end
+  end
+
+  defp repo_of(_issue), do: nil
 
   defp parse_item_id(item_id, opts) do
     if String.contains?(item_id, "#") do

@@ -340,12 +340,38 @@ defmodule Codrift.Core do
     end
   end
 
+  def call("branch_initiative", %{"initiative_id" => id}) do
+    case Store.branch_all(id) do
+      {:ok, result} -> {:ok, result}
+      {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
+  def call("toggle_dir_branch", %{"initiative_id" => id, "dir" => dir}) do
+    case Store.toggle_dir_branch(id, dir) do
+      {:ok, initiative} -> {:ok, initiative_map(initiative)}
+      {:error, :not_found} -> {:error, "initiative or directory not found"}
+      {:error, reason} -> {:error, to_string(reason)}
+    end
+  end
+
+  def call("list_assigned_items", args) do
+    opts = if filter = args["filter"], do: [filter: filter], else: []
+    %{items: items, errors: errors} = Codrift.Integration.list_assigned(opts)
+
+    {:ok, %{items: Enum.map(items, &assigned_item_to_map/1), errors: errors}}
+  end
+
   def call("import_from_integration", %{"service" => service, "item_id" => item_id} = args) do
     opts = if dir = args["dir"], do: [dir: dir], else: []
 
     case Codrift.Integration.import_item(service, item_id, opts) do
-      {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
-      {:error, reason} -> {:error, to_string(reason)}
+      {:ok, outcome, initiative} ->
+        {:ok, Map.put(Codrift.Initiative.to_map(initiative), "existing", outcome == :existing)}
+
+      {:error, reason} ->
+        {:error, to_string(reason)}
     end
   end
 
@@ -577,6 +603,17 @@ defmodule Codrift.Core do
     else
       {:error, "unknown tool: #{name}"}
     end
+  end
+
+  defp assigned_item_to_map(%{service: service, item: item} = assigned) do
+    item
+    |> integration_item_to_map()
+    |> Map.merge(%{
+      service: service,
+      relation: assigned.relation,
+      initiative_id: assigned.initiative_id,
+      imported: not is_nil(assigned.initiative_id)
+    })
   end
 
   defp integration_item_to_map(%Codrift.Integration.Item{} = item) do

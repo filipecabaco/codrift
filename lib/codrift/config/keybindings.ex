@@ -42,6 +42,7 @@ defmodule Codrift.Config.Keybindings do
   | `toggle_sidebar` | `ctrl+b` | Collapse/expand sidebar |
   | `palette` | `ctrl+p` | Open command palette |
   | `start_orchestration` | `o` | Start orchestration for the selected initiative |
+  | `branch_initiative` | `b` | Put every git directory on the initiative's branch |
 
   ## Key spec format
 
@@ -70,7 +71,8 @@ defmodule Codrift.Config.Keybindings do
     quit: "ctrl+q",
     toggle_sidebar: "ctrl+b",
     palette: "ctrl+p",
-    start_orchestration: "o"
+    start_orchestration: "o",
+    branch_initiative: "b"
   }
 
   @type action ::
@@ -95,6 +97,7 @@ defmodule Codrift.Config.Keybindings do
           | :toggle_sidebar
           | :palette
           | :start_orchestration
+          | :branch_initiative
 
   @type key_spec :: String.t()
   @type t :: %{required(action()) => key_spec()}
@@ -150,6 +153,7 @@ defmodule Codrift.Config.Keybindings do
   defp string_to_action("toggle_sidebar"), do: :toggle_sidebar
   defp string_to_action("palette"), do: :palette
   defp string_to_action("start_orchestration"), do: :start_orchestration
+  defp string_to_action("branch_initiative"), do: :branch_initiative
   defp string_to_action(_), do: nil
 
   defp parse_binding({k, v}) do

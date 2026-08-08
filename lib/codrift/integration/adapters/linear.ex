@@ -23,77 +23,51 @@ defmodule Codrift.Integration.Adapters.Linear do
   def name, do: "linear"
 
   @impl true
+  def credentials?,
+    do: Codrift.OAuth.connected?(name()) or System.get_env("LINEAR_API_KEY") != nil
+
+  @impl true
   def list_items(opts \\ []) do
-    case api_key() do
-      {:error, _} = err ->
-        err
+    query_issues(build_filter(opts[:filter]))
+  end
 
-      {:ok, key} ->
-        filter_val = build_filter(opts[:filter])
+  @impl true
+  def list_assigned(_opts \\ []) do
+    open = %{state: %{type: %{nin: ["completed", "canceled"]}}}
 
-        query = """
-        query IssueList($filter: IssueFilter) {
-          issues(filter: $filter, first: 50, orderBy: updatedAt) {
-            nodes {
-              id
-              identifier
-              title
-              description
-              url
-              state { name }
-              assignee { name }
-              labels { nodes { name } }
-            }
-          }
-        }
-        """
-
-        vars = if filter_val, do: %{filter: filter_val}, else: %{}
-
-        case HTTP.graphql(@graphql_url, query, vars, auth_headers(key)) do
-          {:ok, %{"data" => %{"issues" => %{"nodes" => nodes}}}} ->
-            {:ok, Enum.map(nodes, &to_item/1)}
-
-          {:ok, %{"errors" => errors}} ->
-            {:error, format_gql_errors(errors)}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-    end
+    Codrift.Integration.merge_sources([
+      {"assigned", query_issues(Map.put(open, :assignee, %{isMe: %{eq: true}}))},
+      {"created", query_issues(Map.put(open, :creator, %{isMe: %{eq: true}}))}
+    ])
   end
 
   @impl true
   def get_item(item_id, _opts \\ []) do
-    case api_key() do
-      {:error, _} = err ->
-        err
-
-      {:ok, key} ->
-        query = """
-        query GetIssue($id: String!) {
-          issue(id: $id) {
-            id identifier title description url
-            state { name }
-            assignee { name }
-            labels { nodes { name } }
-          }
+    with {:ok, headers} <- auth() do
+      query = """
+      query GetIssue($id: String!) {
+        issue(id: $id) {
+          id identifier title description url
+          state { name }
+          assignee { name }
+          labels { nodes { name } }
         }
-        """
+      }
+      """
 
-        case HTTP.graphql(@graphql_url, query, %{id: item_id}, auth_headers(key)) do
-          {:ok, %{"data" => %{"issue" => issue}}} when not is_nil(issue) ->
-            {:ok, to_item(issue)}
+      case HTTP.graphql(@graphql_url, query, %{id: item_id}, headers) do
+        {:ok, %{"data" => %{"issue" => issue}}} when not is_nil(issue) ->
+          {:ok, to_item(issue)}
 
-          {:ok, %{"errors" => errors}} ->
-            {:error, format_gql_errors(errors)}
+        {:ok, %{"errors" => errors}} ->
+          {:error, format_gql_errors(errors)}
 
-          {:ok, _} ->
-            {:error, "issue not found: #{item_id}"}
+        {:ok, _} ->
+          {:error, "issue not found: #{item_id}"}
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -115,11 +89,45 @@ defmodule Codrift.Integration.Adapters.Linear do
 
   # ── Private ──────────────────────────────────────────────────────────────────
 
+  defp query_issues(filter) do
+    with {:ok, headers} <- auth() do
+      query = """
+      query IssueList($filter: IssueFilter) {
+        issues(filter: $filter, first: 50, orderBy: updatedAt) {
+          nodes {
+            id
+            identifier
+            title
+            description
+            url
+            state { name }
+            assignee { name }
+            labels { nodes { name } }
+          }
+        }
+      }
+      """
+
+      vars = if filter, do: %{filter: filter}, else: %{}
+
+      case HTTP.graphql(@graphql_url, query, vars, headers) do
+        {:ok, %{"data" => %{"issues" => %{"nodes" => nodes}}}} ->
+          {:ok, Enum.map(nodes, &to_item/1)}
+
+        {:ok, %{"errors" => errors}} ->
+          {:error, format_gql_errors(errors)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
   defp to_item(issue) do
     %Item{
       id: issue["identifier"] || issue["id"],
       title: issue["title"] || "(untitled)",
-      description: issue["description"],
+      description: Item.presence(issue["description"]),
       url: issue["url"] || "",
       labels: Enum.map(get_in(issue, ["labels", "nodes"]) || [], & &1["name"]),
       status: get_in(issue, ["state", "name"]),
@@ -131,17 +139,16 @@ defmodule Codrift.Integration.Adapters.Linear do
   defp build_filter(nil), do: nil
   defp build_filter(team_key), do: %{team: %{key: %{eq: team_key}}}
 
-  defp api_key do
-    case System.get_env("LINEAR_API_KEY") do
-      nil -> {:error, "LINEAR_API_KEY env var is required"}
-      key -> {:ok, key}
-    end
-  end
-
-  defp auth_headers(env_key) do
+  defp auth do
     case Codrift.OAuth.get_token(name()) do
-      {:ok, %{"access_token" => t}} -> [{"authorization", "Bearer #{t}"}]
-      _ -> [{"authorization", env_key}]
+      {:ok, %{"access_token" => t}} ->
+        {:ok, [{"authorization", "Bearer #{t}"}]}
+
+      _ ->
+        case System.get_env("LINEAR_API_KEY") do
+          nil -> {:error, "LINEAR_API_KEY env var is required"}
+          key -> {:ok, [{"authorization", key}]}
+        end
     end
   end
 

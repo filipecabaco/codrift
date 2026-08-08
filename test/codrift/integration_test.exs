@@ -91,10 +91,10 @@ defmodule Codrift.IntegrationTest do
 
   describe "write_integration_files/4" do
     @tag :tmp_dir
-    test "writes integration.json and integration.md under the given id", %{tmp_dir: _tmp_dir} do
+    test "writes integration.json and folds the context into initiative.md", %{tmp_dir: _tmp_dir} do
       id = Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
       base = Codrift.Paths.initiative_dir(id)
-      context = "# My Issue\n\n**Status:** open\n"
+      context = "# My Issue\n\n**Status:** open"
 
       on_exit(fn -> File.rm_rf!(base) end)
 
@@ -103,21 +103,51 @@ defmodule Codrift.IntegrationTest do
       assert {:ok, meta_raw} = File.read(Path.join(base, "integration.json"))
       assert {:ok, %{"service" => "github", "item_id" => "owner/repo#5"}} = JSON.decode(meta_raw)
 
-      assert {:ok, ^context} = File.read(Path.join(base, "integration.md"))
+      assert {:ok, md} = File.read(Path.join(base, "initiative.md"))
+      assert md =~ "<!-- codrift:source:start -->"
+      assert md =~ context
+      refute File.exists?(Path.join(base, "integration.md"))
     end
 
     @tag :tmp_dir
-    test "overwrites existing files on second call", %{tmp_dir: _tmp_dir} do
+    test "a second call replaces the source block, keeping what the user wrote", %{
+      tmp_dir: _tmp_dir
+    } do
       id = Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
       base = Codrift.Paths.initiative_dir(id)
       on_exit(fn -> File.rm_rf!(base) end)
+
+      File.mkdir_p!(base)
+      File.write!(Path.join(base, "initiative.md"), "# Mine\n\n## Goal\n\nship it\n")
 
       Integration.write_integration_files(id, "github", "repo#1", "old content")
       Integration.write_integration_files(id, "linear", "ENG-2", "new content")
 
       assert {:ok, meta} = File.read(Path.join(base, "integration.json"))
       assert {:ok, %{"service" => "linear", "item_id" => "ENG-2"}} = JSON.decode(meta)
-      assert {:ok, "new content"} = File.read(Path.join(base, "integration.md"))
+
+      assert {:ok, md} = File.read(Path.join(base, "initiative.md"))
+      assert md =~ "new content"
+      refute md =~ "old content"
+      assert md =~ "ship it"
+    end
+
+    @tag :tmp_dir
+    test "removes a pre-existing integration.md once its content is folded in", %{
+      tmp_dir: _tmp_dir
+    } do
+      id = Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+      base = Codrift.Paths.initiative_dir(id)
+      on_exit(fn -> File.rm_rf!(base) end)
+
+      File.mkdir_p!(base)
+      File.write!(Path.join(base, "integration.md"), "stale standalone copy")
+
+      assert :ok = Integration.write_integration_files(id, "linear", "ENG-3", "fresh context")
+
+      refute File.exists?(Path.join(base, "integration.md"))
+      assert {:ok, md} = File.read(Path.join(base, "initiative.md"))
+      assert md =~ "fresh context"
     end
   end
 end

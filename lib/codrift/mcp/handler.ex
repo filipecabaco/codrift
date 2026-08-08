@@ -33,6 +33,7 @@ defmodule Codrift.MCP.Handler do
     - `start_oauth_flow` — start OAuth2 browser-based authorization for a service
     - `get_oauth_status` — which services have active OAuth2 tokens
     - `list_integration_items` — list issues/tasks from a connected external service
+    - `list_assigned_items` — list work assigned to the user across all connected services
     - `import_from_integration` — create an initiative from an external item
     - `sync_initiative_context` — re-fetch and overwrite the integration context file
     - `start_conductor` — start fan-out mode: one agent per directory
@@ -397,11 +398,27 @@ defmodule Codrift.MCP.Handler do
         }
       },
       %{
+        "name" => "list_assigned_items",
+        "description" =>
+          "List everything assigned to the authenticated user across every connected " <>
+            "service. Each item includes its service and, when it was already imported, " <>
+            "the initiative_id it belongs to — import only items where imported is false.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "filter" => %{
+              "type" => "string",
+              "description" => "Optional service-specific state filter (e.g. open, opened)"
+            }
+          }
+        }
+      },
+      %{
         "name" => "import_from_integration",
         "description" =>
           "Create a Codrift initiative from a single item in an external service. " <>
             "Fetches the item, creates an initiative named after it, and writes " <>
-            "integration.md with full context into the initiative folder.",
+            "the item's full context into the initiative.md source block.",
         "inputSchema" => %{
           "type" => "object",
           "properties" => %{
@@ -427,7 +444,7 @@ defmodule Codrift.MCP.Handler do
       %{
         "name" => "sync_initiative_context",
         "description" =>
-          "Re-fetch the external item and overwrite integration.md for an initiative " <>
+          "Re-fetch the external item and refresh the source block of initiative.md " <>
             "that was previously created via import_from_integration.",
         "inputSchema" => %{
           "type" => "object",

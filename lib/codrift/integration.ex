@@ -9,7 +9,8 @@ defmodule Codrift.Integration do
   - One adapter per service: each integration implements the `Codrift.Integration` behaviour.
   - Credentials in env: API tokens are read from environment variables; nothing stored in DB.
   - Context folder injection: pulled content is written into
-    `~/.codrift/initiatives/{id}/integration.md` and automatically picked up by agents
+    the `source` block of `~/.codrift/initiatives/{id}/initiative.md` and automatically
+    picked up by agents
     via the `--add-dir` context mechanism.
 
   ## Usage
@@ -18,8 +19,11 @@ defmodule Codrift.Integration do
       Codrift.Integration.valid_services()
       # => ["github", "github_projects", "linear", ...]
 
+      # Everything assigned to you across every connected service
+      %{items: items} = Codrift.Integration.list_assigned()
+
       # Import an item as a new initiative
-      {:ok, initiative} = Codrift.Integration.import_item("github", "owner/repo#42")
+      {:ok, :imported, initiative} = Codrift.Integration.import_item("github", "owner/repo#42")
 
       # Re-sync context after the remote item changes
       {:ok, _} = Codrift.Integration.sync_initiative(initiative.id)
@@ -52,10 +56,46 @@ defmodule Codrift.Integration do
             linked_prs: [String.t()],
             metadata: map()
           }
+
+    @doc """
+    Normalises a field the API left empty to `nil`.
+
+    Trackers return `""` as readily as `null` for an unfilled description, and
+    only `nil` triggers the "no description" fallbacks in `to_initiative_context/1`.
+    """
+    @spec presence(String.t() | nil) :: String.t() | nil
+    def presence(nil), do: nil
+
+    def presence(value) when is_binary(value) do
+      if String.trim(value) == "", do: nil, else: value
+    end
   end
 
   @callback name() :: String.t()
+
+  @doc """
+  Whether this adapter has usable credentials (OAuth token or env var).
+
+  Checked before fanning out in `list_assigned/1` so unconfigured services are
+  skipped instead of reported as failures.
+  """
+  @callback credentials?() :: boolean()
+
   @callback list_items(opts :: keyword()) :: {:ok, [Item.t()]} | {:error, term()}
+
+  @doc """
+  The authenticated user's queue: items assigned to them, plus ones they opened
+  themselves.
+
+  Each item carries why it is in the queue under `metadata.relation` — build the
+  list with `merge_sources/1` so the tag is set consistently.
+
+  Return `{:error, :not_configured}` when the adapter needs scope it does not
+  have (e.g. a project board without a configured project) — the aggregator
+  drops those silently rather than surfacing them as errors.
+  """
+  @callback list_assigned(opts :: keyword()) :: {:ok, [Item.t()]} | {:error, term()}
+
   @callback get_item(id :: String.t(), opts :: keyword()) :: {:ok, Item.t()} | {:error, term()}
   @callback to_initiative_context(Item.t()) :: String.t()
 
@@ -77,16 +117,157 @@ defmodule Codrift.Integration do
   @spec valid_services() :: [String.t()]
   def valid_services, do: Enum.map(@adapters, & &1.name())
 
-  @doc "Returns `{:ok, adapter_module}` for a named service, or `{:error, reason}`."
-  @spec adapter_for(String.t()) :: {:ok, module()} | {:error, String.t()}
-  def adapter_for(name) do
-    case Enum.find(@adapters, fn mod -> mod.name() == name end) do
+  @doc """
+  Returns `{:ok, adapter_module}` for a named service, or `{:error, reason}`.
+
+  Pass `adapters: [...]` to resolve against a different adapter list.
+  """
+  @spec adapter_for(String.t(), keyword()) :: {:ok, module()} | {:error, String.t()}
+  def adapter_for(name, opts \\ []) do
+    adapters = Keyword.get(opts, :adapters, @adapters)
+
+    case Enum.find(adapters, fn mod -> mod.name() == name end) do
       nil ->
-        {:error,
-         "unknown integration: #{name}. Valid services: #{Enum.join(valid_services(), ", ")}"}
+        known = Enum.map_join(adapters, ", ", & &1.name())
+        {:error, "unknown integration: #{name}. Valid services: #{known}"}
 
       mod ->
         {:ok, mod}
+    end
+  end
+
+  @typedoc "An item in the user's queue, with the initiative it was already imported into (`nil` when new)."
+  @type assigned :: %{
+          service: String.t(),
+          item: Item.t(),
+          relation: String.t(),
+          initiative_id: String.t() | nil
+        }
+
+  @default_relation "assigned"
+
+  @doc """
+  Merges the results of several per-relation queries into one tagged list.
+
+  Takes `[{relation, {:ok, items} | {:error, reason}}]`. An item found by more
+  than one query keeps the first relation it matched, so pass the strongest
+  signal first. Returns an error only when every query failed — one unavailable
+  source should never hide the others.
+  """
+  @spec merge_sources([{String.t(), {:ok, [Item.t()]} | {:error, term()}}]) ::
+          {:ok, [Item.t()]} | {:error, term()}
+  def merge_sources(sources) do
+    case Enum.split_with(sources, &match?({_relation, {:ok, _}}, &1)) do
+      {[], [{_relation, error} | _]} ->
+        error
+
+      {ok, _failed} ->
+        {:ok,
+         ok
+         |> Enum.flat_map(fn {relation, {:ok, items}} -> tag_relation(items, relation) end)
+         |> Enum.uniq_by(& &1.id)}
+    end
+  end
+
+  @doc "Records why an item is in the user's queue."
+  @spec tag_relation([Item.t()], String.t()) :: [Item.t()]
+  def tag_relation(items, relation) do
+    Enum.map(items, &%{&1 | metadata: Map.put(&1.metadata, :relation, relation)})
+  end
+
+  @doc "Returns an item's relation to the user, defaulting to `\"assigned\"`."
+  @spec relation(Item.t()) :: String.t()
+  def relation(%Item{metadata: %{relation: relation}}), do: relation
+  def relation(%Item{}), do: @default_relation
+
+  @assigned_timeout_ms 15_000
+
+  @doc """
+  Fetches everything assigned to the authenticated user across every credentialed
+  service, in parallel.
+
+  Each item carries the initiative it was already imported into (`nil` when it is
+  new), so callers can keep to one initiative per issue.
+
+  Services without credentials are skipped. Services that answer
+  `{:error, :not_configured}` are skipped too; every other failure lands in
+  `:errors` so the UI can say which service is broken while still showing the
+  rest.
+
+  ## Options
+  - `:initiatives` — initiative list used to detect already-imported items
+    (defaults to `Store.list/0`; pass explicitly outside the supervision tree)
+  - `:adapters` — adapter list to query (defaults to every registered adapter)
+  - any other option is forwarded to the adapters
+  """
+  @spec list_assigned(keyword()) :: %{
+          items: [assigned()],
+          errors: [%{service: String.t(), reason: String.t()}]
+        }
+  def list_assigned(opts \\ []) do
+    {initiatives, opts} = Keyword.pop_lazy(opts, :initiatives, fn -> Store.list() end)
+    {adapters, adapter_opts} = Keyword.pop(opts, :adapters, @adapters)
+
+    index = imported_index(initiatives)
+
+    results =
+      adapters
+      |> Enum.filter(& &1.credentials?())
+      |> Task.async_stream(
+        fn mod -> {mod.name(), mod.list_assigned(adapter_opts)} end,
+        max_concurrency: max(length(adapters), 1),
+        timeout: @assigned_timeout_ms,
+        on_timeout: :kill_task,
+        zip_input_on_exit: true
+      )
+      |> Enum.to_list()
+
+    %{items: collect_assigned(results, index), errors: collect_failures(results)}
+  end
+
+  defp collect_assigned(results, index) do
+    for {:ok, {service, {:ok, items}}} <- results, item <- items do
+      %{
+        service: service,
+        item: item,
+        relation: relation(item),
+        initiative_id: Map.get(index, {service, item.id})
+      }
+    end
+    |> Enum.sort_by(&if(&1.relation == @default_relation, do: 0, else: 1))
+  end
+
+  defp collect_failures(results) do
+    Enum.flat_map(results, fn
+      {:ok, {_service, {:error, :not_configured}}} -> []
+      {:ok, {service, {:error, reason}}} -> [%{service: service, reason: to_string(reason)}]
+      {:exit, {mod, :timeout}} -> [%{service: mod.name(), reason: "timed out"}]
+      {:exit, {mod, reason}} -> [%{service: mod.name(), reason: inspect(reason)}]
+      _ -> []
+    end)
+  end
+
+  @doc """
+  Maps `{service, item_id}` to the initiative it was imported into.
+
+  Initiatives created before the store recorded the link fall back to their
+  `integration.json`, so older imports still de-duplicate.
+  """
+  @spec imported_index([Codrift.Initiative.t()]) :: %{{String.t(), String.t()} => String.t()}
+  def imported_index(initiatives) do
+    for initiative <- initiatives,
+        ref = integration_ref(initiative),
+        into: %{},
+        do: {ref, initiative.id}
+  end
+
+  @doc "Returns the initiative a given external item was imported into, if any."
+  @spec find_imported(String.t(), String.t(), [Codrift.Initiative.t()]) ::
+          {:ok, Codrift.Initiative.t()} | :error
+  def find_imported(service, item_id, initiatives) do
+    case Enum.find(initiatives, &(integration_ref(&1) == {service, item_id})) do
+      nil -> :error
+      initiative -> {:ok, initiative}
     end
   end
 
@@ -95,28 +276,50 @@ defmodule Codrift.Integration do
 
   Steps:
   1. Fetches the item from the service.
-  2. Creates an initiative named after the item.
+  2. Creates an initiative named after the item, linked to the external item and
+     with its status mapped from the remote one.
   3. Writes `integration.json` (metadata for future sync).
-  4. Writes `integration.md` (human/agent-readable context).
+  4. Folds the item's context into the `source` block of `initiative.md`.
   5. Optionally adds a working directory to the initiative.
+
+  One initiative per external item: when the item was already imported this
+  returns `{:ok, :existing, initiative}` without touching the remote service.
 
   ## Options
   - `:dir` — working directory path to add to the initiative
+  - `:store` — initiative store to use (defaults to `Codrift.Initiative.Store`)
+  - `:adapters` — adapter list to resolve `service` against
   """
   @spec import_item(String.t(), String.t(), keyword()) ::
-          {:ok, Codrift.Initiative.t()} | {:error, term()}
+          {:ok, :imported | :existing, Codrift.Initiative.t()} | {:error, term()}
   def import_item(service, item_id, opts \\ []) do
-    with {:ok, adapter} <- adapter_for(service),
-         {:ok, item} <- adapter.get_item(item_id, opts),
-         {:ok, initiative} <- Store.create(item.title, []),
-         :ok <- write_meta(initiative.id, service, item_id),
-         :ok <- write_context(initiative.id, adapter.to_initiative_context(item)),
-         :ok <- maybe_add_dir(initiative.id, opts) do
-      {:ok, initiative}
+    {store, opts} = Keyword.pop(opts, :store, Store)
+
+    case find_imported(service, item_id, Store.list(store)) do
+      {:ok, initiative} -> {:ok, :existing, initiative}
+      :error -> do_import(service, item_id, opts, store)
     end
   end
 
-  @doc "Writes integration.json and integration.md for a pre-existing initiative (file I/O only, no GenServer)."
+  defp do_import(service, item_id, opts, store) do
+    with {:ok, adapter} <- adapter_for(service, opts),
+         {:ok, item} <- adapter.get_item(item_id, opts),
+         {:ok, created} <- Store.create(item.title, [], store),
+         ref = %{service: service, item_id: item_id, url: item.url},
+         {:ok, _} <- Store.link_integration(created.id, ref, store),
+         {:ok, _} <- Store.set_status(created.id, map_item_status(item.status), store),
+         :ok <- write_meta(created.id, service, item_id),
+         :ok <- write_context(created.id, adapter.to_initiative_context(item)),
+         :ok <- maybe_add_dir(created.id, opts, store),
+         {:ok, initiative} <- Store.get(created.id, store) do
+      {:ok, :imported, initiative}
+    end
+  end
+
+  @doc """
+  Writes `integration.json` and refreshes the `source` block of `initiative.md`
+  for a pre-existing initiative (file I/O only, no GenServer).
+  """
   @spec write_integration_files(String.t(), String.t(), String.t(), String.t()) ::
           :ok | {:error, term()}
   def write_integration_files(initiative_id, service, item_id, context) do
@@ -126,7 +329,7 @@ defmodule Codrift.Integration do
   end
 
   @doc """
-  Re-fetches the external item and overwrites `integration.md` for an initiative.
+  Re-fetches the external item and refreshes the `source` block of `initiative.md`.
 
   Returns `{:error, reason}` when the initiative was not created from an integration.
   """
@@ -163,19 +366,36 @@ defmodule Codrift.Integration do
   def meta_path(initiative_id),
     do: Path.join(Codrift.Paths.initiative_dir(initiative_id), "integration.json")
 
-  @doc "Returns the path to the integration context Markdown file for an initiative."
+  @doc """
+  Returns the path of the document holding the imported context.
+
+  Imported context lives in a managed block inside `initiative.md` so an agent
+  has one document to read, not two.
+  """
   @spec context_path(String.t()) :: String.t()
-  def context_path(initiative_id),
+  def context_path(initiative_id), do: Store.initiative_md_path(initiative_id)
+
+  @doc "Path of the pre-0.1 standalone context file, folded into `initiative.md` on write."
+  @spec legacy_context_path(String.t()) :: String.t()
+  def legacy_context_path(initiative_id),
     do: Path.join(Codrift.Paths.initiative_dir(initiative_id), "integration.md")
 
   # ── Private helpers ──────────────────────────────────────────────────────────
 
-  defp maybe_add_dir(_id, []), do: :ok
-
-  defp maybe_add_dir(id, opts) do
+  defp maybe_add_dir(id, opts, store) do
     case Keyword.get(opts, :dir) do
       nil -> :ok
-      dir -> Store.add_dir(id, Path.expand(dir))
+      dir -> with {:ok, _} <- Store.add_dir(id, Path.expand(dir), [], store), do: :ok
+    end
+  end
+
+  defp integration_ref(%{integration: %{service: service, item_id: item_id}}),
+    do: {service, item_id}
+
+  defp integration_ref(%{id: id}) do
+    case read_meta(id) do
+      {:ok, %{"service" => service, "item_id" => item_id}} -> {service, item_id}
+      _ -> nil
     end
   end
 
@@ -196,8 +416,9 @@ defmodule Codrift.Integration do
   end
 
   defp write_context(initiative_id, content) do
-    path = context_path(initiative_id)
-    path |> Path.dirname() |> File.mkdir_p!()
-    File.write(path, content)
+    with :ok <- Store.put_managed_block(initiative_id, "source", content) do
+      File.rm(legacy_context_path(initiative_id))
+      :ok
+    end
   end
 end

@@ -21,7 +21,8 @@ defmodule Codrift.Initiative do
 
   defstruct [:id, :name, :dirs, :created_at, :status, integration: nil, worktree_default: false]
 
-  @type integration :: %{service: String.t(), item_id: String.t()} | nil
+  @type integration ::
+          %{service: String.t(), item_id: String.t(), url: String.t() | nil} | nil
   @type status :: :planning | :ongoing | :done | :archived
 
   @type t :: %__MODULE__{
@@ -101,8 +102,12 @@ defmodule Codrift.Initiative do
       nil ->
         base
 
-      %{service: s, item_id: id} ->
-        Map.put(base, "integration", %{"service" => s, "item_id" => id})
+      %{service: s, item_id: id} = ref ->
+        Map.put(base, "integration", %{
+          "service" => s,
+          "item_id" => id,
+          "url" => Map.get(ref, :url)
+        })
     end
   end
 
@@ -119,8 +124,11 @@ defmodule Codrift.Initiative do
 
         integration =
           case data["integration"] do
-            %{"service" => s, "item_id" => iid} -> %{service: s, item_id: iid}
-            _ -> nil
+            %{"service" => s, "item_id" => iid} = ref ->
+              %{service: s, item_id: iid, url: Map.get(ref, "url")}
+
+            _ ->
+              nil
           end
 
         {:ok,

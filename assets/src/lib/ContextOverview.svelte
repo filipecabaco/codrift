@@ -1,7 +1,14 @@
 <script lang="ts">
   import { marked } from "marked";
   import { Icon } from "@steeze-ui/svelte-icon";
-  import { rpc, ADAPTERS, type Initiative, type Agent } from "$lib/api";
+  import {
+    rpc,
+    openUrl,
+    ADAPTERS,
+    SERVICE_META,
+    type Initiative,
+    type Agent,
+  } from "$lib/api";
   import { workspace as ws } from "$lib/workspace.svelte";
   import { MemoryIcon, contextFileIcon, dirIcon } from "$lib/icons";
   import MemoryView from "$lib/MemoryView.svelte";
@@ -27,7 +34,21 @@
   // profile the user just added to settings.json.
   let starting = $state<string | null>(null);
   let addingScratch = $state(false);
+  let branching = $state<string | null>(null);
   let error = $state<string | null>(null);
+
+  async function toggleBranch(dir: string) {
+    branching = dir;
+    error = null;
+    try {
+      await rpc("toggle_dir_branch", { initiative_id: initiative.id, dir });
+      onChanged();
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      branching = null;
+    }
+  }
 
   const choice = $derived(ws.launchChoice);
   const profiles = $derived(ws.profiles);
@@ -38,6 +59,8 @@
     const p = profiles.find((x) => x.name === choice);
     return p ? { adapter: p.adapter ?? "claude", profile: p.name } : { adapter: choice };
   }
+
+  const sourceLabel = (service: string) => SERVICE_META[service]?.label ?? service;
 
   const dirLabel = (path: string) =>
     path === initiative.context_path ? "scratch" : (path.split("/").pop() ?? path);
@@ -158,6 +181,17 @@
       <span class="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">
         {initiative.status}
       </span>
+      {#if initiative.integration}
+        {@const source = initiative.integration}
+        <button
+          class="rounded-full border border-accent/40 px-2 py-0.5 text-[11px] text-accent disabled:opacity-70"
+          title={source.url ?? `${sourceLabel(source.service)} ${source.item_id}`}
+          disabled={!source.url}
+          onclick={() => source.url && openUrl(source.url)}
+        >
+          {sourceLabel(source.service)} · {source.item_id}
+        </button>
+      {/if}
     </div>
     <div class="mt-1.5 text-[11px] text-muted">
       {initiative.dirs.length} director{initiative.dirs.length === 1 ? "y" : "ies"}
@@ -203,7 +237,26 @@
           <span class="min-w-0 flex-1 truncate text-[13px] text-fg" title={dir.path}>
             {dirLabel(dir.path)}
           </span>
-          {#if dir.worktree_enabled}<span class="rounded border border-border px-1.5 text-[11px] text-muted">worktree</span>{/if}
+          {#if dir.worktree_enabled}<span
+              class="rounded border border-border px-1.5 text-[11px] text-muted">worktree</span
+            >{/if}
+          {#if dir.git && !dir.worktree_enabled}
+            <button
+              class={[
+                "shrink-0 rounded border px-1.5 text-[11px]",
+                dir.branch
+                  ? "border-accent/40 text-accent"
+                  : "border-border text-muted hover:text-fg",
+              ]}
+              title={dir.branch
+                ? `On ${dir.branch} — click to stop tracking it`
+                : "Check this directory out on a branch for this initiative"}
+              disabled={branching === dir.path}
+              onclick={() => toggleBranch(dir.path)}
+            >
+              {branching === dir.path ? "…" : (dir.branch ?? "branch")}
+            </button>
+          {/if}
           {#if dirAgents}<span class="text-[11px] text-muted">{dirAgents} running</span>{/if}
           <button
             class="shrink-0 rounded-md bg-accent/20 px-2.5 py-1 text-[11px] text-accent hover:bg-accent/30 disabled:opacity-50"

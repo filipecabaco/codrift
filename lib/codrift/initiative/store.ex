@@ -20,7 +20,7 @@ defmodule Codrift.Initiative.Store do
 
   require Logger
 
-  alias Codrift.{ClaudePermissions, Initiative}
+  alias Codrift.{Branch, ClaudePermissions, Initiative}
   alias Codrift.Initiative.DirEntry
   alias Codrift.Worktree
 
@@ -93,14 +93,41 @@ defmodule Codrift.Initiative.Store do
     GenServer.call(server, {:set_status, id, status})
   end
 
-  @doc "Links an initiative to an external integration item and sets the initial status."
-  def link_integration(id, service, item_id, server \\ __MODULE__) do
-    GenServer.call(server, {:link_integration, id, service, item_id})
+  @doc """
+  Links an initiative to an external integration item.
+
+  `ref` is `%{service: _, item_id: _}` plus an optional `:url` pointing at the
+  remote item.
+  """
+  def link_integration(id, ref, server \\ __MODULE__) do
+    GenServer.call(server, {:link_integration, id, ref})
   end
 
   @doc "Sets the initiative-level default for whether new dirs should use git worktrees."
   def set_worktree_default(id, default, server \\ __MODULE__) do
     GenServer.call(server, {:set_worktree_default, id, default})
+  end
+
+  @doc """
+  Puts every git-backed directory of an initiative on its own branch.
+
+  Non-repositories and directories already on the branch are skipped. Returns
+  `{:ok, %{branch: name, switched: [dir], skipped: [{dir, reason}]}}` — a
+  directory that could not switch (uncommitted changes) never blocks the others.
+  """
+  def branch_all(id, server \\ __MODULE__) do
+    GenServer.call(server, {:branch_all, id}, 30_000)
+  end
+
+  @doc """
+  Toggles the initiative branch on or off for one directory.
+
+  Turning it off only stops Codrift tracking the branch: the branch itself and
+  the checkout are left exactly as they are, since deleting either could throw
+  away committed work.
+  """
+  def toggle_dir_branch(id, dir, server \\ __MODULE__) do
+    GenServer.call(server, {:toggle_dir_branch, id, dir}, 30_000)
   end
 
   @doc """
@@ -212,9 +239,13 @@ defmodule Codrift.Initiative.Store do
     update_initiative(state, id, fn i -> %{i | status: status} end)
   end
 
-  def handle_call({:link_integration, id, service, item_id}, _from, state) do
+  def handle_call(
+        {:link_integration, id, %{service: service, item_id: item_id} = ref},
+        _from,
+        state
+      ) do
     update_initiative(state, id, fn i ->
-      %{i | integration: %{service: service, item_id: item_id}}
+      %{i | integration: %{service: service, item_id: item_id, url: Map.get(ref, :url)}}
     end)
   end
 
@@ -222,11 +253,73 @@ defmodule Codrift.Initiative.Store do
     update_initiative(state, id, fn i -> %{i | worktree_default: default} end)
   end
 
+  def handle_call({:branch_all, id}, _from, state) do
+    case Map.fetch(state.initiatives, id) do
+      {:ok, initiative} -> do_branch_all(state, initiative)
+      :error -> {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:toggle_dir_branch, id, dir}, _from, state) do
+    case Map.fetch(state.initiatives, id) do
+      {:ok, initiative} -> do_toggle_dir_branch(state, initiative, dir)
+      :error -> {:reply, {:error, :not_found}, state}
+    end
+  end
+
   def handle_call({:toggle_dir_worktree, id, dir}, _from, state) do
     case Map.fetch(state.initiatives, id) do
       {:ok, initiative} -> do_toggle_dir_worktree(state, initiative, id, dir)
       :error -> {:reply, {:error, :not_found}, state}
     end
+  end
+
+  defp do_branch_all(state, initiative) do
+    branch = Branch.name(initiative)
+
+    {entries, switched, skipped} =
+      Enum.reduce(initiative.dirs, {[], [], []}, fn entry, {entries, switched, skipped} ->
+        case Branch.ensure(entry.path, branch) do
+          {:ok, ^branch} ->
+            {[%{entry | branch: branch} | entries], [entry.path | switched], skipped}
+
+          {:error, reason} ->
+            {[entry | entries], switched, [%{dir: entry.path, reason: reason} | skipped]}
+        end
+      end)
+
+    updated = %{initiative | dirs: Enum.reverse(entries)}
+    result = %{branch: branch, switched: Enum.reverse(switched), skipped: Enum.reverse(skipped)}
+
+    {:reply, {:ok, result}, put_initiative(state, updated),
+     {:continue, {:update_initiative_md, updated}}}
+  end
+
+  defp do_toggle_dir_branch(state, initiative, dir) do
+    case Enum.find(initiative.dirs, &(&1.path == dir)) do
+      nil -> {:reply, {:error, :not_found}, state}
+      %DirEntry{branch: nil} = entry -> enable_dir_branch(state, initiative, entry)
+      entry -> reply_with_dirs(state, initiative, dir, %{entry | branch: nil})
+    end
+  end
+
+  defp enable_dir_branch(state, initiative, entry) do
+    branch = Branch.name(initiative)
+
+    case Branch.ensure(entry.path, branch) do
+      {:ok, ^branch} ->
+        reply_with_dirs(state, initiative, entry.path, %{entry | branch: branch})
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp reply_with_dirs(state, initiative, dir, updated_entry) do
+    updated = update_initiative_dirs(initiative, dir, updated_entry)
+
+    {:reply, {:ok, updated}, put_initiative(state, updated),
+     {:continue, {:update_initiative_md, updated}}}
   end
 
   defp do_toggle_dir_worktree(state, initiative, id, dir) do
@@ -388,6 +481,54 @@ defmodule Codrift.Initiative.Store do
     ensure_git_repo(ctx_path)
     write_initiative_md(ctx_path, initiative)
     write_orchestration_md(ctx_path, initiative)
+  end
+
+  @doc "Returns the path to `initiative.md` for an initiative. Pure function — no GenServer call."
+  @spec initiative_md_path(String.t()) :: String.t()
+  def initiative_md_path(id), do: Path.join(Codrift.Paths.initiative_dir(id), "initiative.md")
+
+  @doc """
+  Replaces a Codrift-managed block inside `initiative.md`, leaving everything
+  the user wrote around it untouched.
+
+  A block is delimited by `<!-- codrift:{name}:start -->` / `:end`. When the
+  markers are absent the block is inserted above `## Goal` (or appended), so
+  initiatives created before a block existed pick it up on the next write.
+  """
+  @spec put_managed_block(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def put_managed_block(id, name, body) do
+    path = initiative_md_path(id)
+    path |> Path.dirname() |> File.mkdir_p!()
+
+    block =
+      "<!-- codrift:#{name}:start -->\n#{String.trim_trailing(body)}\n<!-- codrift:#{name}:end -->"
+
+    content =
+      case File.read(path) do
+        {:ok, existing} -> replace_or_insert(existing, name, block)
+        {:error, _} -> block <> "\n"
+      end
+
+    File.write(path, content)
+  end
+
+  defp replace_or_insert(content, name, block) do
+    start_marker = "<!-- codrift:#{name}:start -->"
+
+    cond do
+      String.contains?(content, start_marker) ->
+        Regex.replace(
+          ~r/<!-- codrift:#{Regex.escape(name)}:start -->.*?<!-- codrift:#{Regex.escape(name)}:end -->/s,
+          content,
+          block
+        )
+
+      String.contains?(content, "\n## Goal") ->
+        String.replace(content, "\n## Goal", "\n#{block}\n\n## Goal", global: false)
+
+      true ->
+        String.trim_trailing(content) <> "\n\n" <> block <> "\n"
+    end
   end
 
   @doc """
@@ -636,9 +777,14 @@ defmodule Codrift.Initiative.Store do
   end
 
   defp dirs_block(dirs) do
-    body = Enum.map_join(dirs, "\n", fn entry -> "- #{Codrift.Paths.compact(entry.path)}" end)
+    body = Enum.map_join(dirs, "\n", &dir_line/1)
     "<!-- codrift:dirs:start -->\n## Directories\n\n#{body}\n<!-- codrift:dirs:end -->"
   end
+
+  defp dir_line(%DirEntry{branch: branch} = entry) when is_binary(branch),
+    do: "- #{Codrift.Paths.compact(entry.path)} (branch `#{branch}`)"
+
+  defp dir_line(entry), do: "- #{Codrift.Paths.compact(entry.path)}"
 
   # Atomic write: a crash or power loss mid-write leaves the previous
   # initiatives.json intact instead of a truncated file that would load as

@@ -80,37 +80,29 @@ defmodule Codrift.CLI.Integration do
     end
   end
 
+  def run(["assigned" | rest]) do
+    service = Enum.find(rest, &(!String.starts_with?(&1, "--")))
+
+    %{items: items, errors: errors} = Integration.list_assigned(initiatives: load_initiatives())
+
+    items =
+      case service do
+        nil -> items
+        name -> Enum.filter(items, &(&1.service == name))
+      end
+
+    print_json(%{items: Enum.map(items, &assigned_to_map/1), errors: errors})
+  end
+
   def run(["import", service, item_id | rest]) do
     opts = parse_opts(rest)
 
-    with {:ok, adapter} <- Integration.adapter_for(service),
-         {:ok, item} <- adapter.get_item(item_id, opts) do
-      initiative = Initiative.new(item.title)
-      ctx = context_path(initiative.id)
-      File.mkdir_p!(ctx)
-      Store.write_initiative_md_for_cli(ctx, initiative)
-      persist(initiative)
+    case Integration.find_imported(service, item_id, load_initiatives()) do
+      {:ok, existing} ->
+        print_json(Map.put(Initiative.to_map(existing), "existing", true))
 
-      :ok =
-        Integration.write_integration_files(
-          initiative.id,
-          service,
-          item_id,
-          adapter.to_initiative_context(item)
-        )
-
-      final =
-        if dir = opts[:dir] do
-          updated = %{initiative | dirs: [Path.expand(dir)]}
-          persist(updated)
-          updated
-        else
-          initiative
-        end
-
-      print_json(Initiative.to_map(final))
-    else
-      {:error, reason} -> fail(reason)
+      :error ->
+        do_import(service, item_id, opts)
     end
   end
 
@@ -128,8 +120,9 @@ defmodule Codrift.CLI.Integration do
       codrift integration auth   <service>
       codrift integration tokens
       codrift integration revoke <service>
-      codrift integration list   <service> [filter]
-      codrift integration import <service> <item_id> [--dir=<path>]
+      codrift integration list     <service> [filter]
+      codrift integration assigned [service]
+      codrift integration import   <service> <item_id> [--dir=<path>]
       codrift integration sync   <initiative_id>
 
     Services: #{Integration.valid_services() |> Enum.join(", ")}
@@ -139,6 +132,36 @@ defmodule Codrift.CLI.Integration do
                     — requires the Codrift desktop app to be running
       Device flow   (github, github_projects) — authorize from the desktop app
     """)
+  end
+
+  defp do_import(service, item_id, opts) do
+    with {:ok, adapter} <- Integration.adapter_for(service),
+         {:ok, item} <- adapter.get_item(item_id, opts) do
+      dirs = if dir = opts[:dir], do: [Path.expand(dir)], else: []
+
+      initiative = %{
+        Initiative.new(item.title, dirs)
+        | integration: %{service: service, item_id: item_id},
+          status: Integration.map_item_status(item.status)
+      }
+
+      ctx = context_path(initiative.id)
+      File.mkdir_p!(ctx)
+      Store.write_initiative_md_for_cli(ctx, initiative)
+      persist(initiative)
+
+      :ok =
+        Integration.write_integration_files(
+          initiative.id,
+          service,
+          item_id,
+          adapter.to_initiative_context(item)
+        )
+
+      print_json(Map.put(Initiative.to_map(initiative), "existing", false))
+    else
+      {:error, reason} -> fail(reason)
+    end
   end
 
   # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -174,6 +197,16 @@ defmodule Codrift.CLI.Integration do
     end
   end
 
+  defp assigned_to_map(%{service: service, item: item, initiative_id: initiative_id}) do
+    item
+    |> item_to_map()
+    |> Map.merge(%{
+      service: service,
+      initiative_id: initiative_id,
+      imported: not is_nil(initiative_id)
+    })
+  end
+
   defp item_to_map(%Integration.Item{} = item) do
     %{
       id: item.id,
@@ -198,6 +231,17 @@ defmodule Codrift.CLI.Integration do
   defp persist(initiative) do
     data = Map.put(load_raw(), initiative.id, Initiative.to_map(initiative))
     Codrift.Files.write_atomic!(initiatives_file(), JSON.encode!(%{"initiatives" => data}))
+  end
+
+  defp load_initiatives do
+    load_raw()
+    |> Map.values()
+    |> Enum.flat_map(fn data ->
+      case Initiative.from_map(data) do
+        {:ok, initiative} -> [initiative]
+        _ -> []
+      end
+    end)
   end
 
   defp load_raw do

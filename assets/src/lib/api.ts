@@ -33,9 +33,18 @@ export type Initiative = {
   name: string;
   status: "planning" | "ongoing" | "done" | "archived";
   /** `git` is derived per request by the backend, not stored. */
-  dirs: { path: string; worktree_enabled?: boolean; git?: boolean }[];
+  dirs: {
+    path: string;
+    worktree_enabled?: boolean;
+    worktree_path?: string;
+    /** Set when the directory is checked out on the initiative's branch. */
+    branch?: string;
+    git?: boolean;
+  }[];
   created_at: string;
   context_path?: string;
+  /** Set when the initiative was imported from an issue tracker. */
+  integration?: { service: string; item_id: string; url: string | null };
 };
 
 export type Agent = {
@@ -116,6 +125,39 @@ export function revokeOAuthToken(service: string): Promise<unknown> {
 // machine) opens it for us. In a plain browser this is still harmless.
 export function openUrl(url: string): Promise<unknown> {
   return rpc("open_url", { url });
+}
+
+export type AssignedItem = {
+  service: string;
+  id: string;
+  title: string;
+  url: string;
+  status: string | null;
+  assignee: string | null;
+  labels: string[];
+  /** Why this item is in the user's queue: "assigned", "created", … */
+  relation: string;
+  imported: boolean;
+  initiative_id: string | null;
+};
+
+export type AssignedWork = {
+  items: AssignedItem[];
+  errors: { service: string; reason: string }[];
+};
+
+export function listAssignedItems(): Promise<AssignedWork> {
+  return rpc<AssignedWork>("list_assigned_items");
+}
+
+export function importFromIntegration(
+  service: string,
+  itemId: string,
+): Promise<Initiative & { existing: boolean }> {
+  return rpc<Initiative & { existing: boolean }>("import_from_integration", {
+    service,
+    item_id: itemId,
+  });
 }
 
 // Friendly display metadata. Services not listed fall back to a title-cased key.

@@ -163,7 +163,7 @@ API: `get/2`, `post/3`, `graphql/4`
 
 ## Codrift.Integration.Sync
 
-Pure module. Re-fetches an item from the linked integration and rewrites `integration.md` in the initiative's context folder.
+Pure module. Re-fetches an item from the linked integration and refreshes the `source` block of `initiative.md` in the initiative's context folder.
 
 API: `sync/1`
 

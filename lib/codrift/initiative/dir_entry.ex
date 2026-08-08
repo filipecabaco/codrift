@@ -2,18 +2,20 @@ defmodule Codrift.Initiative.DirEntry do
   @moduledoc """
   A project directory entry within an initiative.
 
-  Carries the source path and optional git worktree configuration.
-  When a worktree is active, `worktree_path` is set and agents run there
-  instead of the original source `path`.
+  Carries the source path and its optional git isolation. When a worktree is
+  active, `worktree_path` is set and agents run there instead of the original
+  source `path`. A `branch` is the lighter alternative: agents stay in `path`,
+  which is checked out on an initiative-specific branch.
   """
 
   @enforce_keys [:path]
-  defstruct [:path, worktree_enabled: false, worktree_path: nil]
+  defstruct [:path, worktree_enabled: false, worktree_path: nil, branch: nil]
 
   @type t :: %__MODULE__{
           path: String.t(),
           worktree_enabled: boolean(),
-          worktree_path: String.t() | nil
+          worktree_path: String.t() | nil,
+          branch: String.t() | nil
         }
 
   @doc "Creates a new entry from a source path and optional keyword opts."
@@ -21,7 +23,8 @@ defmodule Codrift.Initiative.DirEntry do
     %__MODULE__{
       path: path,
       worktree_enabled: Keyword.get(opts, :worktree_enabled, false),
-      worktree_path: Keyword.get(opts, :worktree_path)
+      worktree_path: Keyword.get(opts, :worktree_path),
+      branch: Keyword.get(opts, :branch)
     }
   end
 
@@ -31,9 +34,13 @@ defmodule Codrift.Initiative.DirEntry do
 
   @doc "Serialises to a plain map for JSON encoding."
   def to_map(%__MODULE__{} = e) do
-    base = %{"path" => e.path, "worktree_enabled" => e.worktree_enabled}
-    if e.worktree_path, do: Map.put(base, "worktree_path", e.worktree_path), else: base
+    %{"path" => e.path, "worktree_enabled" => e.worktree_enabled}
+    |> put_if("worktree_path", e.worktree_path)
+    |> put_if("branch", e.branch)
   end
+
+  defp put_if(map, _key, nil), do: map
+  defp put_if(map, key, value), do: Map.put(map, key, value)
 
   @doc """
   Deserialises from a JSON-decoded value.
@@ -47,7 +54,8 @@ defmodule Codrift.Initiative.DirEntry do
     %__MODULE__{
       path: path,
       worktree_enabled: Map.get(m, "worktree_enabled", false),
-      worktree_path: Map.get(m, "worktree_path")
+      worktree_path: Map.get(m, "worktree_path"),
+      branch: Map.get(m, "branch")
     }
   end
 end

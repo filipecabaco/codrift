@@ -21,29 +21,39 @@ defmodule Codrift.Integration.Adapters.GitLab do
   def name, do: "gitlab"
 
   @impl true
+  def credentials?, do: Codrift.OAuth.connected?(name()) or System.get_env("GITLAB_TOKEN") != nil
+
+  @impl true
   def list_items(opts \\ []) do
     with {:ok, project} <- resolve_project(opts),
-         {:ok, token} <- require_token() do
+         {:ok, headers} <- auth() do
       state = opts[:filter] || "opened"
       encoded = URI.encode_www_form(project)
-      url = "#{base_url()}/projects/#{encoded}/issues?state=#{state}&per_page=50"
 
-      case HTTP.get(url, auth_headers(token)) do
-        {:ok, issues} when is_list(issues) -> {:ok, Enum.map(issues, &to_item/1)}
-        {:ok, _} -> {:error, "unexpected response from GitLab Issues API"}
-        {:error, reason} -> {:error, reason}
-      end
+      get_issues("#{base_url()}/projects/#{encoded}/issues?state=#{state}&per_page=50", headers)
+    end
+  end
+
+  @impl true
+  def list_assigned(opts \\ []) do
+    with {:ok, headers} <- auth() do
+      state = opts[:filter] || "opened"
+
+      Codrift.Integration.merge_sources([
+        {"assigned", my_issues("assigned_to_me", state, headers)},
+        {"created", my_issues("created_by_me", state, headers)}
+      ])
     end
   end
 
   @impl true
   def get_item(item_id, opts \\ []) do
-    with {:ok, token} <- require_token(),
+    with {:ok, headers} <- auth(),
          {:ok, {project, iid}} <- parse_item_id(item_id, opts) do
       encoded = URI.encode_www_form(project)
       url = "#{base_url()}/projects/#{encoded}/issues/#{iid}"
 
-      case HTTP.get(url, auth_headers(token)) do
+      case HTTP.get(url, headers) do
         {:ok, issue} -> {:ok, to_item(issue)}
         {:error, reason} -> {:error, reason}
       end
@@ -68,17 +78,39 @@ defmodule Codrift.Integration.Adapters.GitLab do
 
   # ── Private ──────────────────────────────────────────────────────────────────
 
+  defp my_issues(scope, state, headers) do
+    get_issues(
+      "#{base_url()}/issues?scope=#{scope}&state=#{state}&order_by=updated_at&per_page=50",
+      headers
+    )
+  end
+
+  defp get_issues(url, headers) do
+    case HTTP.get(url, headers) do
+      {:ok, issues} when is_list(issues) -> {:ok, Enum.map(issues, &to_item/1)}
+      {:ok, _} -> {:error, "unexpected response from GitLab Issues API"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp to_item(issue) do
     %Item{
-      id: to_string(issue["iid"]),
+      id: qualified_id(issue),
       title: issue["title"] || "(untitled)",
-      description: issue["description"],
+      description: Item.presence(issue["description"]),
       url: issue["web_url"] || "",
       labels: issue["labels"] || [],
       status: issue["state"],
       assignee: get_in(issue, ["assignee", "name"]),
       linked_prs: []
     }
+  end
+
+  defp qualified_id(issue) do
+    case get_in(issue, ["references", "full"]) do
+      "" <> ref -> if String.contains?(ref, "#"), do: ref, else: to_string(issue["iid"])
+      _ -> to_string(issue["iid"])
+    end
   end
 
   defp parse_item_id(item_id, opts) do
@@ -102,23 +134,22 @@ defmodule Codrift.Integration.Adapters.GitLab do
     end
   end
 
-  defp require_token do
-    case System.get_env("GITLAB_TOKEN") do
-      nil -> {:error, "GITLAB_TOKEN env var is required"}
-      token -> {:ok, token}
+  defp auth do
+    case Codrift.OAuth.get_token(name()) do
+      {:ok, %{"access_token" => t}} ->
+        {:ok, [{"authorization", "Bearer #{t}"}]}
+
+      _ ->
+        case System.get_env("GITLAB_TOKEN") do
+          nil -> {:error, "GITLAB_TOKEN env var is required"}
+          token -> {:ok, [{"private-token", token}]}
+        end
     end
   end
 
   defp base_url do
     host = System.get_env("GITLAB_HOST") || "gitlab.com"
     "https://#{host}/api/v4"
-  end
-
-  defp auth_headers(env_token) do
-    case Codrift.OAuth.get_token(name()) do
-      {:ok, %{"access_token" => t}} -> [{"authorization", "Bearer #{t}"}]
-      _ -> [{"private-token", env_token}]
-    end
   end
 
   defp format_list([]), do: "none"

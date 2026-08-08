@@ -26,6 +26,7 @@
   import Confirm from "$lib/Confirm.svelte";
   import Editor from "$lib/Editor.svelte";
   import Integrations from "$lib/Integrations.svelte";
+  import NewInitiative from "$lib/NewInitiative.svelte";
   import Appearance from "$lib/Appearance.svelte";
   import { initTheme, themeState } from "$lib/theme.svelte";
   import { initFonts } from "$lib/fonts.svelte";
@@ -95,6 +96,7 @@
     | { kind: "dirpicker"; submit: (v: string) => void }
     | { kind: "confirm"; message: string; onConfirm: () => void }
     | { kind: "integrations" }
+    | { kind: "new_initiative" }
     | { kind: "appearance" }
     | null;
   let modal = $state<Modal>(null);
@@ -299,6 +301,49 @@
     modal = { kind: "prompt", title, placeholder, submit };
   }
 
+  // Select what was just created or imported: otherwise it lands at the bottom
+  // of the sidebar unselected and the natural next key (`a`) would add a
+  // directory to whatever was selected before.
+  async function revealInitiative(id: string) {
+    modal = null;
+    await load();
+    selectInitiative(id);
+  }
+
+  // Skips are the interesting half (a dirty tree, a plain folder), so the toast
+  // names the first one rather than just counting successes.
+  async function branchInitiative() {
+    if (!selectedInitiative) return toast("Select an initiative first.");
+    try {
+      const res = await rpc<{
+        branch: string;
+        switched: string[];
+        skipped: { dir: string; reason: string }[];
+      }>("branch_initiative", { initiative_id: selectedInitiative.id });
+
+      if (!res.switched.length && !res.skipped.length) {
+        toast("No directories to branch — add one first.");
+      } else if (res.skipped.length) {
+        toast(`${res.switched.length} on ${res.branch} · skipped: ${res.skipped[0].reason}`);
+      } else {
+        toast(`${res.switched.length} director${res.switched.length === 1 ? "y" : "ies"} on ${res.branch}`);
+      }
+      await load();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+
+  async function createInitiative(name: string) {
+    try {
+      const created = await rpc<{ id: string }>("create_initiative", { name });
+      await revealInitiative(created.id);
+    } catch (e) {
+      modal = null;
+      toast((e as Error).message);
+    }
+  }
+
   async function runAction(id: ActionId) {
     if (modal) modal = null;
     switch (id) {
@@ -354,19 +399,10 @@
         });
         break;
       case "new_initiative":
-        openPrompt("New initiative name", async (name) => {
-          modal = null;
-          try {
-            // Select what was just created: otherwise it lands at the bottom of
-            // the sidebar unselected and the natural next key (`a`) would add a
-            // directory to whatever was selected before.
-            const created = await rpc<{ id: string }>("create_initiative", { name });
-            await load();
-            if (created?.id) selectInitiative(created.id);
-          } catch (e) {
-            toast((e as Error).message);
-          }
-        });
+        modal = { kind: "new_initiative" };
+        break;
+      case "branch_initiative":
+        await branchInitiative();
         break;
       case "add_dir":
         if (!selectedInitiative) return toast("Select an initiative first.");
@@ -589,6 +625,9 @@
     if (active.agentId && active.tab === "context") hints.push({ spec: "⇥", label: "Terminal" });
     if (ws.initiatives.length === 0) hints.push({ spec: k("new_initiative"), label: "New initiative" });
     else hints.push({ spec: k("start_agent"), label: "Start agent" }, { spec: k("add_dir"), label: "Add dir" });
+    if (selectedInitiative?.dirs.some((d) => d.git && !d.branch)) {
+      hints.push({ spec: k("branch_initiative"), label: "Branch" });
+    }
     if (selectedInitiative) hints.push({ spec: "⌘D", label: "Split" });
     if (split) hints.push({ spec: "⌘⌃=", label: "Balance" });
     hints.push(palette);
@@ -864,6 +903,12 @@
   <Appearance onClose={() => (modal = null)} />
 {:else if modal?.kind === "integrations"}
   <Integrations onClose={() => (modal = null)} />
+{:else if modal?.kind === "new_initiative"}
+  <NewInitiative
+    onCreate={createInitiative}
+    onOpen={revealInitiative}
+    onClose={() => (modal = null)}
+  />
 {:else if modal?.kind === "palette"}
   <CommandPalette items={paletteItems} onRun={runAction} onClose={() => (modal = null)} />
 {:else if modal?.kind === "prompt"}

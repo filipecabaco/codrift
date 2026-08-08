@@ -22,13 +22,25 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
   def name, do: "github_projects"
 
   @impl true
-  def list_items(opts \\ []) do
-    token = System.get_env("GITHUB_TOKEN")
+  def credentials?,
+    do:
+      Codrift.OAuth.connected?(name()) or Codrift.OAuth.connected?("github") or
+        System.get_env("GITHUB_TOKEN") != nil
 
-    if token do
+  @impl true
+  def list_assigned(opts \\ []) do
+    with {:ok, filter} <- project_scope(opts),
+         {:ok, items} <- list_items(Keyword.put(opts, :filter, filter)),
+         {:ok, login} <- viewer_login() do
+      {:ok, Enum.filter(items, &(login in assignees(&1)))}
+    end
+  end
+
+  @impl true
+  def list_items(opts \\ []) do
+    with {:ok, headers} <- auth() do
       filter = opts[:filter] || ""
       {owner, project_number} = parse_project_filter(filter, opts)
-      headers = auth_headers(token)
 
       user_query = """
       query ListProjectItems($owner: String!, $number: Int!, $first: Int) {
@@ -88,16 +100,12 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
 
         {:ok, nodes}
       end
-    else
-      {:error, "GITHUB_TOKEN env var is required for GitHub Projects"}
     end
   end
 
   @impl true
   def get_item(item_id, _opts \\ []) do
-    token = System.get_env("GITHUB_TOKEN")
-
-    if token do
+    with {:ok, headers} <- auth() do
       query = """
       query GetProjectItem($id: ID!) {
         node(id: $id) {
@@ -119,7 +127,7 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
       }
       """
 
-      case HTTP.graphql(@graphql_url, query, %{id: item_id}, auth_headers(token)) do
+      case HTTP.graphql(@graphql_url, query, %{id: item_id}, headers) do
         {:ok, %{"data" => %{"node" => %{"content" => content}}}} when not is_nil(content) ->
           {:ok, to_item(content)}
 
@@ -132,8 +140,6 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
         {:error, reason} ->
           {:error, reason}
       end
-    else
-      {:error, "GITHUB_TOKEN env var is required for GitHub Projects"}
     end
   end
 
@@ -156,20 +162,47 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
   # ── Private ──────────────────────────────────────────────────────────────────
 
   defp to_item(content) do
+    logins = Enum.map(get_in(content, ["assignees", "nodes"]) || [], & &1["login"])
+
     %Item{
       id: to_string(content["number"] || content["id"] || ""),
       title: content["title"] || "(untitled)",
-      description: content["body"],
+      description: Item.presence(content["body"]),
       url: content["url"] || "",
       labels: Enum.map(get_in(content, ["labels", "nodes"]) || [], & &1["name"]),
       status: content["state"],
-      assignee:
-        case get_in(content, ["assignees", "nodes"]) do
-          [first | _] -> first["login"]
-          _ -> nil
-        end,
-      linked_prs: []
+      assignee: List.first(logins),
+      linked_prs: [],
+      metadata: %{assignees: logins}
     }
+  end
+
+  defp assignees(%Item{metadata: %{assignees: logins}}), do: logins
+  defp assignees(%Item{}), do: []
+
+  defp project_scope(opts) do
+    case opts[:filter] || configured_project() do
+      nil -> {:error, :not_configured}
+      filter -> {:ok, filter}
+    end
+  end
+
+  defp configured_project do
+    case System.get_env("GITHUB_OWNER") do
+      nil -> nil
+      owner -> "#{owner}/#{System.get_env("GITHUB_PROJECT_NUMBER") || "1"}"
+    end
+  end
+
+  defp viewer_login do
+    with {:ok, headers} <- auth() do
+      case HTTP.graphql(@graphql_url, "query { viewer { login } }", %{}, headers) do
+        {:ok, %{"data" => %{"viewer" => %{"login" => login}}}} -> {:ok, login}
+        {:ok, %{"errors" => errors}} -> {:error, format_gql_errors(errors)}
+        {:ok, _} -> {:error, "could not resolve the authenticated GitHub user"}
+        {:error, reason} -> {:error, reason}
+      end
+    end
   end
 
   defp parse_project_filter(filter, opts) do
@@ -212,7 +245,7 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
     end
   end
 
-  defp auth_headers(env_token) do
+  defp auth do
     token =
       case Codrift.OAuth.get_token(name()) do
         {:ok, %{"access_token" => t}} ->
@@ -221,11 +254,14 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
         _ ->
           case Codrift.OAuth.get_token("github") do
             {:ok, %{"access_token" => t}} -> t
-            _ -> env_token
+            _ -> System.get_env("GITHUB_TOKEN")
           end
       end
 
-    [{"authorization", "Bearer #{token}"}]
+    case token do
+      nil -> {:error, "GITHUB_TOKEN env var is required for GitHub Projects"}
+      token -> {:ok, [{"authorization", "Bearer #{token}"}]}
+    end
   end
 
   defp format_gql_errors(errors) do

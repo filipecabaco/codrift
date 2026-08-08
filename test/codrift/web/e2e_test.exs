@@ -19,6 +19,7 @@ defmodule Codrift.Web.E2ETest do
   import Plug.Test
   import Plug.Conn
 
+  alias Codrift.Branch
   alias Codrift.Initiative.Store
   alias Codrift.Test.GitRepo
 
@@ -28,7 +29,7 @@ defmodule Codrift.Web.E2ETest do
 
   # Drives a Core operation through the real POST /api/rpc route and returns
   # {status, decoded_body}. This is the exact path the web UI uses.
-  defp rpc(name, args \\ %{}) do
+  defp rpc(name, args) do
     conn =
       conn(:post, "/api/rpc", Jason.encode!(%{"name" => name, "args" => args}))
       |> put_req_header("content-type", "application/json")
@@ -89,6 +90,44 @@ defmodule Codrift.Web.E2ETest do
     test "operations on an unknown initiative return a not-found error" do
       assert {422, %{"error" => msg}} = rpc("get_diff", %{"initiative_id" => "does-not-exist"})
       assert msg =~ "not found"
+    end
+
+    @tag :tmp_dir
+    test "branch_initiative puts git directories on the initiative branch", %{tmp_dir: tmp_dir} do
+      repo = GitRepo.init!(Path.join(tmp_dir, "repo"))
+      plain = Path.join(tmp_dir, "plain")
+      File.mkdir_p!(plain)
+
+      {id, _} = create_initiative!("e2e-branching")
+      ok!("add_dir", %{"initiative_id" => id, "dir" => repo})
+      ok!("add_dir", %{"initiative_id" => id, "dir" => plain})
+
+      assert %{"branch" => "codrift/e2e-branching", "switched" => [^repo], "skipped" => [skipped]} =
+               ok!("branch_initiative", %{"initiative_id" => id})
+
+      assert skipped["dir"] == plain
+      assert Branch.current(repo) == "codrift/e2e-branching"
+
+      # The dir now reports its branch back to the UI.
+      assert [%{"branch" => "codrift/e2e-branching"}] =
+               ok!("list_initiatives")
+               |> Enum.find(&(&1["id"] == id))
+               |> Map.fetch!("dirs")
+               |> Enum.filter(&(&1["path"] == repo))
+    end
+
+    @tag :tmp_dir
+    test "toggle_dir_branch refuses to move a dirty working tree", %{tmp_dir: tmp_dir} do
+      repo = GitRepo.init!(Path.join(tmp_dir, "repo"))
+      File.write!(Path.join(repo, "wip.txt"), "uncommitted")
+
+      {id, _} = create_initiative!("e2e-dirty")
+      ok!("add_dir", %{"initiative_id" => id, "dir" => repo})
+
+      assert {422, %{"error" => msg}} =
+               rpc("toggle_dir_branch", %{"initiative_id" => id, "dir" => repo})
+
+      assert msg =~ "uncommitted changes"
     end
   end
 
@@ -253,6 +292,7 @@ defmodule Codrift.Web.E2ETest do
       bindings = ok!("get_keybindings")
       assert is_map(bindings)
       assert map_size(bindings) > 0
+      assert bindings["branch_initiative"] == "b"
     end
 
     test "get_oauth_status lists every supported service" do

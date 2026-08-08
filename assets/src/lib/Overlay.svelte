@@ -8,6 +8,7 @@
     width = "460px",
     top = "18vh",
     padded = true,
+    ownsTab = false,
     onClose,
     children,
   }: {
@@ -17,6 +18,8 @@
     top?: string;
     /** False when the content draws its own edge-to-edge sections (palette, picker). */
     padded?: boolean;
+    /** True when the content binds Tab itself; skips the focus trap's Tab cycling. */
+    ownsTab?: boolean;
     onClose: () => void;
     children: Snippet;
   } = $props();
@@ -48,7 +51,7 @@
       onClose();
       return;
     }
-    if (e.key !== "Tab") return;
+    if (e.key !== "Tab" || ownsTab) return;
 
     const items = focusables();
     if (items.length === 0) return;

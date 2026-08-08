@@ -23,6 +23,7 @@ export type ActionId =
   | "toggle_sidebar"
   | "palette"
   | "start_orchestration"
+  | "branch_initiative"
   | "appearance";
 
 export const ACTION_LABELS: Record<ActionId, string> = {
@@ -47,6 +48,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   toggle_sidebar: "Toggle sidebar",
   palette: "Command palette",
   start_orchestration: "Start orchestration",
+  branch_initiative: "Branch git directories for this initiative",
   appearance: "Appearance (theme & font)",
 };
 
@@ -61,6 +63,7 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "start_agent",
   "start_terminal",
   "start_orchestration",
+  "branch_initiative",
   "delete",
   "edit_context",
   "refresh",
@@ -102,6 +105,7 @@ export const DEFAULT_KEYMAP: Keymap = {
   toggle_sidebar: "ctrl+b",
   palette: "ctrl+p",
   start_orchestration: "o",
+  branch_initiative: "b",
 };
 
 // spec -> action, e.g. { "j": "navigate_down", "ctrl+p": "palette" }

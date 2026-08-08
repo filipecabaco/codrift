@@ -153,7 +153,7 @@ defmodule Codrift.CLI.MCP do
         current =
           case File.read(path) do
             {:ok, content} ->
-              content |> strip_jsonc_comments() |> JSON.decode!()
+              Codrift.JSONC.decode!(content)
 
             {:error, _} ->
               %{"$schema" => "https://opencode.ai/config.json"}
@@ -225,12 +225,5 @@ defmodule Codrift.CLI.MCP do
       nil -> @default_port
       flag -> flag |> String.slice(7..-1//1) |> String.to_integer()
     end
-  end
-
-  # Strip `//` line comments so JSONC files can be parsed as plain JSON.
-  defp strip_jsonc_comments(content) do
-    content
-    |> String.split("\n")
-    |> Enum.map_join("\n", &Regex.replace(~r|//.*$|, &1, ""))
   end
 end

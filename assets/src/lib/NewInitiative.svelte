@@ -1,0 +1,244 @@
+<script lang="ts">
+  import Overlay from "$lib/Overlay.svelte";
+  import { fuzzyMatch, highlight } from "$lib/fuzzy";
+  import {
+    listAssignedItems,
+    importFromIntegration,
+    SERVICE_META,
+    type AssignedItem,
+  } from "$lib/api";
+
+  let {
+    onCreate,
+    onOpen,
+    onClose,
+  }: {
+    onCreate: (name: string) => void;
+    onOpen: (initiativeId: string) => void;
+    onClose: () => void;
+  } = $props();
+
+  let query = $state("");
+  let cursor = $state(0);
+  let loading = $state(true);
+  let items = $state<AssignedItem[]>([]);
+  let errors = $state<{ service: string; reason: string }[]>([]);
+  let busy = $state<string | null>(null);
+  let failure = $state<string | null>(null);
+  let input: HTMLInputElement;
+
+  const RELATIONS = ["all", "assigned", "created"] as const;
+  let relation = $state<(typeof RELATIONS)[number]>("all");
+
+  const key = (i: AssignedItem) => `${i.service}:${i.id}`;
+  const label = (svc: string) => SERVICE_META[svc]?.label ?? svc;
+
+  const inScope = $derived(
+    relation === "all" ? items : items.filter((i) => i.relation === relation),
+  );
+
+  // Fuzzy over "<service> <id> <title>" so "lin949" and "rjwt" both land, then
+  // rank by score. With no query the server order stands: assigned work first.
+  const filtered = $derived(
+    query.trim()
+      ? inScope
+          .map((item) => {
+            const match = fuzzyMatch(`${label(item.service)} ${item.id} ${item.title}`, query);
+            return match ? { item, match } : null;
+          })
+          .filter((row) => row !== null)
+          .sort((a, b) => b!.match.score - a!.match.score)
+          .map((row) => row!.item)
+      : inScope,
+  );
+
+  const rows = $derived(filtered.length + 1);
+
+  function titleRuns(item: AssignedItem) {
+    const match = query.trim() ? fuzzyMatch(item.title, query) : null;
+    return highlight(item.title, match?.positions ?? []);
+  }
+
+  function cycleRelation() {
+    relation = RELATIONS[(RELATIONS.indexOf(relation) + 1) % RELATIONS.length];
+    cursor = 0;
+  }
+
+  $effect(() => {
+    input?.focus();
+  });
+
+  $effect(() => {
+    query;
+    cursor = 0;
+  });
+
+  (async () => {
+    try {
+      const res = await listAssignedItems();
+      items = res.items;
+      errors = res.errors;
+    } catch (e) {
+      failure = (e as Error).message;
+    } finally {
+      loading = false;
+    }
+  })();
+
+  async function choose(row: number) {
+    if (row === 0) {
+      const name = query.trim();
+      if (name) onCreate(name);
+      return;
+    }
+
+    const item = filtered[row - 1];
+    if (!item || busy) return;
+
+    if (item.initiative_id) {
+      onOpen(item.initiative_id);
+      return;
+    }
+
+    failure = null;
+    busy = key(item);
+    try {
+      const initiative = await importFromIntegration(item.service, item.id);
+      onOpen(initiative.id);
+    } catch (e) {
+      failure = (e as Error).message;
+      busy = null;
+    }
+  }
+
+  function onkeydown(e: KeyboardEvent) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      cursor = Math.min(cursor + 1, rows - 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      cursor = Math.max(cursor - 1, 0);
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      cycleRelation();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      choose(cursor);
+    }
+  }
+</script>
+
+<Overlay label="New initiative" width="600px" top="10vh" padded={false} ownsTab {onClose}>
+  <input
+    bind:this={input}
+    bind:value={query}
+    {onkeydown}
+    name="initiative"
+    aria-label="Initiative name or search your work"
+    placeholder="Name a new initiative, or search your work below…"
+    class="w-full border-b border-border bg-canvas px-3 py-2.5 text-sm text-fg outline-none"
+  />
+
+  {#if failure}
+    <p class="border-b border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
+      {failure}
+    </p>
+  {/if}
+
+  <ul class="max-h-[60vh] overflow-y-auto py-1">
+    <li>
+      <button
+        class={[
+          "flex w-full items-center gap-2 px-3 py-2 text-left text-[13px]",
+          cursor === 0 ? "bg-accent/20 text-white" : "text-fg/90",
+        ]}
+        onmouseenter={() => (cursor = 0)}
+        onclick={() => choose(0)}
+      >
+        <span class="text-muted">＋</span>
+        {#if query.trim()}
+          <span class="truncate">Create <span class="font-semibold">{query.trim()}</span></span>
+        {:else}
+          <span class="text-muted">Type a name to create an empty initiative</span>
+        {/if}
+      </button>
+    </li>
+
+    <li
+      class="flex items-center gap-2 px-3 pt-2 pb-1 text-[10px] tracking-wide text-muted uppercase"
+    >
+      <span>Your work</span>
+      <span class="flex items-center gap-1 normal-case">
+        {#each RELATIONS as name (name)}
+          <button
+            class={[
+              "rounded px-1.5 py-px",
+              relation === name ? "bg-accent/25 text-accent" : "text-muted hover:text-fg",
+            ]}
+            onclick={() => ((relation = name), (cursor = 0))}
+          >
+            {name}
+          </button>
+        {/each}
+        <kbd class="ml-0.5 text-muted/70">Tab</kbd>
+      </span>
+      {#if loading}<span class="normal-case">· loading…</span>{/if}
+    </li>
+
+    {#each filtered as item, i (key(item))}
+      <li>
+        <button
+          class={[
+            "flex w-full items-start gap-2.5 px-3 py-2 text-left",
+            cursor === i + 1 ? "bg-accent/20" : "",
+          ]}
+          onmouseenter={() => (cursor = i + 1)}
+          onclick={() => choose(i + 1)}
+        >
+          <span class="mt-0.5 shrink-0 rounded border border-border px-1 text-[10px] text-muted">
+            {label(item.service)}
+          </span>
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-[13px] text-fg">
+              <span class="text-muted">{item.id}</span>
+              {#each titleRuns(item) as run}<span
+                  class={run.hit ? "font-semibold text-accent" : ""}>{run.text}</span
+                >{/each}
+            </span>
+            <span class="block truncate text-[11px] text-muted">
+              <span class={item.relation === "assigned" ? "text-fg/70" : ""}>{item.relation}</span>
+              · {item.status ?? "no status"}{item.labels.length
+                ? ` · ${item.labels.join(", ")}`
+                : ""}
+            </span>
+          </span>
+          <span class="mt-0.5 shrink-0 text-[11px]">
+            {#if busy === key(item)}
+              <span class="text-muted">importing…</span>
+            {:else if item.imported}
+              <span class="text-muted">open →</span>
+            {:else}
+              <span class="text-accent">start →</span>
+            {/if}
+          </span>
+        </button>
+      </li>
+    {:else}
+      {#if !loading}
+        <li class="px-3 py-2 text-[13px] text-muted">
+          {query ? "Nothing matches that search." : `Nothing ${relation === "all" ? "in your queue" : relation} right now.`}
+        </li>
+      {/if}
+    {/each}
+
+    {#each errors as err (err.service)}
+      <li class="px-3 py-1.5 text-[11px] text-yellow-500/80">
+        {label(err.service)} unavailable — {err.reason}
+      </li>
+    {/each}
+  </ul>
+
+  <p class="border-t border-border px-3 py-2 text-[11px] text-muted">
+    Enter to confirm · ↑↓ to move · Tab to filter · Esc to cancel
+  </p>
+</Overlay>

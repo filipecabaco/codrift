@@ -204,20 +204,20 @@ defmodule Codrift.Initiative.StoreTest do
     end
   end
 
-  describe "link_integration/4" do
+  describe "link_integration/3" do
     test "stores service and item_id on the initiative", %{tmp_dir: tmp_dir} do
       store = start_store(tmp_dir)
       {:ok, %{id: id}} = Store.create("Linked", [], store)
 
       assert {:ok, %Initiative{integration: %{service: "github", item_id: "owner/repo#5"}}} =
-               Store.link_integration(id, "github", "owner/repo#5", store)
+               Store.link_integration(id, %{service: "github", item_id: "owner/repo#5"}, store)
     end
 
     test "integration persists across Store restart", %{tmp_dir: tmp_dir} do
       opts = store_opts(tmp_dir)
       store1 = start_supervised!({Store, opts}, id: :s1)
       {:ok, %{id: id}} = Store.create("Linked", [], store1)
-      Store.link_integration(id, "linear", "ENG-42", store1)
+      Store.link_integration(id, %{service: "linear", item_id: "ENG-42"}, store1)
       stop_supervised!(:s1)
 
       store2 = start_supervised!({Store, opts}, id: :s2)
@@ -228,7 +228,9 @@ defmodule Codrift.Initiative.StoreTest do
 
     test "returns :not_found for unknown id", %{tmp_dir: tmp_dir} do
       store = start_store(tmp_dir)
-      assert {:error, :not_found} = Store.link_integration("bad", "github", "x", store)
+
+      assert {:error, :not_found} =
+               Store.link_integration("bad", %{service: "github", item_id: "x"}, store)
     end
   end
 
