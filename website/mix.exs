@@ -29,6 +29,7 @@ defmodule Website.MixProject do
     [
       {:francis, "~> 0.3"},
       {:jason, "~> 1.4"},
+      {:req, "~> 0.5"},
       {:tailwind, "~> 0.4", runtime: Mix.env() == :dev}
     ]
   end

@@ -59,4 +59,14 @@ cask "codrift" do
     "~/Library/WebKit/app.codrift.desktop",
     "~/Library/WebKit/sh.codrift.app",
   ]
+
+  caveats <<~EOS
+    Finish setup — from a terminal, or from Setup in Codrift's command palette (^P):
+
+      codrift mcp install                   # register the MCP server with your AI CLIs
+      npx skills add filipecabaco/codrift   # teach your agents how to drive Codrift
+
+    The skills cover the shared memory store, initiatives, orchestration and
+    the GitHub/Linear/GitLab integrations. Add -g to install them globally.
+  EOS
 end

@@ -16,7 +16,8 @@ defmodule Website do
       |> EEx.eval_file(
         tw_css: Francis.Static.static_path("tw.css"),
         site_url: @site_url,
-        og_image: Francis.Static.static_path("og.png", @site_url)
+        og_image: Francis.Static.static_path("og.png", @site_url),
+        version: Website.Version.current()
       )
 
     html(conn, html)

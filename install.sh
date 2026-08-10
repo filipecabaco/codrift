@@ -146,5 +146,11 @@ install_cli() {
 
 install_cli
 
-printf '\nRegister the MCP server with Claude Code (optional):\n'
-printf '  codrift mcp install\n'
+printf '\nNext steps:\n'
+printf '\n  1. Register the MCP server with your AI CLIs:\n'
+printf '       codrift mcp install\n'
+printf '\n  2. Install the agent skills, so your agents know how to drive Codrift\n'
+printf '     (shared memory, initiatives, orchestration, integrations):\n'
+printf '       npx skills add filipecabaco/codrift\n'
+printf '\n  3. Launch the app:\n'
+printf '       codrift start\n'

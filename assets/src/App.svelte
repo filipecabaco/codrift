@@ -2,7 +2,7 @@
   import { onMount, untrack } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
   import { ArrowPath, CommandLine, Identification, Link, Swatch } from "@steeze-ui/heroicons";
-  import { rpc, quitApp, QUIT_REQUESTED } from "$lib/api";
+  import { rpc, quitApp, QUIT_REQUESTED, type Agent } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
   import { workspace as ws, type Row } from "$lib/workspace.svelte";
   import {
@@ -43,6 +43,11 @@
     /** Which half of the context view is showing: a document or the memory store. */
     wantPanel: "file" | "memory";
     treeSelectedPath: string | null;
+    /**
+     * A freshly split pane asks what it should hold rather than guessing. Any
+     * selection — from the chooser or the sidebar — clears it.
+     */
+    chooser: boolean;
   };
   const newView = (): PaneView => ({
     initiativeId: null,
@@ -51,6 +56,7 @@
     wantFile: null,
     wantPanel: "file",
     treeSelectedPath: null,
+    chooser: false,
   });
   let panes = $state<PaneView[]>([newView()]);
   let activePane = $state(0);
@@ -135,7 +141,7 @@
 
   async function load() {
     await ws.load();
-    const v = panes[activePane];
+    const v = activeView();
     // Only expand on the *first* selection: re-expanding on every refresh would
     // undo a collapse the user just made (r, status cycling, starting an agent…).
     if (!v.initiativeId && ws.initiatives.length > 0) {
@@ -149,8 +155,27 @@
   // cursor; calling them here would snap it back and break arrow navigation.)
   // Nor does it expand: moving the cursor onto a collapsed node must leave it
   // collapsed, the way any tree behaves. → (expandOrChild) opens it.
-  function applyRow(row: Row) {
+  // The active pane, as every selection path sees it. Reading it answers the
+  // chooser a fresh split left there — picking anything at all is an answer.
+  function activeView(): PaneView {
     const v = panes[activePane];
+    v.chooser = false;
+    return v;
+  }
+
+  // One agent, one pane. Two panes bound to the same agent mount two xterms over
+  // a single PTY — the same stream painted twice, which is what made a split look
+  // broken. Whichever pane claims the agent wins; the other falls back to the
+  // initiative overview, giving a split "move it here" semantics.
+  function claimAgent(paneIndex: number, agentId: string) {
+    panes.forEach((p, i) => {
+      if (i !== paneIndex && p.agentId === agentId) p.agentId = null;
+    });
+    panes[paneIndex].agentId = agentId;
+  }
+
+  function applyRow(row: Row) {
+    const v = activeView();
     switch (row.kind) {
       case "init":
       case "dir":
@@ -174,7 +199,7 @@
         break;
       case "agent":
         v.initiativeId = row.initId;
-        v.agentId = row.agentId;
+        claimAgent(activePane, row.agentId);
         v.wantFile = null;
         v.tab = "context";
         break;
@@ -194,7 +219,7 @@
   }
 
   function selectInitiative(id: string) {
-    const v = panes[activePane];
+    const v = activeView();
     v.initiativeId = id;
     v.agentId = null;
     v.wantFile = null;
@@ -204,7 +229,7 @@
   }
 
   function openContextFile(initId: string, name: string) {
-    const v = panes[activePane];
+    const v = activeView();
     v.initiativeId = initId;
     v.agentId = null;
     v.wantFile = name;
@@ -216,7 +241,7 @@
   }
 
   function openMemory(initId: string) {
-    const v = panes[activePane];
+    const v = activeView();
     v.initiativeId = initId;
     v.agentId = null;
     v.wantPanel = "memory";
@@ -227,7 +252,7 @@
   }
 
   function toggleContextFolder(initId: string, path: string) {
-    const v = panes[activePane];
+    const v = activeView();
     v.initiativeId = initId;
     v.agentId = null;
     paneFocus = "sidebar";
@@ -236,9 +261,9 @@
   }
 
   function selectAgent(initId: string, agentId: string) {
-    const v = panes[activePane];
+    const v = activeView();
     v.initiativeId = initId;
-    v.agentId = agentId;
+    claimAgent(activePane, agentId);
     v.wantFile = null;
     v.tab = "context";
     ws.syncCursor((r) => r.kind === "agent" && r.agentId === agentId);
@@ -246,7 +271,7 @@
   }
 
   function selectDir(initId: string, path: string) {
-    const v = panes[activePane];
+    const v = activeView();
     v.initiativeId = initId;
     v.agentId = null;
     v.wantFile = null;
@@ -271,8 +296,13 @@
     };
   }
 
-  async function startAgent(choice?: string) {
-    if (!selectedInitiative) return toast("Select an initiative first.");
+  // Returns the started agent so a caller can bind it to a specific pane (the
+  // split chooser does); plain keyboard starts ignore it and just reload.
+  async function startAgent(choice?: string): Promise<Agent | null> {
+    if (!selectedInitiative) {
+      toast("Select an initiative first.");
+      return null;
+    }
     const agent = choice ?? ws.agentChoiceFor(selectedInitiative);
     const profile = ws.profiles.find((p) => p.name === agent);
     const launch = profile
@@ -290,7 +320,7 @@
     const dir =
       ws.cursorDir ?? (atInitRoot ? rootDir : null) ?? selectedInitiative.dirs[0]?.path ?? null;
     try {
-      await rpc("start_agent", {
+      const started = await rpc<Agent>("start_agent", {
         initiative_id: selectedInitiative.id,
         ...launch,
         ...(dir ? { dir } : {}),
@@ -299,6 +329,54 @@
         dir && dir === rootDir ? "at initiative root" : dir ? `in ${base(dir)}` : "in scratchpad";
       toast(`Started ${agent} ${where}`);
       await load();
+      return started;
+    } catch (e) {
+      toast((e as Error).message);
+      return null;
+    }
+  }
+
+  // Answers the chooser a fresh split put in pane `idx`.
+  async function choosePaneContent(idx: number, kind: "agent" | "terminal" | "file") {
+    const view = panes[idx];
+    view.chooser = false;
+    if (kind === "file") {
+      view.tab = "tree";
+      focusMain();
+      return;
+    }
+    const started = await startAgent(kind === "terminal" ? "terminal" : undefined);
+    // A failed start already toasted; leave the pane on its overview rather than
+    // binding it to nothing.
+    if (started) {
+      claimAgent(idx, started.id);
+      focusMain();
+    }
+  }
+
+  // Opens a terminal in the initiative and types the setup commands into it.
+  //
+  // Deliberately a visible terminal rather than a silent shell-out: `npx skills
+  // add` asks which agents to install for, and `codrift mcp install` reports
+  // per-CLI results worth reading. Running it where the user can answer and see
+  // the output is the point — they just don't have to leave the app to do it.
+  const SETUP_COMMAND = "codrift mcp install && npx skills add filipecabaco/codrift";
+
+  async function runSetup() {
+    if (!selectedInitiative) return toast("Select an initiative first.");
+    const dir =
+      ws.cursorDir ?? selectedInitiative.context_path ?? selectedInitiative.dirs[0]?.path ?? null;
+    try {
+      const agent = await rpc<Agent>("start_agent", {
+        initiative_id: selectedInitiative.id,
+        adapter: "terminal",
+        ...(dir ? { dir } : {}),
+      });
+      await load();
+      claimAgent(activePane, agent.id);
+      focusMain();
+      await rpc("send_to_agent", { agent_id: agent.id, input: SETUP_COMMAND });
+      toast("Running setup — answer the prompts in the terminal");
     } catch (e) {
       toast((e as Error).message);
     }
@@ -419,6 +497,9 @@
       case "start_terminal":
         await startAgent("terminal");
         break;
+      case "setup":
+        await runSetup();
+        break;
       case "start_orchestration":
         if (!selectedInitiative) return toast("Select an initiative first.");
         openPrompt("Orchestration task", async (task) => {
@@ -530,13 +611,12 @@
     }
     // The new pane inherits the initiative but NOT the agent. Copying agentId
     // pointed both panes at one session — two terminals rendering the same
-    // stream, which is never what a split is for. Starting empty is also what
-    // makes the split useful: the sidebar targets the new pane, so the next
-    // thing you pick lands beside what you were already looking at.
+    // stream, which is never what a split is for. Instead it asks what it should
+    // hold, so a split lands on something useful in one step.
     const source = panes[activePane];
-    panes = [source, { ...newView(), initiativeId: source.initiativeId }];
+    panes = [source, { ...newView(), initiativeId: source.initiativeId, chooser: true }];
     activePane = 1;
-    paneFocus = "sidebar";
+    paneFocus = "main";
     split = { dir, fraction: 0.5 };
   }
 
@@ -910,6 +990,45 @@
         {:else}
           <div class="p-6 text-[13px] text-fg/70">Select an initiative.</div>
         {/if}
+      {:else if view.chooser && !view.agentId}
+        <!-- A fresh split asks rather than guessing. Cloning the source pane's
+             agent used to put one PTY behind two terminals; an empty pane was
+             correct but inert. -->
+        <div class="flex h-full items-center justify-center p-8">
+          <div class="w-full max-w-sm">
+            <h2 class="text-base font-semibold text-fg">What goes in this pane?</h2>
+            <p class="mt-1 text-[13px] text-fg/70">{init.name}</p>
+            <div class="mt-5 flex flex-col gap-2">
+              <button
+                class="rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent"
+                onclick={() => choosePaneContent(idx, "agent")}
+              >
+                <!-- Names the agent that will actually launch (the initiative's
+                     choice, else default_agent, else claude) rather than a generic
+                     "Start an agent" — a profile like claude-work reads here too. -->
+                <span class="font-semibold">Start {ws.agentChoiceFor(init)}</span>
+                <span class="mt-0.5 block text-[12px] text-fg/60">
+                  This initiative's agent, in {init.dirs[0] ? base(init.dirs[0].path) : "its scratchpad"}
+                </span>
+              </button>
+              <button
+                class="rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent"
+                onclick={() => choosePaneContent(idx, "terminal")}
+              >
+                <span class="font-semibold">Open a terminal</span>
+                <span class="mt-0.5 block text-[12px] text-fg/60">A plain shell in the same directory</span>
+              </button>
+              <button
+                class="rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent"
+                onclick={() => choosePaneContent(idx, "file")}
+              >
+                <span class="font-semibold">Open a file</span>
+                <span class="mt-0.5 block text-[12px] text-fg/60">Browse this initiative's files</span>
+              </button>
+            </div>
+            <p class="mt-4 text-[12px] text-fg/50">Or pick anything in the sidebar.</p>
+          </div>
+        </div>
       {:else if view.tab === "context"}
         {#if view.agentId}
           <!-- No {#key} here: a terminal persists and reconnects when the agent
