@@ -312,10 +312,9 @@
         ? `Quit Codrift? ${running} agent${running === 1 ? "" : "s"} still running.`
         : "Quit Codrift?",
       confirmLabel: "Quit",
-      onConfirm: () => {
-        modal = null;
-        void quitApp();
-      },
+      // Not closed here on purpose: if quitting fails the app is still up, and
+      // the dialog is the only place that failure can be reported.
+      onConfirm: () => quitApp(),
     };
   }
 
@@ -465,20 +464,21 @@
   function deleteSelection() {
     // Native confirm() is a no-op in Tauri's WebKit webview, so use an in-app
     // confirm modal instead.
+    //
+    // These handlers deliberately do NOT catch: Confirm keeps itself open and
+    // shows the error. Closing the dialog is the *success* path, so a failed
+    // delete can never look like it silently worked.
     if (active.agentId) {
       const id = active.agentId;
       modal = {
         kind: "confirm",
         message: "Stop this agent?",
+        confirmLabel: "Stop agent",
         onConfirm: async () => {
+          await rpc("stop_agent", { agent_id: id });
+          active.agentId = null;
+          await load();
           modal = null;
-          try {
-            await rpc("stop_agent", { agent_id: id });
-            active.agentId = null;
-            await load();
-          } catch (e) {
-            toast((e as Error).message);
-          }
         },
       };
     } else if (selectedInitiative) {
@@ -491,19 +491,20 @@
       modal = {
         kind: "confirm",
         message: `Delete initiative "${init.name}"?`,
+        confirmLabel: "Delete",
         onConfirm: async () => {
+          await rpc("delete_initiative", { initiative_id: init.id });
+          active.initiativeId = null;
+          active.agentId = null;
+          await load();
           modal = null;
-          try {
-            await rpc("delete_initiative", { initiative_id: init.id });
-            active.initiativeId = null;
-            active.agentId = null;
-            await load();
-            if (next) selectInitiative(next.id);
-          } catch (e) {
-            toast((e as Error).message);
-          }
+          if (next) selectInitiative(next.id);
         },
       };
+    } else {
+      // Nothing selected: say so rather than swallowing the keypress, which read
+      // as "delete is broken".
+      toast("Select an initiative or agent first.");
     }
   }
 

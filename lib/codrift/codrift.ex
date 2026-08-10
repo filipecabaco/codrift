@@ -22,6 +22,8 @@ defmodule Codrift do
 
   use Francis
 
+  require Logger
+
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.MCP.Handler
   alias Codrift.OAuth
@@ -44,6 +46,9 @@ defmodule Codrift do
       # (the manager would restart instead of stopping). Log to a file instead so
       # a dead GUI can never wedge the backend's own shutdown path.
       redirect_logs_to_file()
+      # A second sidecar can never share the port, and failing here (rather than
+      # deep inside Bandit's start) is what lets the Rust shell tell the user why.
+      warn_if_port_taken()
     end
 
     base = [
@@ -98,6 +103,28 @@ defmodule Codrift do
     _ -> :ok
   end
 
+  # Log a precise reason before Bandit's own `:eaddrinuse` crash, which reads as a
+  # generic supervisor failure. The desktop log is the only trace a packaged app
+  # leaves, so it has to name the actual problem.
+  defp warn_if_port_taken do
+    port = Keyword.get(Application.get_env(:codrift, :bandit_opts, []), :port, 43_117)
+
+    case :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false], 500) do
+      {:ok, socket} ->
+        :gen_tcp.close(socket)
+
+        Logger.error(
+          "[Codrift] port #{port} is already in use — another Codrift backend is running. " <>
+            "This sidecar will exit; quit the other instance and reopen Codrift."
+        )
+
+      {:error, _} ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
   # Swap the console logger (which writes to the Tauri-owned stdout pipe) for a
   # file handler, so a dead GUI's broken pipe can't wedge the backend. Logs land
   # in <tmp>/codrift_desktop.log. Best-effort: keep the default handler on failure.
@@ -120,7 +147,13 @@ defmodule Codrift do
 
   # Cheap liveness probe the web UI polls to detect (and recover from) a dropped
   # server — kept tiny so reconnect polling is effectively free.
-  get("/api/health", fn _ -> %{ok: true} end)
+  #
+  # `instance` echoes CODRIFT_INSTANCE_TOKEN, which the Tauri shell sets on the
+  # sidecar it spawns. That is how the shell recognises *its own* backend rather
+  # than adopting whatever else happens to hold the port (see src-tauri/src/main.rs).
+  get("/api/health", fn _ ->
+    %{ok: true, instance: System.get_env("CODRIFT_INSTANCE_TOKEN") || ""}
+  end)
 
   get("/api/initiatives", fn _conn ->
     Enum.map(Store.list(), &Codrift.Initiative.to_map/1)

@@ -42,7 +42,7 @@ defmodule Codrift.ShutdownManager do
     socket_path =
       Path.join(System.tmp_dir!(), "tauri_heartbeat_#{sanitize_name(app_name)}.sock")
 
-    cleanup_socket(socket_path)
+    remove_stale_socket(socket_path)
 
     {:ok, listen_socket} =
       :gen_tcp.listen(0, [
@@ -132,6 +132,34 @@ defmodule Codrift.ShutdownManager do
   defp cleanup_socket(socket_path) do
     File.rm(socket_path)
     :ok
+  end
+
+  # Only unlink a socket nobody is listening on. The old unconditional `File.rm`
+  # meant a second sidecar booting (or dying seconds later, running `terminate`)
+  # deleted the *live* instance's socket file. The live listener survives but
+  # becomes unreachable, so its Tauri shell can never reconnect — and since its
+  # ShutdownManager only acts on a heartbeat that stops *after* one arrived, that
+  # backend stays alive forever holding :43117. That is how a sidecar from a
+  # previous version was still squatting on the port days later.
+  defp remove_stale_socket(socket_path) do
+    if File.exists?(socket_path) do
+      case :gen_tcp.connect({:local, socket_path}, 0, [:binary, active: false], 500) do
+        {:ok, socket} ->
+          :gen_tcp.close(socket)
+
+          Logger.warning(
+            "[Codrift.ShutdownManager] #{socket_path} has a live listener — another Codrift " <>
+              "backend is already running. Leaving its socket alone."
+          )
+
+        {:error, _} ->
+          File.rm(socket_path)
+      end
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   # The acceptor task accepts AND reads in the same process. recv MUST run in the

@@ -180,13 +180,20 @@ type TauriGlobal = { core?: { invoke: (cmd: string, args?: unknown) => Promise<u
 export async function quitApp(): Promise<void> {
   const tauri = (window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__;
   if (tauri?.core?.invoke) {
-    await tauri.core.invoke("quit_app");
+    try {
+      await tauri.core.invoke("quit_app");
+    } catch (e) {
+      // `quit_app` has to be registered in the Rust shell's invoke_handler. When
+      // it isn't, the invoke rejects and Quit does nothing at all — report it
+      // instead of leaving the user pressing a dead button.
+      throw new Error(`Couldn't quit: ${(e as Error)?.message ?? e}`);
+    }
     return;
   }
   window.close();
 }
 
-/** The native menu's Quit item asks the page first — see src-tauri/src/lib.rs. */
+/** The native menu's Quit item asks the page first — see src-tauri/src/main.rs. */
 export const QUIT_REQUESTED = "codrift:quit-requested";
 
 export type AssignedItem = {
