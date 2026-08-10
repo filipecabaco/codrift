@@ -470,10 +470,13 @@
     // delete can never look like it silently worked.
     if (active.agentId) {
       const id = active.agentId;
+      // The terminal adapter is a raw shell, not an agent — calling it one in
+      // the one dialog that closes it reads as if it were killing a coding run.
+      const isTerminal = ws.agent(id)?.adapter === "terminal";
       modal = {
         kind: "confirm",
-        message: "Stop this agent?",
-        confirmLabel: "Stop agent",
+        message: isTerminal ? "Close this terminal?" : "Stop this agent?",
+        confirmLabel: isTerminal ? "Close terminal" : "Stop agent",
         onConfirm: async () => {
           await rpc("stop_agent", { agent_id: id });
           active.agentId = null;
@@ -510,8 +513,8 @@
 
   // ── Panes: split / balance / collapse ─────────────────────────────────────────
 
-  // Toggle a split in the given orientation. With no split, clone the active
-  // pane into a second one. Splitting again in the SAME orientation collapses
+  // Toggle a split in the given orientation. With no split, open a second pane
+  // onto the same initiative. Splitting again in the SAME orientation collapses
   // back to the active pane; splitting in the other just re-orients.
   function toggleSplit(dir: "vertical" | "horizontal") {
     if (split) {
@@ -525,8 +528,15 @@
       }
       return;
     }
-    panes = [panes[activePane], { ...panes[activePane] }];
-    activePane = 0;
+    // The new pane inherits the initiative but NOT the agent. Copying agentId
+    // pointed both panes at one session — two terminals rendering the same
+    // stream, which is never what a split is for. Starting empty is also what
+    // makes the split useful: the sidebar targets the new pane, so the next
+    // thing you pick lands beside what you were already looking at.
+    const source = panes[activePane];
+    panes = [source, { ...newView(), initiativeId: source.initiativeId }];
+    activePane = 1;
+    paneFocus = "sidebar";
     split = { dir, fraction: 0.5 };
   }
 

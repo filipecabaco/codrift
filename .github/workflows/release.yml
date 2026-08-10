@@ -455,6 +455,50 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           rm -rf sums
 
+      # The formula ships the headless `codrift` command; the cask depends on it,
+      # so a cask bumped without a matching formula bump would resolve a
+      # still-old CLI (or, once the old release is gone, fail to install at all).
+      # Both files move in the same commit for that reason.
+      - name: Rewrite formula version and checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "v${VERSION}" --dir clisums --pattern "codrift-cli-*.tar.gz.sha256"
+          ls -l clisums
+
+          python3 - <<'PY'
+          import os, re
+
+          version = os.environ["VERSION"]
+          path = "Formula/codrift-cli.rb"
+          src = open(path).read()
+
+          # Each URL in the formula names its own triple; look the checksum up by
+          # that triple rather than by position, so reordering the on_macos /
+          # on_linux blocks can never silently pair a sha with the wrong arch.
+          def sha_for(triple):
+              name = f"codrift-cli-{version}-{triple}.tar.gz.sha256"
+              with open(os.path.join("clisums", name)) as f:
+                  return f.read().split()[0]
+
+          src = re.sub(r'version "[^"]*"', f'version "{version}"', src, count=1)
+
+          triples = re.findall(r'codrift-cli-#\{version\}-([^.]+)\.tar\.gz', src)
+          if len(triples) != 3:
+              raise SystemExit(f"expected 3 CLI URLs in the formula, found {len(triples)}")
+
+          shas = iter([sha_for(t) for t in triples])
+          src, n = re.subn(r'sha256 "[^"]*"', lambda _: f'sha256 "{next(shas)}"', src, count=3)
+          if n != 3:
+              raise SystemExit(f"expected 3 sha256 stanzas in the formula, rewrote {n}")
+
+          open(path, "w").write(src)
+          PY
+          rm -rf clisums
+          git --no-pager diff -- Formula/codrift-cli.rb || true
+
       - name: Rewrite cask version, checksums and URLs
         shell: bash
         env:
@@ -506,13 +550,13 @@ jobs:
 
       - name: Commit and push
         run: |
-          if git diff --quiet Casks/codrift.rb; then
-            echo "Cask already up to date; nothing to commit."
+          if git diff --quiet Casks/codrift.rb Formula/codrift-cli.rb; then
+            echo "Tap already up to date; nothing to commit."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/codrift.rb
+          git add Casks/codrift.rb Formula/codrift-cli.rb
           git commit -m "chore(cask): codrift ${VERSION} [skip ci]"
           # main may have advanced while the bundles built; rebase before pushing.
           git pull --rebase origin main

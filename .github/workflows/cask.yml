@@ -19,11 +19,13 @@ on:
     branches: [main]
     paths:
       - "Casks/**"
+      - "Formula/**"
       - ".github/scripts/verify-cask.sh"
       - ".github/workflows/cask.yml"
   pull_request:
     paths:
       - "Casks/**"
+      - "Formula/**"
       - ".github/scripts/verify-cask.sh"
       - ".github/workflows/cask.yml"
   schedule:
@@ -48,6 +50,11 @@ jobs:
       - name: Download both DMGs and compare against the cask
         run: bash .github/scripts/verify-cask.sh Casks/codrift.rb
 
+      # The cask depends on this formula, so its assets are just as load-bearing
+      # for `brew install --cask codrift` as the DMGs are.
+      - name: Download the CLI tarballs and compare against the formula
+        run: bash .github/scripts/verify-cask.sh Formula/codrift-cli.rb
+
   style:
     name: Cask style
     # `brew style` needs the Homebrew cask cops, which only load on macOS.
@@ -58,7 +65,7 @@ jobs:
 
       - name: brew style
         run: |
-          if ! brew style Casks/codrift.rb; then
-            echo "::error file=Casks/codrift.rb::run 'brew style --fix Casks/codrift.rb' and commit the result"
+          if ! brew style Casks/codrift.rb Formula/codrift-cli.rb; then
+            echo "::error::run 'brew style --fix Casks/codrift.rb Formula/codrift-cli.rb' and commit the result"
             exit 1
           fi

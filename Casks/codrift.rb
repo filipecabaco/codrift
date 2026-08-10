@@ -24,6 +24,11 @@ cask "codrift" do
   end
 
   depends_on macos: :ventura
+  # The DMG carries only the GUI — Contents/MacOS/codrift is the Tauri shell and
+  # Contents/MacOS/desktop the Burrito sidecar, neither of which is the headless
+  # CLI. So `binary` has nothing to point at, and without this the documented
+  # `codrift mcp install` was a command that brew never installed.
+  depends_on formula: "filipecabaco/codrift/codrift-cli"
 
   app "Codrift.app"
 
