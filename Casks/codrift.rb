@@ -24,6 +24,11 @@ cask "codrift" do
   end
 
   depends_on macos: :ventura
+  # The DMG carries only the GUI — Contents/MacOS/codrift is the Tauri shell and
+  # Contents/MacOS/desktop the Burrito sidecar, neither of which is the headless
+  # CLI. So `binary` has nothing to point at, and without this the documented
+  # `codrift mcp install` was a command that brew never installed.
+  depends_on formula: "filipecabaco/codrift/codrift-cli"
 
   app "Codrift.app"
 
@@ -54,4 +59,14 @@ cask "codrift" do
     "~/Library/WebKit/app.codrift.desktop",
     "~/Library/WebKit/sh.codrift.app",
   ]
+
+  caveats <<~EOS
+    Finish setup — from a terminal, or from Setup in Codrift's command palette (^P):
+
+      codrift mcp install                   # register the MCP server with your AI CLIs
+      npx skills add filipecabaco/codrift   # teach your agents how to drive Codrift
+
+    The skills cover the shared memory store, initiatives, orchestration and
+    the GitHub/Linear/GitLab integrations. Add -g to install them globally.
+  EOS
 end

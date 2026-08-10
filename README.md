@@ -38,6 +38,14 @@ brew tap filipecabaco/codrift https://github.com/filipecabaco/codrift
 brew install --cask codrift
 ```
 
+That installs `Codrift.app` **and** the headless `codrift` command — the cask
+depends on the `codrift-cli` formula in the same tap, so `codrift mcp install`
+works straight after. To install only the CLI (headless boxes, CI, Linux):
+
+```bash
+brew install filipecabaco/codrift/codrift-cli
+```
+
 Upgrades come through `brew upgrade --cask codrift`.
 
 > **Note:** Codrift is not yet code-signed or notarized. The cask strips the
@@ -118,6 +126,30 @@ install` configures this automatically). Any connected agent can call:
 | Memory | `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list` |
 | Integrations | `start_oauth_flow`, `get_oauth_status`, `list_integration_items`, `import_from_integration`, `sync_initiative_context` |
 
+### Agent skills
+
+The MCP server hands agents the tools; the skills in [`skills/`](skills) teach
+them *when* to reach for one — search the shared memory before exploring, check
+what sibling agents are touching, write findings back so the next session starts
+ahead.
+
+```bash
+npx skills add filipecabaco/codrift        # add -g to install for every project
+```
+
+Or run **Setup** from the command palette (`⌃P`) — Codrift opens a terminal and
+runs both this and `codrift mcp install` for you, so you never leave the app.
+
+| Skill | Covers |
+|---|---|
+| [`codrift`](skills/codrift/SKILL.md) | The workspace model every other skill builds on |
+| [`codrift-memory`](skills/codrift-memory/SKILL.md) | The shared FTS5 store: what to record, what not to |
+| [`codrift-initiatives`](skills/codrift-initiatives/SKILL.md) | Directories, lifecycle, worktree branches, combined diffs |
+| [`codrift-orchestration`](skills/codrift-orchestration/SKILL.md) | Spawning agents, fan-out, the conductor, `orchestration.md` |
+| [`codrift-integrations`](skills/codrift-integrations/SKILL.md) | GitHub, Linear and GitLab: OAuth, listing, importing, syncing |
+
+Installs into Claude Code, Codex, Cursor, Gemini CLI, Copilot and Opencode.
+
 ---
 
 ## Keyboard reference
@@ -181,6 +213,7 @@ The desktop app is the primary interface. A headless CLI ships alongside it for
 scripting and MCP registration:
 
 ```
+codrift start          # launch the desktop app
 codrift mcp install
 
 codrift initiative list

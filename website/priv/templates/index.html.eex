@@ -78,7 +78,7 @@
     <!-- ══ HERO ═════════════════════════════════════════════════════════ -->
     <header class="mx-auto max-w-[86rem] px-5 pb-16 pt-14 lg:px-8 lg:pb-24 lg:pt-24">
       <p class="t-tag rise mb-7" style="animation-delay: 40ms">
-        Desktop · macOS &amp; Linux · <span class="text-amber">v0.0.1</span>
+        Desktop · macOS &amp; Linux<%= if version do %> · <span class="text-amber">v<%= version %></span><% end %>
       </p>
       <h1 class="rise flex items-center gap-5 lg:gap-7" style="animation-delay: 90ms">
         <svg class="h-[0.78em] w-auto shrink-0 text-[clamp(3.4rem,9vw,7.5rem)]" viewBox="0 0 512 512" aria-hidden="true">
@@ -686,6 +686,39 @@ edge -&gt; api -&gt; dashboard</code></pre>
               <span class="text-muted">codrift mcp install</span> registers the MCP server with
               Claude Code.
             </p>
+
+            <div class="mt-12 border-t border-rule pt-10 lg:max-w-3xl">
+              <h3 class="font-display text-[1.15rem] font-bold" style="font-stretch: 118%">
+                Teach your agents to drive it
+              </h3>
+              <p class="t-body mt-3">
+                The MCP server hands agents the tools. The skills teach them when to reach for
+                them — search the shared memory before exploring, check what the other agents in
+                the initiative are touching, write findings back so the next session starts ahead.
+              </p>
+              <ul class="mt-5 grid gap-x-8 gap-y-2 font-mono text-[0.8125rem] text-muted sm:grid-cols-2">
+                <li><span class="text-amber">codrift</span> — the workspace model</li>
+                <li><span class="text-amber">codrift-memory</span> — the shared store</li>
+                <li><span class="text-amber">codrift-initiatives</span> — dirs, worktrees, diffs</li>
+                <li><span class="text-amber">codrift-orchestration</span> — fan-out &amp; conductor</li>
+                <li><span class="text-amber">codrift-integrations</span> — GitHub, Linear, GitLab</li>
+              </ul>
+              <div class="mt-6">
+                <button class="cmd" type="button" data-copy="npx skills add filipecabaco/codrift">
+                  <span class="text-amber">$</span>
+                  <span>npx skills add filipecabaco/codrift</span>
+                  <span class="ml-auto text-faint" aria-hidden="true">⧉</span>
+                  <span class="sr-only">Copy skills install command</span>
+                </button>
+              </div>
+              <p class="mt-4 font-mono text-[0.75rem] leading-relaxed text-faint">
+                Installs into Claude Code, Codex, Cursor, Gemini CLI, Copilot and Opencode. Add
+                <span class="text-muted">-g</span> to install for every project. Or run
+                <span class="text-muted">Setup</span> from the command palette
+                (<span class="text-muted">⌃P</span>) and Codrift opens a terminal that does both
+                this and <span class="text-muted">codrift mcp install</span> for you.
+              </p>
+            </div>
           </div>
         </div>
       </div>

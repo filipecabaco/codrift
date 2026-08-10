@@ -35,7 +35,7 @@ defmodule Codrift do
 
   @impl true
   def start(_type, _args) do
-    if System.get_env("RELEASE_NAME") == "desktop" do
+    if desktop_sidecar?() do
       # When launched as the Tauri desktop app, the process inherits macOS's
       # minimal launchd PATH (no ~/.local/bin, mise shims, homebrew…), so agent
       # CLIs like `claude` can't be found. Restore the user's login-shell PATH.
@@ -68,17 +68,32 @@ defmodule Codrift do
     ]
 
     # Codrift.ShutdownManager System.stop/0s the app if it stops receiving the
-    # Tauri heartbeat — only safe when actually launched as the desktop sidecar
-    # (RELEASE_NAME=desktop). Gated so `mix run`/plain server boots don't get
-    # killed ~1.5s after boot. Placed last (after Bandit) so it can use
-    # Codrift.TaskSupervisor and its timeout baseline starts near port-up, and it
-    # only enforces the timeout after the first heartbeat (see its moduledoc).
+    # Tauri heartbeat — only safe when actually launched as the desktop sidecar.
+    # Gated so `mix run`/plain server boots don't get killed ~1.5s after boot.
+    # Placed last (after Bandit) so it can use Codrift.TaskSupervisor and its
+    # timeout baseline starts near port-up, and it only enforces the timeout
+    # after the first heartbeat (see its moduledoc).
     children =
-      if System.get_env("RELEASE_NAME") == "desktop",
+      if desktop_sidecar?(),
         do: base ++ [Codrift.ShutdownManager],
         else: base
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Codrift.Supervisor)
+  end
+
+  # True when running as the Tauri desktop sidecar.
+  #
+  # Two spellings because the sidecar is launched two different ways. A plain
+  # mix release (`mix ex_tauri.dev`, or `sidecar: :release`) boots through
+  # `bin/desktop`, which exports RELEASE_NAME. The *shipped* build is
+  # Burrito-wrapped, and Burrito's launcher execve's `erl` directly with a
+  # hand-built env map — it sets RELEASE_ROOT and __BURRITO but never
+  # RELEASE_NAME (see deps/burrito/src/erlang_launcher.zig). Checking only
+  # RELEASE_NAME therefore held in dev and silently failed in every released
+  # app: no login PATH (so `claude` and friends were never found), no file
+  # logging, no port check and no ShutdownManager.
+  defp desktop_sidecar? do
+    System.get_env("RELEASE_NAME") == "desktop" or System.get_env("__BURRITO") == "1"
   end
 
   # Merges the user's login-shell PATH into the running env so spawned agent
@@ -86,8 +101,7 @@ defmodule Codrift do
   defp ensure_login_path do
     shell = System.get_env("SHELL") || "/bin/zsh"
 
-    with {out, 0} <-
-           System.cmd(shell, ["-lic", "echo CODRIFT_PATH=$PATH"], stderr_to_stdout: false),
+    with {out, 0} <- login_shell_path(shell),
          [_, login_path] <- Regex.run(~r/CODRIFT_PATH=(.+)/, out) do
       merged =
         (String.split(login_path, ":") ++ String.split(System.get_env("PATH") || "", ":"))
@@ -101,6 +115,24 @@ defmodule Codrift do
     end
   rescue
     _ -> :ok
+  end
+
+  # `-l` sources the login files, `-i` the interactive ones — between them they
+  # cover where version managers (mise, asdf, nvm) actually put their shims. An
+  # interactive shell with no TTY is also exactly the shape that can block
+  # forever on a dotfile waiting for input, and this runs before the supervision
+  # tree, so a wedged shell would hang the whole app at boot. Cap it and carry on
+  # with the launchd PATH instead; the orphan exits on its own.
+  defp login_shell_path(shell) do
+    task =
+      Task.async(fn ->
+        System.cmd(shell, ["-lic", "echo CODRIFT_PATH=$PATH"], stderr_to_stdout: false)
+      end)
+
+    case Task.yield(task, 5_000) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      _ -> :timeout
+    end
   end
 
   # Log a precise reason before Bandit's own `:eaddrinuse` crash, which reads as a

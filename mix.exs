@@ -30,7 +30,7 @@ defmodule Codrift.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  @cli_commands ~w(mcp initiative session memory integration update)
+  @cli_commands ~w(mcp initiative session memory integration update start)
 
   defp releases do
     [
@@ -98,9 +98,16 @@ defmodule Codrift.MixProject do
           "'Codrift.CLI.Main.run([\"#{cmd}\" | System.argv()])' \"$@\"\n    ;;"
       end)
 
+    # Inserted at the TOP of the dispatch, not before its `*)` fallback, so a
+    # CLI command can shadow a boot-script verb of the same name. `start` is the
+    # one that does: for the CLI release it launches the desktop app, which is
+    # what a user typing `codrift start` means. The release's own `start` (boot
+    # this headless in the foreground) would collide with the app on port 43117
+    # anyway, and `daemon` still reaches it. Every other injected command is a
+    # name the boot script does not define, so nothing else changes.
     File.write!(
       bin_path,
-      String.replace(content, "\n  *)\n", "\n\n#{no_args_case}\n\n#{cases}\n\n  *)\n",
+      String.replace(content, "case $1 in\n", "case $1 in\n#{no_args_case}\n\n#{cases}\n\n",
         global: false
       )
     )
