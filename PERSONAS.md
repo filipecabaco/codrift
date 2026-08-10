@@ -5,6 +5,67 @@ served by the Francis backend. Six personas, each mapped to the flows they
 actually depend on, so a regression in any one of them is a regression for a
 real user rather than for an abstract "feature".
 
+---
+
+# Pass 3 — 2026-08-10 (destructive actions & app startup)
+
+- **Trigger:** a released `0.0.2` cask install opened on a window reading only
+  `not found`, and Quit did nothing. Both were traced to the **Tauri shell**,
+  which pass 2 explicitly listed under *Not covered*.
+- **Build:** branch `fix/stale-sidecar-and-modals` off `main` @ `94c263f`
+- **Scope:** the personas whose flows the fixes touch — **P1** (first run /
+  startup), **P2** (key gating), **P4** (diff), **P6** (destructive actions,
+  restart recovery). P3/P5/P9/P10 were not re-run; **P11 was deliberately
+  skipped** because it grants real OAuth credentials outside the sandbox.
+- **Harness:** as below, but on **port 43217** so it cannot co-bind with the
+  tester's real `Codrift.app` on 43117. Fixtures: 7 initiatives across all four
+  statuses, three throwaway git repos (`webapp` with an untracked file and a
+  nested `src/components/` tree), and two live terminal agents — one on a project
+  directory, one at an initiative's scratchpad root.
+
+## Initiative deletion — now a first-class flow
+
+Pass 2 covered `d` only as "confirm modal, Esc cancels, Enter confirms". This
+pass promotes deletion to an explicit matrix, because it is destructive and
+because the confirm modal is shared with Quit:
+
+| Case | Expected | Result |
+|---|---|---|
+| `d` → `Esc` | Modal closes, initiative untouched | **Pass** — backend still lists it |
+| `d` → `Enter` on an initiative with **3 repos + 1 running agent** | Agent stopped, registry entry gone, context folder deleted, project repos untouched | **Pass** — agents 2→1, context dir removed, all 3 repos keep their uncommitted edits |
+| Selection after deletion | Sidebar highlight and content pane land on the **same** neighbour | **Pass** — both on `P4 Review queue` (pass-2 defect 1 stays fixed) |
+| `d` on an **agent** row | "Stop this agent?" → agent stops, initiative stays | **Pass** — agents 1→0, pane stays on `P6b` |
+| Delete **fails** at the backend | Dialog stays open and shows why | **Pass** (defect D5 below) — forced a 422; dialog held with the error, initiative survived |
+| `d` from the **command palette** while a PTY has focus | Reaches the confirm modal | **Pass** |
+| `d` with **nothing selected** | Says so | **Pass** after D7; previously swallowed |
+| `d` while the **agent terminal has focus** | — | **See D8: no modal, no feedback** |
+
+## Defects found
+
+| # | Defect | Personas | Status |
+|---|---|---|---|
+| D1 | **Quit was a dead button.** `quit_app` was never registered: `main.rs` had no `invoke_handler`, and the command lived only in `src-tauri/src/lib.rs`, which Cargo compiled as a library that the binary never linked. So ⌘Q raised the confirm dialog and accepting it did nothing. Confirmed against the shipped binary: `strings` finds `tauri_heartbeat_codrift.sock` (from `main.rs`) but neither `quit_app` nor `codrift:quit-requested` (from `lib.rs`). | P2, P6 | **Fixed** — command registered, `lib.rs` deleted so there is one shell implementation, and the menu now asks the page (falling back to an immediate quit if the webview is gone). |
+| D2 | **The shell adopted any listener on :43117.** `check_server_started` broke out of its wait as soon as *anything* accepted a TCP connection. A sidecar left over from an earlier version answers that check — and since Burrito deletes the previous version's unpacked release on upgrade, that stale server can no longer read `priv/static` and serves `/index.html` as a bare `not found`. That is the reported bug, exactly. | P1, P6 | **Fixed** — the shell passes `CODRIFT_INSTANCE_TOKEN` to the sidecar it spawns and waits for `/api/health` to echo *that* token. |
+| D3 | **Sidecar death was silent.** When the backend exited (a failed bind, say), nothing noticed; the window just loaded whatever the port served. | P1, P6 | **Fixed** — `CommandEvent::Terminated` aborts the wait, and the window is replaced with a readable explanation instead of a stranger's 404. |
+| D4 | **A booting instance unlinked a live instance's heartbeat socket.** `ShutdownManager.init` did an unconditional `File.rm` on `$TMPDIR/tauri_heartbeat_codrift.sock`. The live listener survives but becomes unreachable, so its shell can never reconnect — and because shutdown only triggers on a heartbeat that stops *after* one arrived, that backend stays up forever holding the port. This is how a sidecar squatted on :43117 for three days. | P6 | **Fixed** — the socket is probed first and only removed when nothing is listening. |
+| D5 | **The confirm modal closed before its action ran.** `onConfirm` set `modal = null` first, so a delete or stop that then failed left no dialog and only a transient toast — indistinguishable from success. | P6 | **Fixed** — closing is the success path; a rejection keeps the dialog open with the reason. Verified by forcing a 422. |
+| D6 | **A destructive confirm was labelled "Confirm".** Delete and stop both used the generic default. | P6 | **Fixed** — "Delete" / "Stop agent". |
+| D7 | **`d` with nothing selected did nothing at all** — no modal, no message. | P6 | **Fixed** — "Select an initiative or agent first." |
+| D8 | **`d` while the agent terminal has focus is swallowed by the PTY.** The character is typed into the agent and no modal appears. This is *correct* key gating for P2 (bare keys must reach the terminal) and it is the state the app normally sits in — so for P6 it reads as "delete is broken". `⌃P` → "Delete / stop selection" works, and `Tab` back to the sidebar works, but neither is discoverable at the moment of trying. | P2 vs P6 | **Open — needs a product decision.** Options: bind `delete` to a modifier combo (changes the keymap the TUI shares), or surface a hint when a bare shortcut is swallowed by a focused PTY. |
+| D9 | **The "N waiting" badge clips** at the default 300px sidebar width — `P3 Multi-repo orchestration` renders as `1 waitin`. | P3 | **Open — cosmetic.** |
+
+## Not re-verified in this pass
+
+The fixes for D1–D4 are **Tauri-shell** code and cannot be exercised from Chrome:
+they need a packaged build (`mix ex_tauri.build`) and a deliberately stale
+sidecar on :43117. Rust-side logic is covered by unit tests
+(`parse_instance`, 3 cases) and the Elixir side by `test/codrift/web/health_test.exs`,
+but the end-to-end upgrade-with-a-zombie scenario is still **manual**.
+
+---
+
+# Pass 2 — 2026-08-03
+
 - **Date:** 2026-08-03 (second pass; supersedes the pass at `6909d47`)
 - **Build:** `main` @ `577c5a1` ("cleanup code") **plus the uncommitted working
   tree** — `App.svelte` split into `Sidebar`/`Overlay`/`Confirm`/`workspace.svelte.ts`,
@@ -70,7 +131,7 @@ only accepted when the backend or the filesystem agrees.
 | **P3** | Multi-repo orchestrator | Supervise several agents across repos and keep them straight | 3 dirs in one initiative, 3 concurrent agents, launch **profile** selection, split panes with independent views, sidebar grouping agents under their dir with per-dir "N running" and per-initiative "N waiting" | `fill` on `<select>`, `click`, screenshots |
 | **P4** | Reviewer | Understand what an agent changed without leaving the app | Diff view across both repos, tree expand/collapse, file preview, `e` → CodeMirror vim editor, `:w` save, `:q` close | `type_text` into CodeMirror, result verified on disk |
 | **P5** | Knowledge keeper | Memory + context survive and stay searchable | `memory` tab, FTS5 search (happy path and hostile queries), type badges, context file tabs | seeded via `/api/rpc` `memory_add`, then driven through the UI |
-| **P6** | Integrator / operator | Import work; survive restarts; clean up safely | Integrations panel inventory, server kill → reconnect banner → auto-recovery, `d` delete/stop with confirm modal (`Esc` cancel and `Enter` confirm), post-delete cleanup | server killed/restarted via shell while the page stays open |
+| **P6** | Integrator / operator | Import work; survive restarts; clean up safely | Integrations panel inventory, server kill → reconnect banner → auto-recovery, **initiative deletion in full** (see the pass-3 matrix: `Esc` cancel, `Enter` confirm, an initiative carrying repos *and* a running agent, the neighbour the selection lands on, a backend failure mid-delete, and `d` with nothing selected), `d` on an agent row to stop it, post-delete cleanup on disk, and ⌘Q → confirm → the app actually quitting | server killed/restarted via shell while the page stays open; deletion asserted three ways — DOM, `POST /api/rpc`, and the filesystem |
 | **P9** | Playbook keeper | Keep the team's scripts and docs *in* the initiative, not beside it | A context folder holding `scripts/` (3 files), `docs/runbooks/` (2), `templates/`, `conventions.md` → rendered as a tree in the sidebar; folder expand/collapse; `memory` row; git repo vs plain folder | `click`, `press_key`, `evaluate_script` on the tree |
 | **P10** | Theme switcher | Work in the theme (and typeface) they already use everywhere else | Appearance panel: 65 bundled VS Code themes + drop-ins from `~/.codrift/themes`, live preview on ↑↓, Enter keeps / Esc reverts, persistence across reload; font family + size | picker driven by keyboard, verified via CSS custom properties and screenshots |
 | **P11** | Integration authenticator | Connect their tracker **once**, from inside the app, without registering a developer app or exporting a token | **Device Flow** (GitHub, GitHub Projects): Connect → user code + `github.com/login/device` → poll → connected badge. **PKCE** (Linear, GitLab): Connect → provider consent → redirect to `127.0.0.1:43117/oauth/callback/<service>` → token stored. Plus: `state` mismatch rejected, Disconnect/revoke, env-var precedence over the bundled client ID, and an import that actually spends the fresh token | Chrome MCP against the **real** provider pages; token truth read from `$SANDBOX/.codrift/oauth_tokens.json`; import verified via `POST /api/rpc` |
@@ -247,5 +308,10 @@ regression is recognisable.
   look for themes specifically: the palette is plain `rgb()` and the terminal
   gets explicit colours, but WKWebView is where the old OKLCH bug would have
   hurt most.
+
+  > **This gap shipped two bugs.** Pass 3 (above) found that Quit had never
+  > worked in a packaged build and that the shell would happily attach to a
+  > stranger's server — both squarely inside this "not covered" line. Treat the
+  > shell as a surface that needs its own pass, not a footnote.
 - **Themes on a high-DPI light setup at small font sizes** — contrast is
   checked numerically for all 65 themes, but hinting and stem weight are not.
