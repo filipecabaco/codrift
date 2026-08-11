@@ -21,7 +21,7 @@ initiative (respecting `.gitignore` via `git ls-files`, with a naive fallback).
 |--------------|--------|
 | Click a directory | Expand / collapse it |
 | Click a file | Load it into the preview pane |
-| `Tab` / `Shift+Tab` | Cycle focus between the sidebar and the terminal |
+| `Tab` | Return focus to the sidebar |
 | Mouse wheel | Scroll the tree or the preview |
 
 ## Editing

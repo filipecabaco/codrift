@@ -260,6 +260,11 @@
         filterEl?.focus();
         filterEl?.select();
         break;
+      // With the filter focused the app-level ⇥ handler stands aside (it is a
+      // text field), so the tree answers for it and Tab leaves either way.
+      case "Tab":
+        onLeave?.();
+        break;
       case "Escape":
         if (query) {
           query = "";

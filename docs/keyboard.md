@@ -83,7 +83,7 @@ syntax-highlighted cards; scroll to move through them.
 | Key | Action |
 |-----|--------|
 | `Enter` / click | Expand / collapse a directory, or open a file in the preview |
-| `Tab` / `Shift+Tab` | Cycle focus between the sidebar and the terminal |
+| `Tab` | Return focus to the sidebar (also from the file filter) |
 | `e` | Open the previewed file in the editor |
 
 ## Editor
@@ -101,9 +101,15 @@ The editor is a CodeMirror pane with **Vim mode** enabled.
 | Key | Action |
 |-----|--------|
 | `Tab` | Focus the terminal from the sidebar (when an agent is selected) |
-| `Shift+Tab` | Return focus to the sidebar |
+| `⌘Esc` / `Ctrl+Esc` | Return focus to the sidebar |
+| `Shift+Enter` / `Option+Enter` | Insert a newline instead of submitting |
+| `⌘`-click / `Ctrl`-click a URL | Open it in your default browser |
 | Any printable key / paste | Forwarded raw to the focused agent PTY |
+| `Tab` / `Shift+Tab` | Passed through to the agent (shell completion, Claude's mode cycling) |
 | `Esc` | Passed through to the agent (needed by Claude, Vim, etc.) |
+
+Once the terminal has focus it keeps every key an agent or shell can use —
+`Tab` included — so `⌘Esc` is the way back to the sidebar.
 
 ## Configuring keybindings
 

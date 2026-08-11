@@ -185,7 +185,10 @@ Opencode, Gemini, or Copilot.
 | Key | Action |
 |-----|--------|
 | `e` | Open the selected file in the editor (Vim mode — `:w` / `⌘S` to save) |
-| `Tab` / `Shift+Tab` | Cycle focus between sidebar and terminal |
+| `Tab` | Focus the terminal (or return to the sidebar from the tree) |
+| `⌘Esc` | Return focus to the sidebar — the terminal keeps `Tab` for completion |
+| `Shift+Enter` | Newline in the agent prompt instead of submitting |
+| `⌘`-click | Follow a URL in agent output, in your default browser |
 
 All keys are configurable in `~/.codrift/keybindings.json`. See [docs/keyboard.md](docs/keyboard.md) for the full reference.
 

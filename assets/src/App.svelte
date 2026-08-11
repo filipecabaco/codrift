@@ -77,6 +77,9 @@
   // Which pane has keyboard focus. Tab cycles; the terminal only receives keys
   // when "main" so sidebar nav (j/k/arrows) keeps working otherwise.
   let paneFocus = $state<"sidebar" | "main">("sidebar");
+  // The way out of a terminal, which keeps ⇥ for itself. ⌘ never reaches a PTY,
+  // so this can't collide with anything the agent or shell binds.
+  const LEAVE_MAIN = "⌘⎋";
 
   // Element refs for pointer-drag resizing (sidebar width and the split divider).
   let bodyEl = $state<HTMLElement | null>(null);
@@ -679,6 +682,20 @@
     );
   }
 
+  // Anything that swallows keys for itself: a form field, or xterm's hidden
+  // textarea — the terminal is a text surface like any other, and every key it
+  // can use has to reach it.
+  function typingTarget(): boolean {
+    const ae = document.activeElement as HTMLElement | null;
+    if (!ae) return false;
+    return (
+      ae.tagName === "INPUT" ||
+      ae.tagName === "TEXTAREA" ||
+      ae.tagName === "SELECT" ||
+      ae.isContentEditable
+    );
+  }
+
   // Bare keys, bubble phase: they must reach an input or the PTY first.
   function onWindowKeydown(e: KeyboardEvent) {
     if (modal || editing) return; // overlays and the editor own their keys
@@ -686,14 +703,7 @@
     const spec = eventToSpec(e);
     if (!spec || spec.includes("+")) return; // modifier combos: see onCaptureKeydown
 
-    const ae = document.activeElement as HTMLElement | null;
-    const editable =
-      !!ae &&
-      (ae.tagName === "INPUT" ||
-        ae.tagName === "TEXTAREA" ||
-        ae.tagName === "SELECT" ||
-        ae.isContentEditable);
-    if (editable) return;
+    if (typingTarget()) return;
 
     if (spec === "left" || spec === "right") {
       e.preventDefault();
@@ -712,7 +722,17 @@
   function onCaptureKeydown(e: KeyboardEvent) {
     if (modal || editing) return; // overlays install their own capture handlers
 
-    if (e.key === "Tab") {
+    // ⌘⎋ (⌃⎋) always returns to the sidebar. It exists because ⇥ no longer can:
+    // shell completion, an agent's own ⇥ and ⇧⇥ mode cycling all need to reach
+    // the PTY, so a focused text surface keeps Tab and this is the way back out.
+    if (e.key === "Escape" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      e.stopPropagation();
+      focusSidebar();
+      return;
+    }
+
+    if (e.key === "Tab" && !typingTarget()) {
       e.preventDefault();
       e.stopPropagation();
       if (paneFocus === "main") focusSidebar();
@@ -746,9 +766,10 @@
   const keyHints = $derived.by<{ spec: string; label: string }[]>(() => {
     const k = (a: ActionId) => formatSpec(keymap[a]);
     const palette = { spec: k("palette"), label: "Commands" };
-    // Terminal has the keyboard: only Tab (back) and the palette do anything here.
+    // The terminal has the keyboard — including ⇥ — so the only ways out are
+    // ⌘⎋ and the palette.
     if (paneFocus === "main" && active.agentId) {
-      return [{ spec: "⇥", label: "Sidebar" }, palette];
+      return [{ spec: LEAVE_MAIN, label: "Sidebar" }, { spec: "⇧⏎", label: "Newline" }, palette];
     }
     const hints = [{ spec: "↑↓", label: "Move" }];
     if (active.tab === "tree") hints.push({ spec: "⇥", label: "Sidebar" }, { spec: "/", label: "Filter files" });
@@ -777,6 +798,18 @@
   $effect(() => {
     ws.rows;
     ws.reconcileCursor(active.initiativeId);
+  });
+
+  // An agent that closed — a clean exit, a stop from another window, a server
+  // restart — leaves its pane holding a terminal for something that no longer
+  // exists. Fall the pane back to the initiative overview, and hand the
+  // keyboard back to the sidebar if that terminal was what had it.
+  $effect(() => {
+    panes.forEach((p, i) => {
+      if (!p.agentId || ws.agent(p.agentId)) return;
+      p.agentId = null;
+      if (i === activePane && paneFocus === "main" && p.tab !== "tree") focusSidebar();
+    });
   });
 
   // When the server drops (conn.online flipped false by a failed rpc), poll the
