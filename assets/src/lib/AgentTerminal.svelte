@@ -3,8 +3,11 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { WebglAddon } from "@xterm/addon-webgl";
   import { CanvasAddon } from "@xterm/addon-canvas";
+  import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
+  import { openUrl } from "$lib/api";
   import { fetchReplay, onAgentOutput, sendKeys, sendResize } from "$lib/stream";
+  import { pathsToInput, registerDropZone, textToInput } from "$lib/dnd";
   import { themeState } from "$lib/theme.svelte";
   import { fontState } from "$lib/fonts.svelte";
 
@@ -39,7 +42,40 @@
   let { agentId, initiativeId }: { agentId: string; initiativeId: string } =
     $props();
 
+  // ⇧⏎ (and ⌥⏎) insert a newline instead of submitting. Coding CLIs read the
+  // ESC+CR pair as "newline, don't send" — the same sequence iTerm2 and VS Code
+  // bind for it — while a plain shell treats it as a bare Return.
+  const NEWLINE = "\x1b\r";
+
+  function multilineEnter(t: Terminal) {
+    t.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown" || e.key !== "Enter") return true;
+      if (e.ctrlKey || e.metaKey || !(e.shiftKey || e.altKey)) return true;
+      e.preventDefault();
+      // `agentId` is read at keypress time, so the handler survives the pane
+      // switching agents — same reason onData reads it rather than closing over
+      // a captured copy.
+      sendKeys(agentId, NEWLINE);
+      return false;
+    });
+  }
+
+  // URLs in agent output are addresses worth following (a PR, a dev server, a
+  // stack-trace doc). ⌘/⌃-click opens them in the real browser — via the
+  // backend, since the Tauri webview has no window.open. A plain click is left
+  // alone so it can still place the selection, matching every terminal app.
+  function webLinks(t: Terminal) {
+    t.loadAddon(
+      new WebLinksAddon((e, uri) => {
+        if (!(e.metaKey || e.ctrlKey)) return;
+        void openUrl(uri).catch(() => {});
+      }),
+    );
+  }
+
   let el: HTMLDivElement;
+  let pane: HTMLDivElement;
+  let dropping = $state(false);
   let term: Terminal | undefined;
   let fit: FitAddon | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -121,6 +157,8 @@
       term.loadAddon(fit);
       term.open(el);
       useGpuRenderer(term);
+      webLinks(term);
+      multilineEnter(term);
       term.onData((data) => sendKeys(agentId, data));
       term.onResize(({ cols, rows }) => sendResize(agentId, cols, rows));
     }
@@ -146,6 +184,22 @@
     fit?.fit();
   });
 
+  // Files dropped from Finder are typed in as absolute paths — the same thing a
+  // terminal does — so the agent gets something it can actually open. `agentId`
+  // is read at drop time, so the zone survives the pane switching agents.
+  $effect(() =>
+    registerDropZone(pane, {
+      onHover: (over) => (dropping = over),
+      onDrop: ({ paths, text }) => {
+        const input = paths ? pathsToInput(paths) : textToInput(text ?? "");
+        if (!input) return;
+        sendKeys(agentId, input);
+        // The drag stole focus from the terminal; typing should continue there.
+        term?.focus();
+      },
+    }),
+  );
+
   $effect(() => {
     // Guard the fit: a resize queued just before teardown would otherwise call
     // fit() on a disposed terminal and throw xterm's `_isDisposed` error.
@@ -170,4 +224,17 @@
   });
 </script>
 
-<div class="size-full overflow-hidden bg-canvas p-1.5" bind:this={el}></div>
+<div class="relative size-full overflow-hidden bg-canvas" bind:this={pane}>
+  <div class="size-full p-1.5" bind:this={el}></div>
+  {#if dropping}
+    <!-- pointer-events-none keeps this out of the hit test: the drop has to
+         reach the pane underneath, not the hint drawn on top of it. -->
+    <div
+      class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-accent bg-canvas/60"
+    >
+      <span class="rounded-md border border-border bg-surface px-3 py-1.5 text-[12px] text-fg">
+        Drop to insert into this agent
+      </span>
+    </div>
+  {/if}
+</div>

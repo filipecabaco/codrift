@@ -70,6 +70,20 @@ export function isDead(status: string): boolean {
   return status === "stopped" || status === "crashed";
 }
 
+/**
+ * An agent that exited cleanly is done: its row closes and its pane falls back
+ * to the initiative overview, the way closing a terminal tab works. A crash
+ * (non-zero exit) stays visible — the exit code and whatever the agent printed
+ * on its way out are the whole reason to look — until it is dismissed with the
+ * delete key. The backend keeps both queryable for orchestrators either way;
+ * this is only about what the sidebar shows.
+ */
+function closesOnExit(agent: { status: string; mode?: string }): boolean {
+  // `once` agents (orchestration turns) go back to :idle after each run and are
+  // reused, so their exit is not the end of the agent.
+  return agent.status === "stopped" && agent.mode !== "once";
+}
+
 /** The context subfolder a row lives in, or null when it sits at the root. */
 function parentFolder(row: Row): string | null {
   const path = row.kind === "file" ? row.name : row.kind === "folder" ? row.path : null;
@@ -358,10 +372,12 @@ class Workspace {
     try {
       this.initiatives = await rpc<Initiative[]>("list_initiatives");
       const entries = await Promise.all(
-        this.initiatives.map(
-          async (i) =>
-            [i.id, await rpc<Agent[]>("get_initiative_agents", { initiative_id: i.id })] as const,
-        ),
+        this.initiatives.map(async (i) => {
+          const agents = await rpc<Agent[]>("get_initiative_agents", { initiative_id: i.id });
+          // The backend keeps finished agents queryable on purpose; the sidebar
+          // shows only what is still worth looking at.
+          return [i.id, agents.filter((a) => !closesOnExit(a))] as const;
+        }),
       );
       this.agentsByInit = Object.fromEntries(entries);
       await this.refreshProfiles();
@@ -417,7 +433,12 @@ class Workspace {
     const list = this.agentsByInit[agent.initiative_id] ?? [];
     const i = list.findIndex((a) => a.id === agent.id);
     let next: Agent[];
-    if (i < 0) {
+    // The join snapshot replays every agent the backend still holds, finished
+    // ones included; a clean exit must not come back on a reconnect.
+    if (closesOnExit(agent)) {
+      if (i < 0) return;
+      next = list.filter((a) => a.id !== agent.id);
+    } else if (i < 0) {
       next = [...list, agent];
     } else {
       next = list.slice();
@@ -431,8 +452,14 @@ class Workspace {
       const i = list.findIndex((a) => a.id === agentId);
       if (i < 0) continue;
       if (list[i].status === status) return;
-      const next = list.slice();
-      next[i] = { ...next[i], status };
+      const updated = { ...list[i], status };
+      let next: Agent[];
+      if (closesOnExit(updated)) {
+        next = list.filter((a) => a.id !== agentId);
+      } else {
+        next = list.slice();
+        next[i] = updated;
+      }
       this.agentsByInit = { ...this.agentsByInit, [initId]: next };
       return;
     }
