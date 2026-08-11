@@ -78,7 +78,7 @@ export type MemoryEntry = {
 };
 
 // Adapters that can be launched from the UI (terminal is started internally only).
-export const ADAPTERS = ["claude", "codex", "opencode", "gemini", "copilot"] as const;
+export const ADAPTERS = ["claude", "codex", "opencode", "gemini", "copilot", "cursor"] as const;
 
 // A launch profile: a named binding of a base adapter + env overrides (e.g.
 // CLAUDE_CONFIG_DIR) so the same tool can run under different accounts/folders.

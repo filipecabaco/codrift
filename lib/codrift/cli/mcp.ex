@@ -14,6 +14,7 @@ defmodule Codrift.CLI.MCP do
     - **Claude Code** — `claude mcp add --scope user --transport sse`
     - **Gemini CLI** — merges `mcpServers` into `~/.gemini/settings.json`
     - **Opencode** — merges `mcp` block into `~/.config/opencode/opencode.jsonc`
+    - **Cursor CLI** — merges `mcpServers` into `~/.cursor/mcp.json`
     - **Codex** — prints manual instructions (it only speaks streamable HTTP)
     - **Copilot** — prints manual instructions (gh copilot has no MCP config)
 
@@ -51,6 +52,7 @@ defmodule Codrift.CLI.MCP do
       install_claude(sse_url, token),
       install_gemini(sse_url, token),
       install_opencode(sse_url, token),
+      install_cursor(sse_url, token),
       install_codex(sse_url),
       install_copilot(sse_url)
     ]
@@ -148,6 +150,21 @@ defmodule Codrift.CLI.MCP do
         "enabled" => true,
         "headers" => %{"X-Codrift-Token" => token}
       }
+    )
+  end
+
+  # Cursor takes a remote server as a bare `url` plus optional `headers`; the
+  # transport is inferred from the endpoint, so there is no `type` to set. The
+  # global file is `~/.cursor/mcp.json` — shared by the CLI and the editor.
+  defp install_cursor(sse_url, token) do
+    merge_config(
+      "cursor-agent",
+      "Cursor CLI",
+      Path.expand("~/.cursor/mcp.json"),
+      &Codrift.JSONC.decode!/1,
+      %{},
+      "mcpServers",
+      %{"url" => sse_url, "headers" => %{"X-Codrift-Token" => token}}
     )
   end
 
