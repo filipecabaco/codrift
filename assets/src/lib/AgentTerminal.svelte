@@ -39,8 +39,14 @@
 
   // An agent is itself a PTY/TUI program, so its pane is a real terminal
   // emulator. Both directions ride the shared socket (lib/stream.ts).
-  let { agentId, initiativeId }: { agentId: string; initiativeId: string } =
-    $props();
+  // `visible` is false while another tab is showing. The pane stays mounted
+  // either way — see the persistent terminal layer in App.svelte — so this is
+  // about painting, not about lifecycle.
+  let {
+    agentId,
+    initiativeId,
+    visible = true,
+  }: { agentId: string; initiativeId: string; visible?: boolean } = $props();
 
   // ⇧⏎ (and ⌥⏎) insert a newline instead of submitting. Coding CLIs read the
   // ESC+CR pair as "newline, don't send" — the same sequence iTerm2 and VS Code
@@ -88,6 +94,28 @@
     unsubscribe = undefined;
   }
 
+  // The PTY hears about a resize at most once per idle moment, and only when the
+  // grid actually changed. The ResizeObserver below fires on every frame of a
+  // sidebar or split-divider drag, and every SIGWINCH makes a TUI repaint — a
+  // burst of overlapping repaints is what garbled the pane. `agentId` is read at
+  // fire time, like everywhere else here, so a switch mid-debounce can't resize
+  // the agent we just left.
+  let sentCols = 0;
+  let sentRows = 0;
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function pushResize(cols: number, rows: number) {
+    // A pane mid-teardown, or one that hasn't been laid out yet, measures as a
+    // sliver. Forwarding that reflows the agent's UI to a size nobody chose, and
+    // the damage outlives the resize that caused it.
+    if (cols < 2 || rows < 2) return;
+    if (cols === sentCols && rows === sentRows) return;
+    sentCols = cols;
+    sentRows = rows;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => sendResize(agentId, cols, rows), 80);
+  }
+
   // The terminal is themed from the same VS Code theme as the rest of the app —
   // including all 16 ANSI colours, so an agent's coloured output belongs to the
   // theme instead of fighting it.
@@ -118,6 +146,30 @@
     };
   }
 
+  /**
+   * Make the agent paint its screen again.
+   *
+   * Attaching to a *running* agent is the case that used to leave a blank pane.
+   * The replay is a byte log, not a screen: if the tail of it happens to clear
+   * the display — a full-screen TUI's repaint usually ends up doing exactly
+   * that — we have nothing to show, and an agent sitting on `needs input` has no
+   * reason to ever write again. So we ask it to.
+   *
+   * There is no "redraw" to ask for, so we do what dragging a window edge does:
+   * change the size, then change it back. SIGWINCH is the one signal every TUI
+   * and every readline prompt answers with a full repaint. It has to be a real
+   * change in both directions — Darwin's TIOCSWINSZ only raises SIGWINCH when
+   * the winsize differs, and Codrift.Agent.Process drops same-size resizes
+   * before that anyway (see its `last_size` guard).
+   */
+  function forceRepaint(agent: string) {
+    if (!term || term.cols < 2 || term.rows < 3) return;
+    sendResize(agent, term.cols, term.rows - 1);
+    sendResize(agent, term.cols, term.rows);
+    sentCols = term.cols;
+    sentRows = term.rows;
+  }
+
   function connect(agent: string, initiative: string) {
     disconnect();
     term?.reset();
@@ -126,7 +178,11 @@
     // Replay first; the gen guard stops a late resolution landing in a newer
     // agent's terminal.
     fetchReplay(agent).then((chunks) => {
-      if (myGen === gen) chunks.forEach((bytes) => term?.write(bytes));
+      if (myGen !== gen) return;
+      chunks.forEach((bytes) => term?.write(bytes));
+      // After the replay, never before: the repaint it triggers has to land on
+      // top of the old bytes, not underneath them.
+      forceRepaint(agent);
     });
 
     unsubscribe = onAgentOutput(agent, {
@@ -138,7 +194,13 @@
       },
     });
 
-    if (term) sendResize(agent, term.cols, term.rows);
+    // Sent immediately rather than through pushResize: a freshly attached agent
+    // has no idea how big our grid is, and it needs that before it first paints.
+    if (term && term.cols >= 2 && term.rows >= 2) {
+      sentCols = term.cols;
+      sentRows = term.rows;
+      sendResize(agent, term.cols, term.rows);
+    }
   }
 
   // Recreate the live connection whenever the selected agent changes.
@@ -160,10 +222,21 @@
       webLinks(term);
       multilineEnter(term);
       term.onData((data) => sendKeys(agentId, data));
-      term.onResize(({ cols, rows }) => sendResize(agentId, cols, rows));
+      term.onResize(({ cols, rows }) => pushResize(cols, rows));
     }
     fit?.fit();
     connect(a, i);
+  });
+
+  // Coming back into view. The box never collapsed (visibility:hidden keeps it)
+  // so there is nothing to reconnect and nothing to replay — but xterm doesn't
+  // paint a terminal it can't see, so whatever arrived while another tab was up
+  // is sitting in the buffer undrawn. `refresh` draws it. This is the difference
+  // between switching back to a live pane and switching back to a blank one.
+  $effect(() => {
+    if (!visible || !term) return;
+    fit?.fit();
+    term.refresh(0, term.rows - 1);
   });
 
   // Re-skin a live terminal when the theme changes — no reconnect, no reload;
@@ -202,13 +275,19 @@
 
   $effect(() => {
     // Guard the fit: a resize queued just before teardown would otherwise call
-    // fit() on a disposed terminal and throw xterm's `_isDisposed` error.
-    const ro = new ResizeObserver(() => {
-      if (term) fit?.fit();
+    // fit() on a disposed terminal and throw xterm's `_isDisposed` error. A
+    // collapsed box is skipped too — `visibility:hidden` keeps the size, but a
+    // pane being torn down (or laid out for the first time) reports 0×0, and
+    // fitting to that proposes a one-column grid.
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (!term || !box || box.width < 2 || box.height < 2) return;
+      fit?.fit();
     });
     ro.observe(el);
     return () => {
       ro.disconnect();
+      clearTimeout(resizeTimer);
       disconnect();
       // The WebGL addon can throw from a deferred render during dispose — the
       // terminal is going away regardless, so swallow it rather than surface an

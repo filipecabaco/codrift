@@ -43,11 +43,29 @@ defmodule Codrift.Config.Keybindings do
   | `palette` | `ctrl+p` | Open command palette |
   | `start_orchestration` | `o` | Start orchestration for the selected initiative |
   | `branch_initiative` | `b` | Put every git directory on the initiative's branch |
+  | `focus_left` | `ctrl+left` | Move focus left: pane → pane → sidebar |
+  | `focus_right` | `ctrl+right` | Move focus right: sidebar → pane → pane |
+  | `focus_up` | `ctrl+up` | Move focus up, between stacked panes |
+  | `focus_down` | `ctrl+down` | Move focus down, between stacked panes |
+
+  The desktop app also jumps straight to a pane with the primary modifier and a
+  digit (`⌘1`, `⌘2`, …). That is positional rather than an action, so it is not
+  rebindable here.
 
   ## Key spec format
 
   - Single character: `"j"`, `"["`, `"*"`
-  - Modifier combo: `"ctrl+b"`, `"ctrl+p"`, `"alt+x"`, `"shift+r"`
+  - Named key: `"left"`, `"right"`, `"up"`, `"down"`, `"esc"`
+  - Modifier combo: `"ctrl+b"`, `"ctrl+p"`, `"ctrl+left"`, `"alt+x"`, `"shift+r"`
+
+  ## Bindings that must not be reachable without a modifier
+
+  The `focus_*` actions are the only way out of a focused terminal, because the
+  pane keeps `Tab` for the PTY (shell completion and an agent's own mode cycling
+  both need it). Bind them to *modifier* combos. A bare key would be typed
+  straight into the agent, and their predecessor — `ctrl+esc` — was worse still:
+  releasing the modifier a moment early sent a lone `Esc`, which coding CLIs read
+  as "interrupt the running command".
   """
 
   @default_bindings %{
@@ -72,7 +90,11 @@ defmodule Codrift.Config.Keybindings do
     toggle_sidebar: "ctrl+b",
     palette: "ctrl+p",
     start_orchestration: "o",
-    branch_initiative: "b"
+    branch_initiative: "b",
+    focus_left: "ctrl+left",
+    focus_right: "ctrl+right",
+    focus_up: "ctrl+up",
+    focus_down: "ctrl+down"
   }
 
   @type action ::
@@ -98,6 +120,10 @@ defmodule Codrift.Config.Keybindings do
           | :palette
           | :start_orchestration
           | :branch_initiative
+          | :focus_left
+          | :focus_right
+          | :focus_up
+          | :focus_down
 
   @type key_spec :: String.t()
   @type t :: %{required(action()) => key_spec()}
@@ -154,6 +180,10 @@ defmodule Codrift.Config.Keybindings do
   defp string_to_action("palette"), do: :palette
   defp string_to_action("start_orchestration"), do: :start_orchestration
   defp string_to_action("branch_initiative"), do: :branch_initiative
+  defp string_to_action("focus_left"), do: :focus_left
+  defp string_to_action("focus_right"), do: :focus_right
+  defp string_to_action("focus_up"), do: :focus_up
+  defp string_to_action("focus_down"), do: :focus_down
   defp string_to_action(_), do: nil
 
   defp parse_binding({k, v}) do

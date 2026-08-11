@@ -152,18 +152,53 @@
     background: var(--color-ink);
   }
 
+  /* Keys are the product's interface, so on this page they are objects, not
+     labels: a face, a lit edge along the top, a shadow standing in for the
+     wall of the cap. `press` collapses that shadow and drops the face onto it,
+     which is the whole illusion — and it costs one transform and one shadow,
+     so nothing here touches layout. */
   .keycap {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 1.55em;
-    padding: 0.12em 0.42em;
+    min-width: 1.7em;
+    padding: 0.14em 0.44em 0.16em;
     border: 1px solid var(--color-rule);
-    border-radius: 4px;
+    border-radius: 5px;
     background: var(--color-raised);
+    box-shadow:
+      0 1.5px 0 oklch(29% 0.014 265),
+      inset 0 1px 0 oklch(100% 0 0 / 0.05);
     font-family: var(--font-mono);
     font-size: 0.75rem;
+    line-height: 1.35;
     color: var(--color-fg);
+    white-space: nowrap;
+    transition:
+      transform 90ms var(--ease-out-quint),
+      background-color 90ms var(--ease-out-quint),
+      border-color 90ms var(--ease-out-quint),
+      box-shadow 90ms var(--ease-out-quint),
+      color 90ms var(--ease-out-quint);
+  }
+
+  /* Struck — by a real key on the visitor's keyboard, or by a click. */
+  .keycap.is-down {
+    transform: translateY(1.5px);
+    background: var(--color-amber);
+    border-color: var(--color-amber);
+    color: var(--color-amber-ink);
+    box-shadow:
+      0 0 0 oklch(29% 0.014 265),
+      inset 0 1px 0 oklch(100% 0 0 / 0);
+  }
+
+  button.keycap {
+    cursor: pointer;
+  }
+  button.keycap:hover {
+    border-color: var(--color-amber);
+    color: var(--color-amber);
   }
 
   /* A shell command is the longest unbreakable string on the page. On a phone
@@ -211,6 +246,225 @@
     flex: none;
   }
 
+  /* ── The rig ──────────────────────────────────────────────────────────
+     A working scale model of the Codrift window. It is drawn, not
+     screenshotted, because it has to answer to the keyboard: the whole point
+     of the section is that the focus model is something you drive, not
+     something you read about. The pane contents are real screenshots, cropped
+     past their own chrome so the app's window frame isn't nested inside ours. */
+  .rigwin {
+    position: relative;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    background: var(--color-ink);
+    border: 1px solid var(--color-rule);
+    border-radius: 10px;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    aspect-ratio: 16 / 9;
+  }
+  @media (max-width: 40rem) {
+    .rigwin {
+      aspect-ratio: 4 / 3;
+    }
+  }
+
+  .rig-strip {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0.7rem;
+    border-bottom: 1px solid var(--color-rule);
+    background: var(--color-panel);
+    font-size: 0.6875rem;
+  }
+  /* The macOS build draws the traffic lights straight onto the page and drops
+     the native title bar, so the model does too — one slim row, gutter first. */
+  .rig-lights {
+    display: flex;
+    gap: 0.3rem;
+    flex: none;
+  }
+  .rig-lights i {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background: var(--color-rule);
+  }
+
+  .rig-tab {
+    padding: 0.1rem 0.42rem;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    color: var(--color-faint);
+    white-space: nowrap;
+  }
+  .rig-tab[aria-selected="true"] {
+    border-color: var(--color-rule);
+    background: var(--color-ink);
+    color: var(--color-fg);
+  }
+
+  .rig-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr);
+    min-height: 0;
+  }
+  .rigwin[data-sidebar="collapsed"] .rig-grid {
+    grid-template-columns: 0.375rem minmax(0, 1fr);
+  }
+  @media (max-width: 40rem) {
+    .rig-grid {
+      grid-template-columns: minmax(0, 5.5rem) minmax(0, 1fr);
+    }
+    .rig-side {
+      font-size: 0.5rem;
+      line-height: 2;
+    }
+  }
+
+  .rig-side {
+    min-width: 0;
+    overflow: hidden;
+    border-right: 1px solid var(--color-rule);
+    background: var(--color-panel);
+    padding: 0.4rem 0.3rem;
+    font-size: 0.625rem;
+    line-height: 1.9;
+  }
+  .rigwin[data-sidebar="collapsed"] .rig-side > * {
+    display: none;
+  }
+  /* Block, not flex: ellipsis needs a block box, and a narrow viewport turns
+     "orchestration.md" into a hard clip otherwise. */
+  .rig-row {
+    display: block;
+    padding: 0 0.3rem;
+    border-radius: 4px;
+    color: var(--color-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rig-row .dot {
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 0.35rem;
+  }
+  .rig-row.is-cursor {
+    background: color-mix(in oklab, var(--color-amber) 20%, transparent);
+    color: var(--color-fg);
+  }
+
+  .rig-content {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    gap: 1px;
+    background: var(--color-rule);
+  }
+  .rig-content[data-split="vertical"] {
+    grid-template-columns: 1fr 1fr;
+  }
+  .rig-content[data-split="horizontal"] {
+    grid-template-rows: 1fr 1fr;
+  }
+
+  .rig-pane {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--color-ink);
+  }
+  /* The screenshot is blown up and pulled left and up so the app's own sidebar,
+     header and hint row sit outside the frame. What is left is a pane's actual
+     content, which is the only part a pane is: nesting a whole window inside
+     our drawn one would put two sets of chrome on screen at the same time.
+     The box is oversized in both axes and `cover` does the cropping, so the
+     shot never stretches whatever the pane's aspect ends up being. */
+  /* The -pane shots are pre-cropped past the app's own sidebar, header and hint
+     row, so what lands here is only ever a pane's content. Cropping in the file
+     rather than with CSS offsets is what lets one rule hold for every shape the
+     pane takes: full width, split in half, or stacked. */
+  .rig-pane img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    object-fit: cover;
+    object-position: left top;
+  }
+  .rig-badge {
+    position: absolute;
+    top: 0.3rem;
+    left: 0.3rem;
+    z-index: 2;
+    padding: 0 0.3rem;
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--color-ink) 82%, transparent);
+    color: var(--color-faint);
+    font-size: 0.625rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .rig-pane.is-active .rig-badge {
+    background: var(--color-amber);
+    color: var(--color-amber-ink);
+  }
+
+  /* One element, repositioned instantly. Deliberately not animated between
+     regions: a focus ring that slides is a focus ring that lies about where the
+     keyboard is for 200ms, and the product it is modelling answers instantly.
+     The only motion is a short opacity lift on arrival, which costs no layout. */
+  .rig-ring {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+    border: 1px solid var(--color-amber);
+    border-radius: 6px;
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-amber) 22%, transparent);
+  }
+
+  .rig-hints {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.85rem;
+    padding: 0.35rem 0.7rem;
+    border-top: 1px solid var(--color-rule);
+    background: var(--color-panel);
+    font-size: 0.625rem;
+    color: var(--color-faint);
+  }
+  .rig-hints b {
+    color: var(--color-fg);
+    font-weight: 400;
+  }
+  /* The beat the section is built around: ⇥ reaching the agent instead of us. */
+  .rig-hints .is-swallowed {
+    color: var(--color-amber);
+  }
+
+  /* The app's own overlay treatment: a scrim, a hairline, and the one shadow in
+     the system. Only the dialog is shown, not the window it was captured in. */
+  .rig-palette {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: grid;
+    place-items: start center;
+    padding-top: 7%;
+    background: oklch(0% 0 0 / 0.5);
+  }
+  .rig-palette img {
+    width: min(46%, 26rem);
+    height: auto;
+    border: 1px solid var(--color-rule);
+    border-radius: 8px;
+    box-shadow: 0 16px 48px -12px oklch(2% 0.01 265 / 0.85);
+  }
+
   .drench {
     background: var(--color-amber);
     color: var(--color-amber-ink);
@@ -254,5 +508,14 @@
     50% {
       opacity: 0;
     }
+  }
+
+  /* Hero lane under the cursor: the amber-at-20% row fill the app's sidebar
+     uses for its cursor, and the lane stops advancing so it can be read. */
+  .lane.is-cursor {
+    background: color-mix(in oklab, var(--color-amber) 18%, transparent);
+  }
+  .lane.is-cursor [data-line] {
+    color: var(--color-fg);
   }
 }

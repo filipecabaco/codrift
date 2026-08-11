@@ -68,5 +68,12 @@ cask "codrift" do
 
     The skills cover the shared memory store, initiatives, orchestration and
     the GitHub/Linear/GitLab integrations. Add -g to install them globally.
+
+    Upgrading: the `codrift` command ships in the codrift-cli formula, and
+    `brew upgrade codrift` bumps only the cask — brew does not upgrade a cask's
+    formula dependencies. Upgrade both, or the app moves while the CLI keeps
+    reporting the old version:
+
+      brew upgrade codrift codrift-cli
   EOS
 end

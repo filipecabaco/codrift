@@ -8,3 +8,9 @@ erl_crash.dump
 /tmp/
 /priv/plts/*.plt
 /priv/plts/*.plt.hash
+
+# mix assets.build output (tailwind + francis.digest), regenerated in the Dockerfile
+/priv/static/tw.css
+/priv/static/cache_manifest.json
+/priv/static/**/*.gz
+/priv/static/**/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].*

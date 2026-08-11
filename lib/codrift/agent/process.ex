@@ -151,8 +151,14 @@ defmodule Codrift.AgentProcess do
     case mode do
       :pty ->
         # Profile env comes last so it overrides adapter defaults (dedup keeps
-        # the last occurrence per key).
-        env = dedup_env([{"TERM", "xterm-256color"} | adapter.env(dir)] ++ profile_env)
+        # the last occurrence per key). The unsets come first so a profile that
+        # deliberately sets one of those names still wins.
+        env =
+          dedup_env(
+            clear_release_env() ++
+              [{"TERM", "xterm-256color"} | adapter.env(dir)] ++ profile_env
+          )
+
         args = adapter.args(dir, context_opts) ++ extra_args
 
         # erlexec requires args to be passed as [executable | args] list rather
@@ -461,6 +467,29 @@ defmodule Codrift.AgentProcess do
     |> Enum.reverse()
   end
 
+  # Variables that identify *this* BEAM's release and ERTS. Both spawners
+  # inherit the sidecar's environment, so without clearing these an agent — and
+  # everything it runs — is handed the desktop app's release identity.
+  #
+  # The one that bites is RELEASE_SYS_CONFIG: a release boot script only
+  # defaults it, so an inherited value wins, and the sys.config it names pins
+  # the config provider to the *app's* version. An agent running `codrift memory
+  # add` against a CLI of a different version then dies at boot with
+  # "could not read .../releases/<app version>/runtime.exs" — which is every
+  # user mid-upgrade, since the cask and the codrift-cli formula move
+  # separately. __BURRITO is the other: `Codrift.desktop_sidecar?/0` reads it,
+  # so a leaked copy makes a child believe it is the desktop sidecar.
+  #
+  # `{name, false}` is "unset" to both erlexec and Erlang ports.
+  @inherited_release_vars ~w(
+    RELEASE_ROOT RELEASE_SYS_CONFIG RELEASE_NAME RELEASE_VSN RELEASE_COOKIE
+    RELEASE_NODE RELEASE_TMP RELEASE_MODE RELEASE_DISTRIBUTION RELEASE_BOOT_SCRIPT
+    RELEASE_BOOT_SCRIPT_CLEAN RELEASE_PROG RELEASE_COMMAND
+    __BURRITO __BURRITO_BIN_PATH BINDIR ROOTDIR EMU PROGNAME
+  )
+
+  defp clear_release_env, do: Enum.map(@inherited_release_vars, &{&1, false})
+
   defp once_args(adapter, dir, false), do: adapter.args(dir, [])
   defp once_args(adapter, dir, true), do: adapter.args_continue(dir)
 
@@ -532,9 +561,12 @@ defmodule Codrift.AgentProcess do
 
   defp open_port(adapter, dir, args, extra_env, command) do
     env =
-      (adapter.env(dir) ++ extra_env)
+      (clear_release_env() ++ adapter.env(dir) ++ extra_env)
       |> dedup_env()
-      |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
+      |> Enum.map(fn
+        {k, false} -> {String.to_charlist(k), false}
+        {k, v} -> {String.to_charlist(k), String.to_charlist(v)}
+      end)
 
     port_opts = [
       :use_stdio,
