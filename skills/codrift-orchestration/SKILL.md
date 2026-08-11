@@ -17,7 +17,7 @@ send_to_agent { agent_id, input: "run the test suite and report failures" }
 get_agent_output { agent_id, n: 50 }
 ```
 
-`adapter` is one of `claude`, `codex`, `opencode`, `gemini`, `copilot`.
+`adapter` is one of `claude`, `codex`, `opencode`, `gemini`, `copilot`, `cursor`.
 `profile` is optional and names a launch profile from `settings.json` — it runs
 the adapter under a different config folder/account (e.g. a personal vs work
 Claude login). Omit `dir` for a folderless initiative and the agent runs in the

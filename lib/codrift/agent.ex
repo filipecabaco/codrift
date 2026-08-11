@@ -102,7 +102,8 @@ defmodule Codrift.Agent do
     Codrift.Agent.Adapters.Codex,
     Codrift.Agent.Adapters.Opencode,
     Codrift.Agent.Adapters.Gemini,
-    Codrift.Agent.Adapters.Copilot
+    Codrift.Agent.Adapters.Copilot,
+    Codrift.Agent.Adapters.Cursor
   ]
 
   @doc "Returns all adapter modules whose CLI executable is present in PATH."

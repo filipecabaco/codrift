@@ -46,7 +46,7 @@ By hand, a `"profiles"` object keyed by name:
 
 | Field | Meaning |
 |---|---|
-| `adapter` | The base tool (`claude`, `codex`, `opencode`, `gemini`, `copilot`). Decides argument handling, session resume and status parsing. |
+| `adapter` | The base tool (`claude`, `codex`, `opencode`, `gemini`, `copilot`, `cursor`). Decides argument handling, session resume and status parsing. |
 | `command` | Optional. Executable to run instead of the adapter's own. A bare name is looked up in `PATH`; anything with a `/` or leading `~` is a path. |
 | `args` | Optional. Appended to the adapter's own args. **One entry per argument** — `["--model", "opus"]` is two entries; a value with spaces needs no quoting. |
 | `env` | Merged into the agent's process. `~` values expand to absolute paths. Overrides the adapter's defaults. |

@@ -1,6 +1,6 @@
 ---
 name: codrift-mcp
-description: Use when connecting an AI CLI to Codrift's MCP server, debugging a connection that isn't working, or wiring up a client Codrift doesn't auto-register. Triggers on "codrift mcp install", "connect Codrift to Claude Code", "MCP server", "SSE endpoint", "X-Codrift-Token", "auth-token", "the codrift tools aren't showing up", "port 43117", or registering Codrift with Codex, Gemini, Copilot or Opencode.
+description: Use when connecting an AI CLI to Codrift's MCP server, debugging a connection that isn't working, or wiring up a client Codrift doesn't auto-register. Triggers on "codrift mcp install", "connect Codrift to Claude Code", "MCP server", "SSE endpoint", "X-Codrift-Token", "auth-token", "the codrift tools aren't showing up", "port 43117", or registering Codrift with Codex, Gemini, Copilot, Cursor or Opencode.
 ---
 
 # Codrift MCP server
@@ -15,9 +15,10 @@ tools the other `codrift-*` skills describe.
 codrift mcp install
 ```
 
-It detects Claude Code, Gemini, Opencode, Codex and Copilot in `PATH` and
-registers each one it finds, embedding the local auth token. Re-running it is
-safe — it removes and re-adds rather than failing on an existing entry.
+It detects Claude Code, Gemini, Opencode, Cursor (`cursor-agent`), Codex and
+Copilot in `PATH` and registers each one it finds, embedding the local auth
+token. Re-running it is safe — it removes and re-adds rather than failing on an
+existing entry.
 
 This needs the `codrift` CLI on `PATH`. Homebrew installs it alongside the app
 (the cask depends on the `codrift-cli` formula); the curl installer puts it in

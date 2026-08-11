@@ -6,7 +6,7 @@ product
 
 ## Users
 
-Professional software engineers who run multiple AI coding agents (Claude Code, Codex, Opencode, Gemini, Copilot) and shell sessions side by side across several project directories. They live in the keyboard, work across many repositories at once, and treat agents as parallel collaborators they supervise rather than tools they babysit. Context when using Codrift: a focused, high-attention work session where the user is launching agents, watching live output, reviewing diffs, and steering work across initiatives without leaving one surface.
+Professional software engineers who run multiple AI coding agents (Claude Code, Codex, Opencode, Gemini, Copilot, Cursor) and shell sessions side by side across several project directories. They live in the keyboard, work across many repositories at once, and treat agents as parallel collaborators they supervise rather than tools they babysit. Context when using Codrift: a focused, high-attention work session where the user is launching agents, watching live output, reviewing diffs, and steering work across initiatives without leaving one surface.
 
 The job to be done: group related directories into an "initiative", launch and supervise agents per directory, watch their output live, review the resulting diffs, browse the file tree, and let agents share a memory store, all from a single keyboard-driven surface — the Codrift desktop app.
 

@@ -2,7 +2,7 @@
 
 > Drive multiple AI coding agents across your projects from one desktop app.
 
-Codrift is a desktop app for running Claude Code, Codex, Opencode, Gemini, Copilot, and shell agents side-by-side. You group directories into **initiatives**, launch agents against each one, watch their output live in embedded terminals, review diffs, and let them share knowledge through a built-in memory store.
+Codrift is a desktop app for running Claude Code, Codex, Opencode, Gemini, Copilot, Cursor, and shell agents side-by-side. You group directories into **initiatives**, launch agents against each one, watch their output live in embedded terminals, review diffs, and let them share knowledge through a built-in memory store.
 
 ![Codrift — live agent terminal alongside the initiative sidebar](docs/images/agent-terminal.png)
 
@@ -14,7 +14,7 @@ Codrift is a Tauri app: a native window wrapping a Svelte UI, backed by an Elixi
 ## Features
 
 - **Native desktop app** — sidebar + live agent terminals (xterm.js), keyboard-driven, on macOS and Linux
-- **Multiple agents per directory** — Claude Code, Codex, Opencode, Gemini, Copilot, and a raw terminal shell, all running simultaneously
+- **Multiple agents per directory** — Claude Code, Codex, Opencode, Gemini, Copilot, Cursor, and a raw terminal shell, all running simultaneously
 - **Git worktrees** — each directory gets an isolated branch; agents never touch your main checkout
 - **Live diff view** — colour-coded split/unified diff per initiative, updated as agents work
 - **Tree view** — mode `3` shows a file-tree browser with syntax-highlighted previews and an in-app editor
@@ -178,7 +178,7 @@ Installs into Claude Code, Codex, Cursor, Gemini CLI, Copilot and Opencode.
 | `[` / `]` | Cycle initiative status |
 
 Use the **Launch** dropdown next to a directory (or the palette) to start Codex,
-Opencode, Gemini, or Copilot.
+Opencode, Gemini, Copilot, or Cursor.
 
 ### Context, tree & editor
 

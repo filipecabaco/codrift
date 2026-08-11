@@ -16,7 +16,7 @@ Codrift (Application)
       ├── Codrift.AgentSupervisor
       │     DynamicSupervisor — one child per running agent
       │       └── Codrift.AgentProcess
-      │             GenServer + erlexec PTY → external CLI (Claude, Codex, Opencode, Gemini, Copilot, shell)
+      │             GenServer + erlexec PTY → external CLI (Claude, Codex, Opencode, Gemini, Copilot, Cursor, shell)
       ├── Codrift.ConductorSupervisor
       │     DynamicSupervisor — one Codrift.Conductor per orchestrated initiative
       ├── {Task.Supervisor, name: Codrift.TaskSupervisor}
@@ -101,7 +101,7 @@ User action (Svelte UI)
   → POST /api/rpc  (Codrift.Core.call/2)
     → Codrift.AgentSupervisor.start_agent/4
       → Codrift.AgentProcess (GenServer)
-        → erlexec PTY → claude / codex / opencode / gemini / $SHELL
+        → erlexec PTY → claude / codex / opencode / gemini / cursor-agent / $SHELL
           → {:agent_output, id, data}
             → Codrift.Web.EventRelay → WS /ws/initiative/:id → xterm.js
             → MCP SSE subscribers (connected agents)

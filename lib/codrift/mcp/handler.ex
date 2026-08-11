@@ -224,7 +224,7 @@ defmodule Codrift.MCP.Handler do
             },
             "adapter" => %{
               "type" => "string",
-              "enum" => ["claude", "codex", "opencode", "gemini", "copilot"]
+              "enum" => ["claude", "codex", "opencode", "gemini", "copilot", "cursor"]
             },
             "profile" => %{
               "type" => "string",
@@ -465,7 +465,7 @@ defmodule Codrift.MCP.Handler do
             "initiative_id" => %{"type" => "string"},
             "adapter" => %{
               "type" => "string",
-              "enum" => ["claude", "codex", "opencode", "gemini", "copilot"],
+              "enum" => ["claude", "codex", "opencode", "gemini", "copilot", "cursor"],
               "description" => "AI agent adapter to use (default: claude)"
             }
           },
@@ -487,7 +487,7 @@ defmodule Codrift.MCP.Handler do
             },
             "adapter" => %{
               "type" => "string",
-              "enum" => ["claude", "codex", "opencode", "gemini", "copilot"],
+              "enum" => ["claude", "codex", "opencode", "gemini", "copilot", "cursor"],
               "description" => "AI agent adapter to use (default: claude)"
             },
             "context_dir" => %{

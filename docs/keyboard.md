@@ -57,7 +57,7 @@ it (the other pane takes over the whole area).
 | `[` | Cycle status back (`archived → done → ongoing → planning`) | `status_prev` |
 | `]` | Cycle status forward (`planning → ongoing → done → archived`) | `status_next` |
 
-To start a specific adapter (Codex, Opencode, Gemini, Copilot), use the **Launch**
+To start a specific adapter (Codex, Opencode, Gemini, Copilot, Cursor), use the **Launch**
 dropdown next to a directory in the Context view, or the command palette. `s`
 always launches Claude.
 

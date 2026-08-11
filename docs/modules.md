@@ -102,9 +102,10 @@ Callbacks: `cmd/0`, `mode/0`, `args/2`, `args_continue/1`, `env/1`, `parse_statu
 | `Codrift.Agent.Adapters.Opencode` | `:pty` | Bubble Tea TUI; `\e[2J` signals ready |
 | `Codrift.Agent.Adapters.Gemini` | `:pty` | Google Gemini CLI; Ink TUI |
 | `Codrift.Agent.Adapters.Copilot` | `:interactive` | `gh copilot suggest` |
+| `Codrift.Agent.Adapters.Cursor` | `:pty` | Cursor CLI (`cursor-agent`, not the `cursor` editor launcher) |
 | `Codrift.Agent.Adapters.Terminal` | `:pty` | Opens `$SHELL`; any output → `:awaiting_input` |
 
-`tui?/0` — returns `true` for Ink/Bubble Tea adapters (Claude, Codex, Opencode, Gemini); drives `chunks_from_last_clear` replay, two-step PTY resize, and re-subscription nudge. `parse_status/1` detects `\e[2J` as universal TUI-ready signal.
+`tui?/0` — returns `true` for Ink/Bubble Tea adapters (Claude, Codex, Opencode, Gemini, Cursor); drives `chunks_from_last_clear` replay, two-step PTY resize, and re-subscription nudge. `parse_status/1` detects `\e[2J` as universal TUI-ready signal.
 
 **Modes:**
 - `:pty` — erlexec PTY, full terminal emulation

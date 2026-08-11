@@ -92,8 +92,8 @@
         <div class="rise" style="animation-delay: 160ms">
           <p class="t-lead text-fg">
             A desktop control surface for running many AI coding agents at once. Claude Code, Codex,
-            Opencode, Gemini, Copilot and raw shells, against every repo in a project at the same
-            time.
+            Opencode, Gemini, Copilot, Cursor and raw shells, against every repo in a project at the
+            same time.
           </p>
           <p class="t-lead mt-4">
             Live terminals, a branch per directory, one diff across all of it, and a memory store
@@ -155,9 +155,9 @@
 
             <div class="mt-12 grid grid-cols-[minmax(0,1fr)] gap-px overflow-hidden rounded-lg border border-rule bg-rule sm:grid-cols-2">
               <div class="bg-ink p-6">
-                <h3 class="font-display text-[1.0625rem] font-semibold">Six adapters, one launcher</h3>
+                <h3 class="font-display text-[1.0625rem] font-semibold">Seven adapters, one launcher</h3>
                 <p class="t-body mt-2 text-[0.9375rem]">
-                  Claude Code, Codex, Opencode, Gemini, Copilot, and a raw
+                  Claude Code, Codex, Opencode, Gemini, Copilot, Cursor, and a raw
                   <code class="font-mono text-amber">$SHELL</code>. Start any of them against any
                   directory; run several in the same one if you want a second opinion.
                 </p>
