@@ -1,25 +1,25 @@
 class CodriftCli < Formula
   desc "Headless CLI for Codrift: MCP setup, initiatives, sessions and memory"
   homepage "https://github.com/filipecabaco/codrift"
-  version "0.0.4"
+  version "0.0.5"
 
   # The cask ships Codrift.app; this ships the `codrift` command it documents.
   # Both are bumped together by the cask job in .github/workflows/release.yml.
   on_macos do
     on_arm do
       url "https://github.com/filipecabaco/codrift/releases/download/v#{version}/codrift-cli-#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "027cb3840e54c2e03482b04f5512cd22bd437aa2d03ee75005c89b543c423c8b"
+      sha256 "0b3e38073a59ed3c0a9275d5f4bd8f29bb0176eca7c1446a516639fb0b17ac36"
     end
     on_intel do
       url "https://github.com/filipecabaco/codrift/releases/download/v#{version}/codrift-cli-#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "7e6a370e3a2464cf7a7092498dd544ed7089c3f40884ba966c97cfd97bf8a686"
+      sha256 "77ca5db152a7c94897fbcc7fad6941edf2c41c23a573e28ba2e558f8fd116bba"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/filipecabaco/codrift/releases/download/v#{version}/codrift-cli-#{version}-x86_64-linux-gnu.tar.gz"
-      sha256 "8cc6b5f3426c1a2c21c44638494aec632337f4d9d567202ea236fcaa88c2e16a"
+      sha256 "0e97aab2ae201557c989b683348318237e1540634dd8aa41353f86ec0122ea08"
     end
   end
 
