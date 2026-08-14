@@ -31,6 +31,7 @@
   import Profiles from "$lib/Profiles.svelte";
   import { initTheme, themeState } from "$lib/theme.svelte";
   import { initFonts } from "$lib/fonts.svelte";
+  import { initTitlebar, overlayed, titlebar } from "$lib/titlebar.svelte";
 
   // Each pane is an independent viewport onto an initiative — its own agent,
   // tab, open context file and tree selection. The sidebar drives whichever
@@ -77,9 +78,12 @@
   // Which pane has keyboard focus. Tab cycles; the terminal only receives keys
   // when "main" so sidebar nav (j/k/arrows) keeps working otherwise.
   let paneFocus = $state<"sidebar" | "main">("sidebar");
-  // The way out of a terminal, which keeps ⇥ for itself. ⌘ never reaches a PTY,
-  // so this can't collide with anything the agent or shell binds.
-  const LEAVE_MAIN = "⌘⎋";
+  // The way out of a terminal, which keeps ⇥ for itself. A modifier combo, so it
+  // can't collide with anything the agent or shell binds — and deliberately not
+  // an esc combo: releasing the modifier a moment early sent a bare ⎋ straight to
+  // the PTY, which coding CLIs read as "interrupt the running command". Comes
+  // from the keymap (`focus_sidebar`), so it is overridable like every other key.
+  const LEAVE_MAIN = $derived(formatSpec(keymap.focus_left));
 
   // Element refs for pointer-drag resizing (sidebar width and the split divider).
   let bodyEl = $state<HTMLElement | null>(null);
@@ -96,15 +100,82 @@
     if (active.tab === "tree") {
       return document.querySelector(`#pane-${activePane} [data-tree-pane]`);
     }
-    return active.agentId ? termTextarea() : null;
+    // A terminal stays mounted (hidden, inert) while another tab is showing, so
+    // finding its textarea no longer means the terminal is on screen — the tab
+    // decides that, not the query.
+    return active.tab === "context" && active.agentId ? termTextarea() : null;
   }
+  // Retried across a few frames: the target can be one frame short of existing
+  // when the pane was just created. Giving up silently is what left focus on
+  // <body>, where the terminal's keystrokes ran as global shortcuts instead.
   function focusMain() {
     paneFocus = "main";
-    requestAnimationFrame(() => mainFocusTarget()?.focus());
+    let tries = 5;
+    const attempt = () => {
+      const target = mainFocusTarget();
+      if (target) target.focus();
+      else if (--tries > 0) requestAnimationFrame(attempt);
+    };
+    requestAnimationFrame(attempt);
   }
   function focusSidebar() {
     paneFocus = "sidebar";
     (document.activeElement as HTMLElement | null)?.blur?.();
+  }
+
+  /**
+   * Make `idx` the active pane and put the keyboard in it.
+   *
+   * A pane showing the initiative overview has nothing to hold a caret. Landing
+   * the keyboard on `<body>` there would be worse than not moving it: bare keys
+   * would run as global shortcuts while the ring says a pane is active. So the
+   * ring moves either way, and the keyboard falls back to the sidebar — always
+   * somewhere the user can see it.
+   */
+  function enterPane(idx: number) {
+    activePane = idx;
+    if (mainFocusTarget()) focusMain();
+    else focusSidebar();
+  }
+
+  // Focus has to land somewhere visible: a collapsed sidebar taking the keyboard
+  // would hide the cursor behind a 6px strip.
+  function leaveToSidebar() {
+    sidebarCollapsed = false;
+    focusSidebar();
+  }
+
+  /**
+   * Directional focus across the whole window.
+   *
+   * The sidebar sits left of the content; a split adds a second pane either
+   * beside pane 0 (`dir: "vertical"`, a vertical divider) or below it
+   * (`dir: "horizontal"`). Moving past the last thing in a direction does
+   * nothing rather than wrapping — in a two-item row a wrap is indistinguishable
+   * from not moving, and it would make ⌘← unreliable as "get me out of here",
+   * which is the job it inherited from ⌘⎋.
+   */
+  function moveFocus(dir: "left" | "right" | "up" | "down") {
+    const sideBySide = split?.dir === "vertical";
+    const stacked = split?.dir === "horizontal";
+
+    if (dir === "left") {
+      if (paneFocus !== "main") return;
+      if (sideBySide && activePane === 1) enterPane(0);
+      else leaveToSidebar();
+      return;
+    }
+
+    if (dir === "right") {
+      if (paneFocus === "sidebar") enterPane(activePane);
+      else if (sideBySide && activePane === 0) enterPane(1);
+      return;
+    }
+
+    // Up and down only mean something when the panes are stacked.
+    if (!stacked || paneFocus !== "main") return;
+    if (dir === "up" && activePane === 1) enterPane(0);
+    if (dir === "down" && activePane === 0) enterPane(1);
   }
   function setTab(tab: PaneView["tab"]) {
     active.tab = tab;
@@ -485,6 +556,18 @@
       case "toggle_sidebar":
         sidebarCollapsed = !sidebarCollapsed;
         break;
+      case "focus_left":
+        moveFocus("left");
+        break;
+      case "focus_right":
+        moveFocus("right");
+        break;
+      case "focus_up":
+        moveFocus("up");
+        break;
+      case "focus_down":
+        moveFocus("down");
+        break;
       case "palette":
         modal = { kind: "palette" };
         break;
@@ -672,6 +755,14 @@
     if (e.metaKey && e.ctrlKey && (key === "=" || key === "+")) return balanceSplit;
     if (key === "d" && !(e.metaKey && e.ctrlKey))
       return () => toggleSplit(e.shiftKey ? "horizontal" : "vertical");
+    // ⌘1…⌘9 jump straight to a pane, the way every tiling terminal numbers its
+    // panes. The bare digits are the tab bindings (1 Context, 2 Diff, 3 Tree),
+    // so a digit only means "pane" with the modifier down. Out-of-range digits
+    // fall through rather than being swallowed as a no-op.
+    if (/^[1-9]$/.test(key)) {
+      const idx = Number(key) - 1;
+      return idx < panes.length ? () => enterPane(idx) : null;
+    }
     return null;
   }
 
@@ -694,6 +785,22 @@
       ae.tagName === "SELECT" ||
       ae.isContentEditable
     );
+  }
+
+  const FOCUS_ACTIONS = new Set<ActionId>(["focus_left", "focus_right", "focus_up", "focus_down"]);
+
+  // eventToSpec folds ⌘ into ctrl, so the app's combos answer to either — but
+  // only one of them is what someone on this platform reaches for, and a hint
+  // naming the other one is just noise to read past.
+  const PRIMARY_MOD = /Mac/i.test(navigator.userAgent) ? "⌘" : "⌃";
+
+  // A real text field, as opposed to xterm's hidden textarea — which is a text
+  // surface for key routing only: it holds no caret the user can move, so the
+  // editing combos a field would want mean nothing there.
+  function editableTarget(): boolean {
+    const ae = document.activeElement as HTMLElement | null;
+    if (!ae || ae.classList.contains("xterm-helper-textarea")) return false;
+    return typingTarget();
   }
 
   // Bare keys, bubble phase: they must reach an input or the PTY first.
@@ -722,16 +829,9 @@
   function onCaptureKeydown(e: KeyboardEvent) {
     if (modal || editing) return; // overlays install their own capture handlers
 
-    // ⌘⎋ (⌃⎋) always returns to the sidebar. It exists because ⇥ no longer can:
-    // shell completion, an agent's own ⇥ and ⇧⇥ mode cycling all need to reach
-    // the PTY, so a focused text surface keeps Tab and this is the way back out.
-    if (e.key === "Escape" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      e.stopPropagation();
-      focusSidebar();
-      return;
-    }
-
+    // The way back to the sidebar (⌃← / ⌘←) is no longer special-cased here: it
+    // is the `focus_sidebar` action, so it runs down the generic keymap path
+    // below like every other combo and the user can rebind it.
     if (e.key === "Tab" && !typingTarget()) {
       e.preventDefault();
       e.stopPropagation();
@@ -752,6 +852,10 @@
     if (!spec || !spec.includes("+")) return;
     const action = actionFor(spec);
     if (!action) return;
+    // Moving focus between panes means nothing while a text field has the caret,
+    // and the default bindings (⌘←→↑↓) are line- and document-motion there. Let
+    // the field keep them. Modals and the editor already returned above.
+    if (FOCUS_ACTIONS.has(action) && editableTarget()) return;
     e.preventDefault();
     e.stopPropagation();
     runAction(action);
@@ -836,6 +940,7 @@
     // Appearance first: it decides what everything below renders as.
     void initTheme();
     void initFonts();
+    initTitlebar();
     try {
       keymap = await rpc<Keymap>("get_keybindings");
     } catch {
@@ -853,14 +958,38 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 <div class="flex h-screen flex-col">
-  <header class="flex items-center gap-4 border-b border-border bg-surface px-4 py-2">
-    <h1 class="text-[13px] font-semibold text-accent">Codrift</h1>
-    <nav class="flex gap-1">
+  <!-- The whole window chrome, in one 36px row. There is no native title bar
+       above this on macOS: the shell runs `titleBarStyle: "Overlay"`, so the
+       traffic lights are drawn straight onto this bar's left end and the gutter
+       they need is measured at runtime (lib/titlebar.svelte.ts) — it collapses
+       in fullscreen, where the buttons don't exist.
+
+       `data-tauri-drag-region` moves the window. Tauri honours it only on the
+       exact element under the pointer, so putting it on the bar and on its inert
+       labels makes the empty space draggable while every button below stays
+       clickable — and macOS still gets double-click-to-zoom for free. -->
+  <header
+    data-tauri-drag-region={overlayed ? "" : undefined}
+    class="flex h-9 shrink-0 select-none items-center gap-3 border-b border-border bg-surface pr-1.5"
+    style="padding-left: {titlebar.inset || 12}px"
+  >
+    <h1
+      data-tauri-drag-region={overlayed ? "" : undefined}
+      class="text-[13px] font-semibold tracking-tight text-accent"
+    >
+      Codrift
+    </h1>
+    <!-- Segmented control: one recessed track, the active tab raised out of it.
+         Reads as a single object at this height, where three separate outlined
+         buttons read as clutter. -->
+    <nav class="flex items-center gap-0.5 rounded-lg bg-canvas/70 p-0.5 ring-1 ring-border/60">
       {#each tabs as t (t.id)}
         <button
           class={[
-            "rounded-md border px-2.5 py-1 text-xs",
-            active.tab === t.id ? "border-border bg-canvas text-fg" : "border-transparent text-muted hover:text-fg",
+            "rounded-[6px] px-2.5 py-1 text-[11px] leading-none transition-colors",
+            active.tab === t.id
+              ? "bg-surface text-fg ring-1 ring-border"
+              : "text-muted hover:text-fg",
           ]}
           aria-current={active.tab === t.id ? "page" : undefined}
           onclick={() => setTab(t.id)}
@@ -870,47 +999,60 @@
       {/each}
     </nav>
     <!-- Announced, so feedback isn't purely visual. -->
-    <span class="text-[11px] text-fg/70" role="status" aria-live="polite">{status ?? ""}</span>
+    <span
+      data-tauri-drag-region={overlayed ? "" : undefined}
+      class="text-[11px] text-fg/70"
+      role="status"
+      aria-live="polite">{status ?? ""}</span
+    >
     {#if active.tab === "tree" || (active.agentId && active.tab === "context")}
-      <span class="text-[11px] text-fg/70">
+      <span data-tauri-drag-region={overlayed ? "" : undefined} class="text-[11px] text-fg/70">
         ⇥ focus: {paneFocus === "sidebar" ? "sidebar" : active.tab === "tree" ? "files" : "terminal"}
       </span>
     {/if}
-    <button
-      class="ml-auto rounded-md p-1 text-muted hover:text-fg"
-      title="Appearance — theme &amp; font ({themeState.label})"
-      onclick={() => (modal = { kind: "appearance" })}
-      aria-label="Appearance"
-    >
-      <Icon src={Swatch} class="size-4" />
-    </button>
-    <button
-      class="rounded-md p-1 text-muted hover:text-fg"
-      title="Launch profiles — named agents with their own command and account"
-      onclick={() => (modal = { kind: "profiles" })}
-      aria-label="Launch profiles"
-    >
-      <Icon src={Identification} class="size-4" />
-    </button>
-    <button
-      class="rounded-md p-1 text-muted hover:text-fg"
-      title="Integrations"
-      onclick={() => (modal = { kind: "integrations" })}
-      aria-label="Integrations"
-    >
-      <Icon src={Link} class="size-4" />
-    </button>
-    <button
-      class="rounded-md p-1 text-muted hover:text-fg"
-      title="Command palette ({formatSpec(keymap.palette)})"
-      onclick={() => (modal = { kind: "palette" })}
-      aria-label="Command palette"
-    >
-      <Icon src={CommandLine} class="size-4" />
-    </button>
-    <button class="rounded-md p-1 text-muted hover:text-fg" onclick={load} aria-label="Refresh">
-      <Icon src={ArrowPath} class="size-4" />
-    </button>
+    <!-- Grouped rather than five `ml-auto`-chained buttons, so the gap between
+         the status text and the controls is one draggable run of bar. -->
+    <div class="ml-auto flex items-center gap-0.5">
+      <button
+        class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
+        title="Appearance — theme &amp; font ({themeState.label})"
+        onclick={() => (modal = { kind: "appearance" })}
+        aria-label="Appearance"
+      >
+        <Icon src={Swatch} class="size-4" />
+      </button>
+      <button
+        class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
+        title="Launch profiles — named agents with their own command and account"
+        onclick={() => (modal = { kind: "profiles" })}
+        aria-label="Launch profiles"
+      >
+        <Icon src={Identification} class="size-4" />
+      </button>
+      <button
+        class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
+        title="Integrations"
+        onclick={() => (modal = { kind: "integrations" })}
+        aria-label="Integrations"
+      >
+        <Icon src={Link} class="size-4" />
+      </button>
+      <button
+        class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
+        title="Command palette ({formatSpec(keymap.palette)})"
+        onclick={() => (modal = { kind: "palette" })}
+        aria-label="Command palette"
+      >
+        <Icon src={CommandLine} class="size-4" />
+      </button>
+      <button
+        class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
+        onclick={load}
+        aria-label="Refresh"
+      >
+        <Icon src={ArrowPath} class="size-4" />
+      </button>
+    </div>
   </header>
 
   {#if !conn.online}
@@ -992,6 +1134,23 @@
       style={split ? (idx === 0 ? `flex: 0 0 ${split.fraction * 100}%` : "flex: 1 1 0%") : "flex: 1 1 0%"}
       onpointerdowncapture={() => (activePane = idx)}
     >
+      {#if panes.length > 1}
+        <!-- Pane number, so ⌘1/⌘2 have something to aim at. Drawn only when
+             there is more than one pane — a lone pane needs no label — and it
+             names its own shortcut rather than just counting, which is the
+             difference between a label and a hint. Click-through, so it can sit
+             over a terminal without stealing the corner. -->
+        <div
+          class={[
+            "pointer-events-none absolute left-1 top-1 z-10 rounded px-1.5 py-0.5 text-[10px] leading-none tabular-nums",
+            activePane === idx
+              ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+              : "bg-surface/80 text-muted",
+          ]}
+        >
+          {PRIMARY_MOD}{idx + 1}
+        </div>
+      {/if}
       {#if split}
         <button
           class="absolute right-1 top-1 z-10 rounded bg-surface/80 px-1 text-[11px] text-muted hover:text-fg"
@@ -1063,11 +1222,8 @@
           </div>
         </div>
       {:else if view.tab === "context"}
-        {#if view.agentId}
-          <!-- No {#key} here: a terminal persists and reconnects when the agent
-               changes, avoiding WebGL-context churn that broke the UI. -->
-          <AgentTerminal agentId={view.agentId} initiativeId={init.id} />
-        {:else}
+        <!-- The agent case is handled by the persistent terminal layer below. -->
+        {#if !view.agentId}
           <ContextOverview
             initiative={init}
             agents={ws.agentsFor(init.id)}
@@ -1094,6 +1250,36 @@
             }}
           />
         {/key}
+      {/if}
+
+      <!-- Persistent terminal layer.
+           It lives outside the tab branch on purpose: rendering it under
+           `tab === "context"` destroyed the xterm on every switch to Diff or
+           Tree, and rebuilding it cannot restore a TUI. While unmounted the
+           agent has no subscriber, so lib/stream.ts drops its output on the
+           floor; on return all we could do was replay a raw byte log recorded at
+           the *old* cols/rows — absolute cursor moves and alt-screen switches
+           included — into a fresh terminal, which is what produced the garbling.
+
+           `invisible` rather than `hidden`/`{#if}`: visibility:hidden keeps the
+           box, so the element never reports 0×0, the fit stays put and the PTY
+           is never resized behind the agent's back. `inert` keeps the hidden
+           textarea out of the focus order.
+
+           No {#key} either: a terminal persists and reconnects when the agent
+           changes, avoiding WebGL-context churn that broke the UI. -->
+      {#if init && view.agentId}
+        <div
+          class={["absolute inset-0", view.tab === "context" ? "" : "invisible"]}
+          inert={view.tab !== "context"}
+          aria-hidden={view.tab !== "context"}
+        >
+          <AgentTerminal
+            agentId={view.agentId}
+            initiativeId={init.id}
+            visible={view.tab === "context"}
+          />
+        </div>
       {/if}
     </main>
   {/snippet}

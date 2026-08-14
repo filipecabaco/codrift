@@ -17,7 +17,7 @@
     <meta property="og:title" content="Codrift: run many AI coding agents at once" />
     <meta
       property="og:description"
-      content="Run Claude Code, Codex, Gemini and Copilot across every repo at once — isolated branches, one diff, one shared memory."
+      content="Run Claude Code, Codex, Opencode, Gemini, Copilot and Cursor across every repo at once: isolated branches, one diff, one shared memory."
     />
     <meta property="og:image" content="<%= og_image %>" />
     <meta property="og:image:secure_url" content="<%= og_image %>" />
@@ -32,7 +32,7 @@
     <meta name="twitter:title" content="Codrift: run many AI coding agents at once" />
     <meta
       name="twitter:description"
-      content="Run Claude Code, Codex, Gemini and Copilot across every repo at once — isolated branches, one diff, one shared memory."
+      content="Run Claude Code, Codex, Opencode, Gemini, Copilot and Cursor across every repo at once: isolated branches, one diff, one shared memory."
     />
     <meta name="twitter:image" content="<%= og_image %>" />
     <meta
@@ -80,20 +80,26 @@
       <p class="t-tag rise mb-7" style="animation-delay: 40ms">
         Desktop · macOS &amp; Linux<%= if version do %> · <span class="text-amber">v<%= version %></span><% end %>
       </p>
-      <h1 class="rise flex items-center gap-5 lg:gap-7" style="animation-delay: 90ms">
+      <!-- The wordmark is the brand mark, not the page's heading: it names the
+           product but claims nothing about it. The h1 below carries the claim,
+           which is the element a search result and a skimming reader both land
+           on first. -->
+      <div class="rise flex items-center gap-5 lg:gap-7" style="animation-delay: 90ms">
         <svg class="h-[0.78em] w-auto shrink-0 text-[clamp(3.4rem,9vw,7.5rem)]" viewBox="0 0 512 512" aria-hidden="true">
           <g stroke="currentColor" fill="none" stroke-width="54" stroke-linecap="round" style="color: var(--color-amber)">
             <path d="M94 326 L163.1 170.7" /><path d="M202 352 L290.7 152.9" /><path d="M310 378 L418.2 135" />
           </g>
         </svg>
         <span class="t-display" style="font-size: clamp(3.4rem, 9vw, 7.5rem)">codrift</span>
+      </div>
+      <h1 class="t-section rise mt-8 max-w-[26ch]" style="animation-delay: 130ms">
+        Run many AI coding agents at once without losing track of one.
       </h1>
       <div class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,32rem)_minmax(0,1fr)] lg:items-end lg:gap-16">
         <div class="rise" style="animation-delay: 160ms">
           <p class="t-lead text-fg">
-            A desktop control surface for running many AI coding agents at once. Claude Code, Codex,
-            Opencode, Gemini, Copilot, Cursor and raw shells, against every repo in a project at the
-            same time.
+            Claude Code, Codex, Opencode, Gemini, Copilot, Cursor and raw shells, against every repo
+            in a project at the same time.
           </p>
           <p class="t-lead mt-4">
             Live terminals, a branch per directory, one diff across all of it, and a memory store
@@ -119,8 +125,13 @@
             </div>
             <div id="rig-lanes" class="divide-y divide-rule"></div>
           </div>
-          <p class="mt-3 font-mono text-[0.6875rem] text-faint">
+          <p class="mt-3 font-mono text-[0.6875rem] text-faint" id="rig-caption">
             Four agents, three repos, one window. Live, from a real session.
+          </p>
+          <p class="mt-1.5 font-mono text-[0.6875rem] text-faint">
+            <span class="keycap" data-key="j">j</span>
+            <span class="keycap" data-key="k">k</span>
+            hold a lane still, the same keys that move the sidebar cursor in the app.
           </p>
         </div>
       </div>
@@ -185,10 +196,12 @@
               Output stopped being scarce. Your attention didn’t.
             </h2>
             <p class="t-lead mt-6">
-              Six agents will produce more work than you can read. The job is no longer typing, it
-              is routing yourself to the one that is actually stuck. Codrift makes that a glance:
-              every agent carries a state, the sidebar rolls them up per initiative, and anything
-              waiting on a human says so in words, not just colour.
+              Four agents will produce more work than you can read. The job is no longer typing, it
+              is routing yourself to the one that is actually stuck. A row of terminal tabs cannot
+              tell you which: a tab title carries the repo name, never the fact that an agent
+              stopped ten minutes ago to ask something. So you check all four, every time. Codrift
+              makes it a glance: every agent carries a state, the sidebar rolls them up per
+              initiative, and anything waiting on a human says so in words, not just colour.
             </p>
 
             <ul class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -484,100 +497,105 @@ edge -&gt; api -&gt; dashboard</code></pre>
         <div class="channel">
           <p class="channel-id">06 / keys</p>
           <div>
-            <h2 class="t-section max-w-[15ch]">Three views. Press the number.</h2>
+            <h2 class="t-section max-w-[19ch]">Three views, two panes, one focus ring.</h2>
             <p class="t-body mt-6">
-              The keyboard is the interface, not a shortcut layer bolted on top. Everything
-              (navigation, view switching, launching, splitting, the palette) is reachable by key,
-              and the map comes from <code class="font-mono text-amber">~/.codrift/keybindings.json</code>
-              so you can rebind all of it.
-              <span class="text-fg">Try it here: press 1, 2 or 3.</span>
+              The keyboard is the interface, not a shortcut layer bolted on top. Views switch on a
+              number, focus moves on a direction, and panes answer to their own number. The whole
+              map comes from <code class="font-mono text-amber">~/.codrift/keybindings.json</code>,
+              so you can rebind any of it.
+              <span class="text-fg">The window below is a working model. Press the keys.</span>
             </p>
 
-            <div class="mt-8" data-viewer>
-              <div class="mb-4 flex flex-wrap items-center gap-2" role="tablist" aria-label="Codrift views">
-                <button
-                  type="button"
-                  role="tab"
-                  data-view="context"
-                  aria-selected="true"
-                  class="flex items-center gap-2 rounded-md border border-rule px-3 py-1.5 font-mono text-[0.8125rem] text-muted aria-selected:border-amber aria-selected:bg-amber/12 aria-selected:text-fg"
-                >
-                  <span class="keycap">1</span> Context
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  data-view="diff"
-                  aria-selected="false"
-                  class="flex items-center gap-2 rounded-md border border-rule px-3 py-1.5 font-mono text-[0.8125rem] text-muted aria-selected:border-amber aria-selected:bg-amber/12 aria-selected:text-fg"
-                >
-                  <span class="keycap">2</span> Diff
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  data-view="tree"
-                  aria-selected="false"
-                  class="flex items-center gap-2 rounded-md border border-rule px-3 py-1.5 font-mono text-[0.8125rem] text-muted aria-selected:border-amber aria-selected:bg-amber/12 aria-selected:text-fg"
-                >
-                  <span class="keycap">3</span> Tree
-                </button>
-                <span class="ml-auto font-mono text-[0.6875rem] text-faint" data-viewer-caption></span>
+            <div class="mt-8" data-rig>
+              <div class="rigwin" data-sidebar="open" role="img"
+                   aria-label="A scale model of the Codrift window: sidebar on the left, one or two agent panes on the right, a focus ring you move with the keyboard.">
+                <div class="rig-strip">
+                  <span class="rig-lights" aria-hidden="true"><i></i><i></i><i></i></span>
+                  <span class="font-display font-bold text-fg" style="font-stretch: 118%">codrift</span>
+                  <span class="flex items-center gap-1">
+                    <span class="rig-tab" data-tab="context" aria-selected="true">1 Context</span>
+                    <span class="rig-tab" data-tab="diff" aria-selected="false">2 Diff</span>
+                    <span class="rig-tab" data-tab="tree" aria-selected="false">3 Tree</span>
+                  </span>
+                  <span class="ml-auto truncate text-faint" data-rig-where>focus: sidebar</span>
+                </div>
+
+                <div class="rig-grid">
+                  <div class="rig-side" data-region="sidebar">
+                    <p class="t-tag" style="font-size: 0.5625rem; line-height: 1.6">initiatives</p>
+                    <div class="rig-row" data-lane><span class="dot" style="background: var(--color-ok)"></span><span class="text-fg">rate limits</span></div>
+                    <div class="rig-row" data-lane style="padding-left: 0.85rem">initiative.md</div>
+                    <div class="rig-row" data-lane style="padding-left: 0.85rem">orchestration.md</div>
+                    <div class="rig-row" data-lane style="padding-left: 0.85rem">memory</div>
+                    <div class="rig-row" data-lane style="padding-left: 0.85rem">atlas-api</div>
+                    <div class="rig-row" data-lane style="padding-left: 1.5rem">claude</div>
+                    <div class="rig-row" data-lane style="padding-left: 0.85rem">atlas-edge</div>
+                    <div class="rig-row" data-lane style="padding-left: 1.5rem">claude</div>
+                    <div class="rig-row" data-lane style="padding-left: 0.85rem">dashboard</div>
+                    <div class="rig-row" data-lane style="padding-left: 1.5rem">codex</div>
+                    <div class="rig-row" data-lane><span class="dot" style="background: var(--color-wait)"></span>adyen cutover</div>
+                    <div class="rig-row" data-lane><span class="dot" style="background: var(--color-done)"></span>flaky test triage</div>
+                  </div>
+                  <div class="rig-content" data-split="none"></div>
+                </div>
+
+                <div class="rig-hints" data-rig-hints></div>
+                <div class="rig-ring" data-rig-ring hidden></div>
               </div>
-              <img
-                data-viewer-img
-                src="/images/context.webp"
-                alt="Codrift context view: the initiative brief rendered as markdown beside the directory list"
-                width="2000"
-                height="1225"
-                class="shot"
-                loading="lazy"
-              />
+              <p class="mt-3 font-mono text-[0.6875rem] leading-relaxed text-faint">
+                Press the keys, or click them in the legend. On this page they are all
+                <span class="text-muted">⌃</span>: in the desktop app the split and the pane jumps
+                are <span class="text-muted">⌘D</span>, <span class="text-muted">⌘⇧D</span> and
+                <span class="text-muted">⌘1</span>, but your browser owns those here and we are not
+                taking them.
+              </p>
             </div>
 
-            <div class="mt-12 grid grid-cols-[minmax(0,1fr)] gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+            <div class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
               <div>
-                <p class="t-tag mb-3">move</p>
-                <dl class="space-y-1.5 font-mono text-[0.8125rem]">
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">j</span> <span class="keycap">k</span></dt><dd class="text-muted">sidebar cursor</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">←</span> <span class="keycap">→</span></dt><dd class="text-muted">collapse / expand</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⇥</span></dt><dd class="text-muted">sidebar ⇄ pane</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">/</span></dt><dd class="text-muted">fuzzy file filter</dd></div>
+                <p class="t-tag mb-3">the sidebar has focus</p>
+                <dl class="space-y-2 font-mono text-[0.8125rem]">
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="j">j</button> <button type="button" class="keycap" data-key="k">k</button></dt><dd class="text-muted">move the cursor</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="tab">⇥</button></dt><dd class="text-muted">into the pane</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><span class="keycap">s</span></dt><dd class="text-muted">start an agent</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><span class="keycap">b</span></dt><dd class="text-muted">branch the directories</dd></div>
                 </dl>
               </div>
               <div>
-                <p class="t-tag mb-3">work</p>
-                <dl class="space-y-1.5 font-mono text-[0.8125rem]">
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">s</span></dt><dd class="text-muted">start an agent</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">t</span></dt><dd class="text-muted">start a shell</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">o</span></dt><dd class="text-muted">start orchestration</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">b</span></dt><dd class="text-muted">branch the directories</dd></div>
+                <p class="t-tag mb-3">a pane has focus</p>
+                <dl class="space-y-2 font-mono text-[0.8125rem]">
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="ctrl+left">⌃←</button> <button type="button" class="keycap" data-key="ctrl+right">⌃→</button></dt><dd class="text-muted">focus left / right</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="ctrl+up">⌃↑</button> <button type="button" class="keycap" data-key="ctrl+down">⌃↓</button></dt><dd class="text-muted">focus up / down, stacked</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="ctrl+1">⌃1</button> <button type="button" class="keycap" data-key="ctrl+2">⌃2</button></dt><dd class="text-muted">jump straight to a pane</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="1">1</button> <button type="button" class="keycap" data-key="2">2</button> <button type="button" class="keycap" data-key="3">3</button></dt><dd class="text-muted">switch this pane's view</dd></div>
                 </dl>
               </div>
               <div>
-                <p class="t-tag mb-3">window</p>
-                <dl class="space-y-1.5 font-mono text-[0.8125rem]">
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⌘D</span></dt><dd class="text-muted">split side by side</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⌘⇧D</span></dt><dd class="text-muted">split stacked</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⌃B</span></dt><dd class="text-muted">collapse sidebar</dd></div>
-                  <div class="flex gap-3"><dt class="w-16 shrink-0"><span class="keycap">⌃P</span></dt><dd class="text-muted">command palette</dd></div>
+                <p class="t-tag mb-3">any time</p>
+                <dl class="space-y-2 font-mono text-[0.8125rem]">
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="ctrl+d">⌃D</button></dt><dd class="text-muted">split side by side</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="ctrl+shift+d">⌃⇧D</button></dt><dd class="text-muted">split stacked</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="ctrl+b">⌃B</button></dt><dd class="text-muted">collapse the sidebar</dd></div>
+                  <div class="flex items-baseline gap-3"><dt class="w-[5.4rem] shrink-0"><button type="button" class="keycap" data-key="ctrl+p">⌃P</button></dt><dd class="text-muted">command palette</dd></div>
                 </dl>
               </div>
             </div>
 
-            <figure class="mt-10">
-              <img
-                src="/images/command-palette.webp"
-                alt="Codrift command palette listing every action with its current key binding"
-                width="2000"
-                height="1225"
-                class="shot"
-                loading="lazy"
-              />
-              <figcaption class="mt-3 font-mono text-[0.6875rem] text-faint">
-                <span class="keycap">⌃P</span> lists every action, with whatever key it is bound to right now.
-              </figcaption>
-            </figure>
+            <div class="mt-12 border-t border-rule pt-10 lg:max-w-[68ch]">
+              <h3 class="font-display text-[1.15rem] font-bold" style="font-stretch: 118%">
+                Why leaving a terminal takes a modifier
+              </h3>
+              <p class="t-body mt-3">
+                Focus a pane running an agent and <span class="keycap">⇥</span> stops being ours. A
+                shell wants it for completion, and Claude Code cycles its own modes with it, so the
+                pane hands every keystroke to the PTY and the model above shows it landing there.
+                That leaves <span class="keycap">⌃←</span> as the way back out.
+                <span class="text-fg">It used to be <span class="keycap">⌃⎋</span></span>, which
+                broke for an unpleasant reason: release the modifier a moment early and a lone
+                <span class="keycap">⎋</span> reaches the agent, which reads it as
+                <em>interrupt the running command</em>. Directions have no such half-pressed state.
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -649,7 +667,26 @@ edge -&gt; api -&gt; dashboard</code></pre>
               because the runtime ships inside. Bring your own agent CLIs and Codrift drives them.
             </p>
 
+            <p class="mt-4 font-mono text-[0.8125rem] text-muted">
+              MIT licensed, source on
+              <a href="https://github.com/filipecabaco/codrift" class="link-u">GitHub</a>, free to run.
+            </p>
+
             <div class="mt-10 grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 lg:max-w-3xl">
+              <div class="sm:col-span-2">
+                <p class="t-tag mb-2">the short way</p>
+                <button class="cmd" type="button" data-copy="curl -fsSL https://codrift.app/install.sh | sh">
+                  <span class="text-amber">$</span>
+                  <span>curl -fsSL https://codrift.app/install.sh | sh</span>
+                  <span class="ml-auto text-faint" aria-hidden="true">⧉</span>
+                  <span class="sr-only">Copy install command</span>
+                </button>
+                <p class="mt-2 font-mono text-[0.75rem] text-faint">
+                  Puts <span class="text-muted">Codrift.app</span> in Applications and the
+                  <span class="text-muted">codrift</span> CLI in
+                  <span class="text-muted">~/.local/bin</span>. Or pick one below.
+                </p>
+              </div>
               <button class="cmd" type="button" data-copy="brew tap filipecabaco/codrift https://github.com/filipecabaco/codrift">
                 <span class="text-amber">$</span>
                 <span class="truncate">brew tap filipecabaco/codrift …</span>
@@ -689,11 +726,71 @@ edge -&gt; api -&gt; dashboard</code></pre>
 
             <div class="mt-12 border-t border-rule pt-10 lg:max-w-3xl">
               <h3 class="font-display text-[1.15rem] font-bold" style="font-stretch: 118%">
+                From nothing to four running agents
+              </h3>
+              <ol class="mt-5 space-y-3">
+                <li class="flex items-baseline gap-4">
+                  <span class="keycap shrink-0">n</span>
+                  <span class="t-body">New initiative. Name it after the work, not the repo.</span>
+                </li>
+                <li class="flex items-baseline gap-4">
+                  <span class="keycap shrink-0">a</span>
+                  <span class="t-body">Add the directories that work touches. Three repos is a normal number.</span>
+                </li>
+                <li class="flex items-baseline gap-4">
+                  <span class="keycap shrink-0">b</span>
+                  <span class="t-body">Put every git directory on its own branch.</span>
+                </li>
+                <li class="flex items-baseline gap-4">
+                  <span class="keycap shrink-0">s</span>
+                  <span class="t-body">Start an agent in each. The sidebar tells you which one needs you.</span>
+                </li>
+              </ol>
+              <p class="t-body mt-5">
+                That is the whole loop. Everything else on this page is what happens after step
+                four.
+              </p>
+            </div>
+
+            <div class="mt-12 border-t border-rule pt-10 lg:max-w-3xl">
+              <p class="t-body">
+                <code class="font-mono text-amber">codrift update</code> reads the releases API,
+                checks the tarball against the SHA-256 published beside it, unpacks into a staging
+                directory, and swaps it in with two renames, so a download that dies halfway never
+                leaves you with half a release. It will not touch a Homebrew-managed install:
+                rewriting a Cellar prefix behind brew corrupts its manifest, and the next
+                <code class="font-mono text-amber">brew upgrade</code> would undo the whole thing.
+                And when another <code class="font-mono text-amber">codrift</code> sits earlier on
+                your <code class="font-mono text-amber">PATH</code>, it tells you, rather than
+                updating a copy you are never going to run.
+              </p>
+              <div class="mt-5 grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2">
+                <button class="cmd" type="button" data-copy="codrift update">
+                  <span class="text-amber">$</span>
+                  <span>codrift update</span>
+                  <span class="ml-auto text-faint" aria-hidden="true">⧉</span>
+                  <span class="sr-only">Copy update command</span>
+                </button>
+                <button class="cmd" type="button" data-copy="codrift update --check">
+                  <span class="text-amber">$</span>
+                  <span>codrift update --check</span>
+                  <span class="ml-auto text-faint" aria-hidden="true">⧉</span>
+                  <span class="sr-only">Copy update check command</span>
+                </button>
+              </div>
+              <p class="mt-4 font-mono text-[0.75rem] leading-relaxed text-faint">
+                <span class="text-muted">--check</span> exits 0 when there is something newer and 1
+                when there isn’t, so it drops straight into a shell prompt or a login script.
+              </p>
+            </div>
+
+            <div class="mt-12 border-t border-rule pt-10 lg:max-w-3xl">
+              <h3 class="font-display text-[1.15rem] font-bold" style="font-stretch: 118%">
                 Teach your agents to drive it
               </h3>
               <p class="t-body mt-3">
                 The MCP server hands agents the tools. The skills teach them when to reach for
-                them — search the shared memory before exploring, check what the other agents in
+                them: search the shared memory before exploring, check what the other agents in
                 the initiative are touching, write findings back so the next session starts ahead.
               </p>
               <ul class="mt-5 grid gap-x-8 gap-y-2 font-mono text-[0.8125rem] text-muted sm:grid-cols-2">
@@ -765,54 +862,340 @@ edge -&gt; api -&gt; dashboard</code></pre>
         });
       }
 
-      // The app's own 1/2/3 keys, on the page.
+      // ── The page has a keyboard ──────────────────────────────────────
+      //
+      // One key spec format for the whole page, mirroring the app's own
+      // eventToSpec: named keys spelled out, and ⌘ folded into ctrl so a single
+      // binding string covers both platforms. Every .keycap[data-key] on the
+      // page lights when its key is genuinely struck, which is the argument the
+      // section makes, made without words.
+      const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      const NAMED = {
+        arrowleft: "left",
+        arrowright: "right",
+        arrowup: "up",
+        arrowdown: "down",
+        escape: "esc",
+        " ": "space",
+      };
+
+      function specOf(e) {
+        const raw = e.key.toLowerCase();
+        if (raw === "control" || raw === "meta" || raw === "shift" || raw === "alt") return null;
+        const key = NAMED[raw] ?? raw;
+        let spec = "";
+        if (e.ctrlKey || e.metaKey) spec += "ctrl+";
+        if (e.altKey) spec += "alt+";
+        // Shift is only part of a spec when something else is holding the combo
+        // together; on its own it just capitalises the character.
+        if (e.shiftKey && spec) spec += "shift+";
+        return spec + key;
+      }
+
+      function typingInPage(e) {
+        const t = e.target;
+        return t instanceof HTMLElement && !!t.closest("input, textarea, select, [contenteditable]");
+      }
+
+      const capTimers = new WeakMap();
+
+      function strike(spec) {
+        for (const cap of document.querySelectorAll('.keycap[data-key="' + CSS.escape(spec) + '"]')) {
+          cap.classList.add("is-down");
+          clearTimeout(capTimers.get(cap));
+          capTimers.set(cap, setTimeout(() => cap.classList.remove("is-down"), 150));
+        }
+      }
+
+      // ── The rig ──────────────────────────────────────────────────────
+      //
+      // A model of the window that obeys the same focus rules the app does, so
+      // reading the legend and driving the thing are the same act. The rules
+      // below are transcribed from App.svelte's moveFocus, deliberately
+      // including the parts that do nothing: moving past the last pane in a
+      // direction is a no-op rather than a wrap, because in a two-item row a
+      // wrap is indistinguishable from not moving.
       (() => {
-        const root = document.querySelector("[data-viewer]");
+        const root = document.querySelector("[data-rig]");
         if (!root) return;
-        const img = root.querySelector("[data-viewer-img]");
-        const caption = root.querySelector("[data-viewer-caption]");
-        const tabs = [...root.querySelectorAll("[data-view]")];
+
+        const win = root.querySelector(".rigwin");
+        const side = root.querySelector(".rig-side");
+        const content = root.querySelector(".rig-content");
+        const ring = root.querySelector("[data-rig-ring]");
+        const hints = root.querySelector("[data-rig-hints]");
+        const where = root.querySelector("[data-rig-where]");
+        const tabs = [...root.querySelectorAll(".rig-tab")];
+        const lanes = [...root.querySelectorAll("[data-lane]")];
+
         const VIEWS = {
-          context: {
-            src: "/images/context.webp",
-            alt: "Codrift context view: the initiative brief rendered as markdown beside the directory list",
-            caption: "initiative.md, orchestration.md, notes and memory",
-          },
-          diff: {
-            src: "/images/diff-view.webp",
-            alt: "Codrift diff view showing syntax-highlighted additions and deletions across the initiative",
-            caption: "every changed file, every directory",
-          },
-          tree: {
-            src: "/images/tree-view.webp",
-            alt: "Codrift tree view with a file tree on the left and a syntax-highlighted preview on the right",
-            caption: "gitignore-aware tree with previews",
-          },
+          context: { src: "/images/context-pane.webp", alt: "the initiative brief rendered as markdown" },
+          diff: { src: "/images/diff-view-pane.webp", alt: "a syntax-highlighted diff of the initiative's changes" },
+          tree: { src: "/images/tree-view-pane.webp", alt: "a file tree beside a syntax-highlighted preview" },
         };
-        const show = (id) => {
-          const v = VIEWS[id];
-          if (!v) return;
-          img.src = v.src;
-          img.alt = v.alt;
-          caption.textContent = v.caption;
-          for (const t of tabs) t.setAttribute("aria-selected", String(t.dataset.view === id));
+
+        const st = {
+          focus: "sidebar",
+          pane: 0,
+          split: null,
+          lane: 0,
+          sidebar: "open",
+          palette: false,
+          views: ["context", "diff"],
+          swallowed: false,
         };
-        for (const t of tabs) t.addEventListener("click", () => show(t.dataset.view));
+        let swallowTimer;
+
+        function paneCount() {
+          return st.split ? 2 : 1;
+        }
+
+        // Panes are reconciled rather than rebuilt: replacing the markup would
+        // re-request the screenshot and blink it on every split toggle.
+        function syncPanes() {
+          while (content.children.length > paneCount()) content.lastElementChild.remove();
+          while (content.children.length < paneCount()) {
+            const pane = document.createElement("div");
+            pane.className = "rig-pane";
+            pane.innerHTML = '<span class="rig-badge"></span><img alt="" loading="lazy" />';
+            content.appendChild(pane);
+          }
+          [...content.children].forEach((pane, i) => {
+            const view = VIEWS[st.views[i]];
+            const img = pane.querySelector("img");
+            if (!img.src.endsWith(view.src)) {
+              img.src = view.src;
+              img.alt = "Pane " + (i + 1) + ": " + view.alt;
+            }
+            pane.querySelector(".rig-badge").textContent = String(i + 1);
+            pane.classList.toggle("is-active", st.focus === "pane" && st.pane === i);
+          });
+        }
+
+        const HINT = (spec, label, flag) =>
+          '<span class="' + (flag ? "is-swallowed" : "") + '"><b>' + spec + "</b> " + label + "</span>";
+
+        function hintRow() {
+          const view = st.views[st.pane];
+          if (st.focus === "pane" && view === "context") {
+            // A focused terminal owns every key it can use, ⇥ included, so the
+            // only ways out are the focus keys and the palette. Same list the
+            // app's own footer shows in this state.
+            return (
+              HINT("⌃←", "Sidebar", st.swallowed) + HINT("⇧⏎", "Newline") + HINT("⌃P", "Commands")
+            );
+          }
+          if (st.focus === "pane" && view === "tree") {
+            return HINT("↑↓", "Move") + HINT("⇥", "Sidebar") + HINT("/", "Filter files") + HINT("⌃P", "Commands");
+          }
+          if (st.focus === "pane") {
+            return HINT("↑↓", "Move") + HINT("⌃←", "Sidebar") + HINT("⌃P", "Commands");
+          }
+          return (
+            HINT("↑↓", "Move") +
+            HINT("⇥", "Terminal") +
+            HINT("s", "Start agent") +
+            HINT("⌘D", "Split") +
+            HINT("⌃P", "Commands")
+          );
+        }
+
+        function placeRing() {
+          const target = st.focus === "sidebar" ? side : content.children[st.pane];
+          if (!target || (st.focus === "sidebar" && st.sidebar === "collapsed")) {
+            ring.hidden = true;
+            return;
+          }
+          const first = ring.hidden;
+          ring.hidden = false;
+          ring.style.left = target.offsetLeft + "px";
+          ring.style.top = target.offsetTop + "px";
+          ring.style.width = target.offsetWidth + "px";
+          ring.style.height = target.offsetHeight + "px";
+          if (!first && !reducedMotion) {
+            ring.animate([{ opacity: 0.3 }, { opacity: 1 }], {
+              duration: 150,
+              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+            });
+          }
+        }
+
+        function render() {
+          win.dataset.sidebar = st.sidebar;
+          content.dataset.split = st.split ?? "none";
+          syncPanes();
+          for (const t of tabs) {
+            t.setAttribute("aria-selected", String(t.dataset.tab === st.views[st.pane]));
+          }
+          lanes.forEach((l, i) => l.classList.toggle("is-cursor", st.focus === "sidebar" && st.lane === i));
+          where.textContent = st.swallowed
+            ? "⇥ went to the agent"
+            : st.focus === "sidebar"
+              ? "focus: sidebar"
+              : st.views[st.pane] === "context"
+                ? "focus: terminal"
+                : "focus: pane " + (st.pane + 1);
+          where.classList.toggle("text-amber", st.swallowed);
+          where.classList.toggle("text-faint", !st.swallowed);
+          hints.innerHTML = hintRow();
+          root.querySelector(".rig-palette")?.remove();
+          if (st.palette) {
+            const overlay = document.createElement("div");
+            overlay.className = "rig-palette";
+            overlay.innerHTML =
+              '<img src="/images/command-palette-dialog.webp" alt="The Codrift command palette, listing every action with the key it is bound to" />';
+            win.appendChild(overlay);
+          }
+          placeRing();
+        }
+
+        function enterPane(i) {
+          if (i >= paneCount()) return;
+          st.focus = "pane";
+          st.pane = i;
+        }
+
+        function moveFocus(dir) {
+          const sideBySide = st.split === "vertical";
+          const stacked = st.split === "horizontal";
+          if (dir === "left") {
+            if (st.focus !== "pane") return;
+            if (sideBySide && st.pane === 1) enterPane(0);
+            else {
+              st.sidebar = "open";
+              st.focus = "sidebar";
+            }
+            return;
+          }
+          if (dir === "right") {
+            if (st.focus === "sidebar") enterPane(st.pane);
+            else if (sideBySide && st.pane === 0) enterPane(1);
+            return;
+          }
+          if (!stacked || st.focus !== "pane") return;
+          if (dir === "up" && st.pane === 1) enterPane(0);
+          if (dir === "down" && st.pane === 0) enterPane(1);
+        }
+
+        function toggleSplit(dir) {
+          st.split = st.split === dir ? null : dir;
+          if (!st.split) st.pane = 0;
+        }
+
+        // The teaching beat. ⇥ from the sidebar walks into the pane; ⇥ once a
+        // terminal has focus never reaches us at all, so the model says so
+        // instead of quietly doing nothing.
+        function tab() {
+          if (st.focus === "pane" && st.views[st.pane] === "context") {
+            st.swallowed = true;
+            clearTimeout(swallowTimer);
+            swallowTimer = setTimeout(() => {
+              st.swallowed = false;
+              render();
+            }, 1800);
+            return;
+          }
+          if (st.focus === "pane") st.focus = "sidebar";
+          else enterPane(st.pane);
+        }
+
+        function run(spec) {
+          if (st.palette && spec !== "ctrl+p") {
+            st.palette = false;
+            if (spec === "esc") return true;
+          }
+          switch (spec) {
+            case "1":
+            case "2":
+            case "3":
+              st.views[st.pane] = ["context", "diff", "tree"][Number(spec) - 1];
+              return true;
+            case "j":
+              st.focus = "sidebar";
+              st.lane = Math.min(lanes.length - 1, st.lane + 1);
+              return true;
+            case "k":
+              st.focus = "sidebar";
+              st.lane = Math.max(0, st.lane - 1);
+              return true;
+            case "tab":
+              tab();
+              return true;
+            case "ctrl+left":
+            case "ctrl+right":
+            case "ctrl+up":
+            case "ctrl+down":
+              moveFocus(spec.slice(5));
+              return true;
+            case "ctrl+d":
+              toggleSplit("vertical");
+              return true;
+            case "ctrl+shift+d":
+              toggleSplit("horizontal");
+              return true;
+            case "ctrl+b":
+              st.sidebar = st.sidebar === "open" ? "collapsed" : "open";
+              if (st.sidebar === "collapsed" && st.focus === "sidebar") enterPane(st.pane);
+              return true;
+            case "ctrl+p":
+              st.palette = !st.palette;
+              return true;
+            case "esc":
+              return false;
+          }
+          if (/^ctrl\+[1-9]$/.test(spec)) {
+            enterPane(Number(spec.slice(5)) - 1);
+            return true;
+          }
+          return false;
+        }
+
+        // Armed only while the rig is on screen. Off screen the page keeps its
+        // own keys (scrolling, find-in-page) and nothing is intercepted.
+        let armed = false;
+        new IntersectionObserver(
+          ([e]) => {
+            armed = e.isIntersecting;
+          },
+          { threshold: 0.35 },
+        ).observe(win);
+
         addEventListener("keydown", (e) => {
-          if (e.metaKey || e.ctrlKey || e.altKey) return;
-          const target = e.target;
-          if (target instanceof HTMLElement && target.closest("input, textarea, [contenteditable]")) return;
-          const id = { 1: "context", 2: "diff", 3: "tree" }[e.key];
-          if (!id) return;
-          show(id);
-          root.scrollIntoView({ block: "center", behavior: "smooth" });
+          if (typingInPage(e)) return;
+          // ⌘ belongs to the browser here. Bookmarking and printing are not
+          // ours to break for a demo, so the page is a ⌃ instrument and says so.
+          if (e.metaKey) return;
+          const spec = specOf(e);
+          if (!spec) return;
+          strike(spec);
+
+          // The bare view keys work from anywhere on the page and bring the rig
+          // with them; everything else needs the rig in front of you.
+          const isViewKey = spec === "1" || spec === "2" || spec === "3";
+          if (!armed && !isViewKey) return;
+
+          if (!run(spec)) return;
+          e.preventDefault();
+          render();
+          if (!armed) win.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
         });
-        show("context");
+
+        for (const cap of document.querySelectorAll("#keys .keycap[data-key]")) {
+          cap.addEventListener("click", () => {
+            strike(cap.dataset.key);
+            if (run(cap.dataset.key)) render();
+          });
+        }
+
+        new ResizeObserver(placeRing).observe(win);
+        render();
       })();
 
       (() => {
         const host = document.getElementById("rig-lanes");
         const summary = document.getElementById("rig-summary");
+        const caption = document.getElementById("rig-caption");
         if (!host) return;
 
         const STATES = {
@@ -875,7 +1258,7 @@ edge -&gt; api -&gt; dashboard</code></pre>
 
         const lanes = LANES.map((lane, i) => {
           const el = document.createElement("div");
-          el.className = "flex items-start gap-3 px-4 py-2.5";
+          el.className = "lane flex items-start gap-3 px-4 py-2.5";
           el.innerHTML =
             '<span class="dot mt-[0.42rem]"></span>' +
             '<div class="min-w-0 flex-1">' +
@@ -888,6 +1271,7 @@ edge -&gt; api -&gt; dashboard</code></pre>
           host.appendChild(el);
           return {
             ...lane,
+            el,
             dot: el.querySelector(".dot"),
             line: el.querySelector("[data-line]"),
             state: el.querySelector("[data-state]"),
@@ -913,14 +1297,51 @@ edge -&gt; api -&gt; dashboard</code></pre>
 
         lanes.forEach(paint);
         refreshSummary();
+
+        // ── The panel takes keys too ──────────────────────────────────
+        //
+        // j/k are the app's own sidebar cursor, so the hero answers to them
+        // before you have read a word about the keyboard. The lane under the
+        // cursor stops advancing, which is the point rather than a nicety: a
+        // line you want to read is a line that has to hold still.
+        let cursor = -1;
+        function paintCursor() {
+          lanes.forEach((lane, i) => lane.el.classList.toggle("is-cursor", i === cursor));
+          caption.textContent =
+            cursor < 0
+              ? "Four agents, three repos, one window. Live, from a real session."
+              : "Holding " + lanes[cursor].agent + " · " + lanes[cursor].dir + ". Esc releases it.";
+        }
+        function moveCursor(delta) {
+          cursor = Math.max(0, Math.min(lanes.length - 1, (cursor < 0 ? -1 : cursor) + delta));
+          paintCursor();
+        }
+
+        let heroArmed = false;
+        new IntersectionObserver(([e]) => { heroArmed = e.isIntersecting; }, { threshold: 0.4 }).observe(host);
+
+        addEventListener("keydown", (e) => {
+          if (!heroArmed || e.metaKey || e.ctrlKey || e.altKey) return;
+          const t = e.target;
+          if (t instanceof HTMLElement && t.closest("input, textarea, select, [contenteditable]")) return;
+          const key = e.key.toLowerCase();
+          if (key === "j") moveCursor(1);
+          else if (key === "k") moveCursor(cursor < 0 ? 0 : -1);
+          else if (key === "escape" && cursor >= 0) { cursor = -1; paintCursor(); }
+          else return;
+          e.preventDefault();
+        });
+
         if (reduced) return;
 
         // Independent clocks per lane, so the panel never marches in step.
         lanes.forEach((lane, i) => {
           const tick = () => {
-            lane.at = (lane.at + 1) % lane.steps.length;
-            paint(lane);
-            refreshSummary();
+            if (lanes[cursor] !== lane) {
+              lane.at = (lane.at + 1) % lane.steps.length;
+              paint(lane);
+              refreshSummary();
+            }
             setTimeout(tick, 1900 + i * 430 + (lane.at % 3) * 520);
           };
           setTimeout(tick, 900 + i * 620);

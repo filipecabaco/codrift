@@ -142,6 +142,19 @@ install_cli() {
     *":${BIN_DIR}:"*) ;;
     *) printf 'Add %s to your PATH to use the `codrift` command.\n' "${BIN_DIR}" ;;
   esac
+
+  # The `codrift-cli` Homebrew formula installs this same command into Homebrew's
+  # bin. With both present, whichever comes first on PATH wins, and the loser is
+  # invisible: you install a new version here and `codrift version` keeps
+  # reporting the old one from the other prefix. Say so at install time.
+  hash -r 2>/dev/null || true
+  RESOLVED="$(command -v codrift 2>/dev/null || true)"
+  if [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "${BIN_DIR}/codrift" ]; then
+    printf '\nWarning: `codrift` on your PATH resolves to %s, not the copy just\n' "${RESOLVED}"
+    printf 'installed. That one will keep running and reporting its own version.\n'
+    printf 'If it came from Homebrew, `brew uninstall codrift-cli` (or keep brew and\n'
+    printf 'skip this installer) — otherwise put %s earlier in your PATH.\n' "${BIN_DIR}"
+  fi
 }
 
 install_cli

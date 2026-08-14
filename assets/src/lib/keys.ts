@@ -21,6 +21,10 @@ export type ActionId =
   | "diff_all_files"
   | "quit"
   | "toggle_sidebar"
+  | "focus_left"
+  | "focus_right"
+  | "focus_up"
+  | "focus_down"
   | "palette"
   | "start_orchestration"
   | "branch_initiative"
@@ -48,6 +52,10 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   diff_all_files: "Show all changed files",
   quit: "Quit",
   toggle_sidebar: "Toggle sidebar",
+  focus_left: "Move focus left (pane → pane → sidebar)",
+  focus_right: "Move focus right (sidebar → pane → pane)",
+  focus_up: "Move focus up (stacked panes)",
+  focus_down: "Move focus down (stacked panes)",
   palette: "Command palette",
   start_orchestration: "Start orchestration",
   branch_initiative: "Branch git directories for this initiative",
@@ -78,6 +86,10 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "tree_mode",
   "diff_all_files",
   "toggle_sidebar",
+  "focus_left",
+  "focus_right",
+  "focus_up",
+  "focus_down",
   "appearance",
   "agent_profiles",
   "setup",
@@ -109,6 +121,14 @@ export const DEFAULT_KEYMAP: Keymap = {
   diff_all_files: "*",
   quit: "ctrl+q",
   toggle_sidebar: "ctrl+b",
+  // Directional focus across the whole window — and the only way out of a
+  // focused terminal, so these have to carry a modifier: the pane hands ⇥ to the
+  // PTY, and a bare arrow would just be typed at the agent. Never bind them to
+  // esc — see Codrift.Config.Keybindings.
+  focus_left: "ctrl+left",
+  focus_right: "ctrl+right",
+  focus_up: "ctrl+up",
+  focus_down: "ctrl+down",
   palette: "ctrl+p",
   start_orchestration: "o",
   branch_initiative: "b",
@@ -144,10 +164,27 @@ export function eventToSpec(e: KeyboardEvent): string | null {
   return key;
 }
 
-// Human-readable spec for hints, e.g. "ctrl+p" -> "⌃P", "j" -> "J".
+// The named keys eventToSpec emits, drawn as the glyph they carry on the key —
+// "⌃←" reads as a shortcut, "⌃LEFT" reads as a variable name.
+const KEY_GLYPHS: Record<string, string> = {
+  left: "←",
+  right: "→",
+  up: "↑",
+  down: "↓",
+  esc: "⎋",
+  enter: "⏎",
+  tab: "⇥",
+  space: "␣",
+};
+
+function formatKey(key: string): string {
+  return KEY_GLYPHS[key] ?? (key.length === 1 ? key.toUpperCase() : key);
+}
+
+// Human-readable spec for hints, e.g. "ctrl+p" -> "⌃P", "ctrl+left" -> "⌃←".
 export function formatSpec(spec: string | undefined): string {
   if (!spec) return "";
-  if (spec.startsWith("ctrl+")) return "⌃" + spec.slice(5).toUpperCase();
-  if (spec.startsWith("alt+")) return "⌥" + spec.slice(4).toUpperCase();
-  return spec.length === 1 ? spec.toUpperCase() : spec;
+  if (spec.startsWith("ctrl+")) return "⌃" + formatKey(spec.slice(5));
+  if (spec.startsWith("alt+")) return "⌥" + formatKey(spec.slice(4));
+  return formatKey(spec);
 }

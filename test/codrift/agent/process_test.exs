@@ -156,6 +156,65 @@ defmodule Codrift.AgentProcessTest do
     end
   end
 
+  describe "inherited release environment" do
+    # Codrift's own release env leaks into everything it spawns. The one that
+    # bites is RELEASE_SYS_CONFIG: a boot script only defaults it, so the
+    # inherited value wins and pins a child release's config provider to the
+    # *app's* version — `codrift memory add` from an agent then dies with
+    # "could not read .../releases/<app version>/runtime.exs" whenever the CLI
+    # and the app are on different versions, which is every user mid-upgrade.
+    setup do
+      vars = %{
+        "RELEASE_SYS_CONFIG" => "/from/the/desktop/sidecar/sys",
+        "RELEASE_ROOT" => "/from/the/desktop/sidecar",
+        "__BURRITO" => "1"
+      }
+
+      System.put_env(vars)
+      on_exit(fn -> Enum.each(vars, fn {k, _} -> System.delete_env(k) end) end)
+      :ok
+    end
+
+    test "is not passed to an agent spawned on the port path" do
+      pid = start_agent(adapter: Codrift.Test.EnvAdapter)
+      :ok = AgentProcess.subscribe(pid)
+      assert_receive {:agent_output, _, _}, 2_000
+
+      env = collect_output(pid)
+
+      refute env =~ "RELEASE_SYS_CONFIG"
+      refute env =~ "RELEASE_ROOT"
+      # Codrift.desktop_sidecar?/0 reads __BURRITO, so a leaked copy makes a
+      # child believe it is the desktop sidecar.
+      refute env =~ "__BURRITO"
+    end
+
+    test "is not passed to an agent spawned on the PTY path" do
+      pid = start_agent(adapter: Codrift.Test.PtyEnvAdapter)
+      :ok = AgentProcess.subscribe(pid)
+      assert_receive {:agent_output, _, _}, 2_000
+
+      env = collect_output(pid)
+
+      refute env =~ "RELEASE_SYS_CONFIG"
+      refute env =~ "RELEASE_ROOT"
+      refute env =~ "__BURRITO"
+      # Guards the unset list against being applied so broadly that the agent
+      # loses the environment it needs.
+      assert env =~ "PATH="
+    end
+  end
+
+  # `env` writes its whole environment in one go, but it can still arrive in
+  # several chunks; drain before asserting on absence.
+  defp collect_output(pid) do
+    receive do
+      {:agent_output, _, _} -> collect_output(pid)
+    after
+      200 -> pid |> AgentProcess.recent_output() |> Enum.join()
+    end
+  end
+
   defp await_status(pid, status, tries \\ 100) do
     cond do
       AgentProcess.status(pid).status == status -> true

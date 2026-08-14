@@ -31,9 +31,13 @@ defmodule Codrift.CLI.Update do
         IO.puts("new version available: #{latest}")
         IO.write("Downloading and installing... ")
 
+        dir = Updater.install_dir()
+
         case Updater.install(latest) do
           :ok ->
             IO.puts("done.")
+            IO.puts("Installed to #{dir}.")
+            warn_if_shadowed(dir)
             IO.puts("Restart codrift to use version #{latest}.")
 
           {:error, reason} ->
@@ -55,5 +59,23 @@ defmodule Codrift.CLI.Update do
       codrift update           Check for a newer release and install it
       codrift update --check   Exit 0 if an update is available, 1 if not
     """)
+  end
+
+  # An update only takes effect if the tree we wrote is the one PATH finds.
+  # Saying so beats letting the user discover it via `codrift version` still
+  # printing the old number.
+  defp warn_if_shadowed(dir) do
+    case Updater.shadowing_binary(dir) do
+      {:ok, path} ->
+        IO.puts(:stderr, """
+
+        Warning: `codrift` on your PATH resolves to #{path}, which this update
+        did not touch — that copy still runs and reports its own version.
+        Remove it, or reorder your PATH, so the updated install is the one used.
+        """)
+
+      :none ->
+        :ok
+    end
   end
 end

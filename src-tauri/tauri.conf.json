@@ -8,6 +8,8 @@
     "windows": [
       {
         "title": "Codrift",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "fullscreen": false,
         "width": 1440,
         "height": 900,
