@@ -9,3 +9,8 @@ config :logger, level: :warning
 # use Plug.Test's default host. Codrift.Web.LocalGuardTest re-enables it to
 # exercise the guard end-to-end through the real pipeline.
 config :codrift, http_guard_enabled: false
+
+# The disk watcher would otherwise poll the developer's real ~/.config/codrift
+# once a second for the whole suite. Codrift.FreshnessTest starts its own
+# instance pointed at a sandbox and drives it with `poll/1`.
+config :codrift, freshness_interval: false

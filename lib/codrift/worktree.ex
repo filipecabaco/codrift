@@ -21,9 +21,12 @@ defmodule Codrift.Worktree do
     File.exists?(Path.join(path, ".git"))
   end
 
+  @doc "Returns the folder holding every worktree of one initiative."
+  def worktrees_dir(context_path), do: Path.join(context_path, "worktrees")
+
   @doc "Returns the worktree directory path given the initiative context folder and source path."
   def worktree_path(context_path, source_path) do
-    Path.join(context_path, "worktrees/#{slug(source_path)}")
+    Path.join(worktrees_dir(context_path), slug(source_path))
   end
 
   @doc "Returns the git branch name for a given initiative and source path."
@@ -59,6 +62,24 @@ defmodule Codrift.Worktree do
     end
   end
 
+  # Codrift writes `.claude/settings.json` into every worktree it creates
+  # (`ClaudePermissions.add/2`), so counting it would make every worktree dirty
+  # from birth — and `dirty?` is what `codrift prune` checks before destroying
+  # uncommitted work. A warning that is always on protects nothing.
+  #
+  # Excluding that one path rather than the whole `.claude/` directory, and
+  # passing `--untracked-files=all` so git cannot collapse the directory to a
+  # single `.claude/` line, keeps anything else the user put there visible.
+  #
+  # Only invisible on machines whose global gitignore already covers `.claude` —
+  # which is why this went unnoticed until CI, where no such file exists.
+  @ignoring_codrifts_own [
+    "--untracked-files=all",
+    "--",
+    ".",
+    ":(exclude).claude/settings.json"
+  ]
+
   @doc """
   Returns the current status of a worktree.
 
@@ -76,11 +97,11 @@ defmodule Codrift.Worktree do
       end
 
     dirty? =
-      case System.cmd("git", ["status", "--short"],
+      case System.cmd("git", ["status", "--short" | @ignoring_codrifts_own],
              cd: worktree_path,
              stderr_to_stdout: true
            ) do
-        {output, 0} -> output |> String.trim() |> String.length() > 0
+        {output, 0} -> String.trim(output) != ""
         _ -> false
       end
 

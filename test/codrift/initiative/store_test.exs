@@ -24,6 +24,92 @@ defmodule Codrift.Initiative.StoreTest do
     [path: Path.join(tmp_dir, "initiatives.json"), name: nil, context_dir_base: ctx]
   end
 
+  # An initiative changed by an MCP agent or a second window has to reach every
+  # open window, and until these events existed nothing told them. Ids are pinned
+  # in every assertion because the watcher registry is global: other async tests
+  # broadcast into the same mailbox.
+  describe "change notification" do
+    setup do
+      Registry.register(Codrift.AgentWatchers, :all, nil)
+      :ok
+    end
+
+    test "create announces a creation, not an update", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+
+      {:ok, %Initiative{id: id}} = Store.create("Announced", [], store)
+
+      assert_receive {:initiative_created, %Initiative{id: ^id, name: "Announced"}}
+    end
+
+    test "a status change announces an update", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %Initiative{id: id}} = Store.create("Cycling", [], store)
+
+      {:ok, _} = Store.set_status(id, :done, store)
+
+      assert_receive {:initiative_updated, %Initiative{id: ^id, status: :done}}
+    end
+
+    # add_dir does not call put_initiative directly — it goes through
+    # update_initiative — which is exactly why the broadcast lives in the funnel
+    # rather than being repeated per mutation.
+    test "adding a directory announces an update", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %Initiative{id: id}} = Store.create("Growing", [], store)
+      dir = Path.join(tmp_dir, "project")
+      File.mkdir_p!(dir)
+
+      {:ok, _} = Store.add_dir(id, dir, store)
+
+      assert_receive {:initiative_updated, %Initiative{id: ^id, dirs: [%DirEntry{path: ^dir}]}}
+    end
+
+    test "delete announces a deletion", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %Initiative{id: id}} = Store.create("Doomed", [], store)
+
+      :ok = Store.delete(id, store)
+
+      assert_receive {:initiative_deleted, ^id}
+    end
+  end
+
+  describe "reload/1" do
+    setup do
+      Registry.register(Codrift.AgentWatchers, :all, nil)
+      :ok
+    end
+
+    defp write_json!(path, initiatives) do
+      data = Map.new(initiatives, fn i -> {i.id, Initiative.to_map(i)} end)
+      File.write!(path, JSON.encode!(%{"initiatives" => data}))
+    end
+
+    test "picks up a write made outside this process", %{tmp_dir: tmp_dir} do
+      opts = store_opts(tmp_dir)
+      store = start_supervised!({Store, opts})
+      external = Initiative.new("Written by the CLI")
+      write_json!(opts[:path], [external])
+
+      reloaded = Store.reload(store)
+
+      id = external.id
+      assert Enum.any?(reloaded, &(&1.id == id))
+      assert_receive {:initiative_created, %Initiative{id: ^id}}
+    end
+
+    test "announces nothing when the file matches state", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %Initiative{id: id}} = Store.create("Steady", [], store)
+      assert_receive {:initiative_created, %Initiative{id: ^id}}
+
+      Store.reload(store)
+
+      refute_receive {:initiative_updated, %Initiative{id: ^id}}, 100
+    end
+  end
+
   describe "create/3" do
     test "creates an initiative with generated id and timestamp", %{tmp_dir: tmp_dir} do
       store = start_store(tmp_dir)
@@ -355,7 +441,7 @@ defmodule Codrift.Initiative.StoreTest do
     end
   end
 
-  describe "toggle_dir_worktree/3" do
+  describe "set_dir_worktree/4" do
     test "enables worktree on a dir that has none", %{tmp_dir: tmp_dir} do
       repo = Path.join(tmp_dir, "repo")
       File.mkdir_p!(repo)
@@ -365,7 +451,7 @@ defmodule Codrift.Initiative.StoreTest do
       {:ok, %{id: id}} = Store.create("Toggle On", [], store)
       Store.add_dir(id, repo, store)
 
-      assert {:ok, %Initiative{dirs: [entry]}} = Store.toggle_dir_worktree(id, repo, store)
+      assert {:ok, %Initiative{dirs: [entry]}} = Store.set_dir_worktree(id, repo, true, store)
       assert entry.worktree_enabled == true
       assert is_binary(entry.worktree_path)
       assert File.dir?(entry.worktree_path)
@@ -382,13 +468,17 @@ defmodule Codrift.Initiative.StoreTest do
       wt_path = entry.worktree_path
       assert File.dir?(wt_path)
 
-      assert {:ok, %Initiative{dirs: [cleared]}} = Store.toggle_dir_worktree(id, repo, store)
+      assert {:ok, %Initiative{dirs: [cleared]}} = Store.set_dir_worktree(id, repo, false, store)
       assert cleared.worktree_enabled == false
       assert is_nil(cleared.worktree_path)
       refute File.dir?(wt_path)
     end
 
-    test "enable falls back to plain entry when source is not a git repo", %{tmp_dir: tmp_dir} do
+    # add_dir(worktree_enabled: true) still degrades to a plain entry — adding a
+    # directory should not fail because one of its options could not be honoured.
+    # Asking for a worktree explicitly is different: the caller wants that
+    # outcome, so it gets git's reason instead of a silent no-op.
+    test "reports why when the source is not a git repository", %{tmp_dir: tmp_dir} do
       not_git = Path.join(tmp_dir, "plain")
       File.mkdir_p!(not_git)
 
@@ -396,22 +486,42 @@ defmodule Codrift.Initiative.StoreTest do
       {:ok, %{id: id}} = Store.create("Not Git", [], store)
       Store.add_dir(id, not_git, store)
 
-      assert {:ok, %Initiative{dirs: [entry]}} =
-               Store.toggle_dir_worktree(id, not_git, store)
+      assert {:error, {:worktree_failed, reason}} =
+               Store.set_dir_worktree(id, not_git, true, store)
 
-      assert entry.worktree_enabled == false
-      assert is_nil(entry.worktree_path)
+      assert reason =~ "not a git repository"
+    end
+
+    # An agent that retries, or two that both ask, must not create a worktree and
+    # then destroy it.
+    test "asking for the state it is already in changes nothing", %{tmp_dir: tmp_dir} do
+      repo = Path.join(tmp_dir, "repo")
+      File.mkdir_p!(repo)
+      init_git_repo(repo)
+
+      store = start_store(tmp_dir)
+      {:ok, %{id: id}} = Store.create("Idempotent", [], store)
+      Store.add_dir(id, repo, store)
+
+      {:ok, %Initiative{dirs: [entry]}} = Store.set_dir_worktree(id, repo, true, store)
+      assert {:ok, %Initiative{dirs: [^entry]}} = Store.set_dir_worktree(id, repo, true, store)
+      assert File.dir?(entry.worktree_path)
+
+      {:ok, _} = Store.set_dir_worktree(id, repo, false, store)
+
+      assert {:ok, %Initiative{dirs: [%DirEntry{worktree_path: nil}]}} =
+               Store.set_dir_worktree(id, repo, false, store)
     end
 
     test "returns :not_found for unknown initiative id", %{tmp_dir: tmp_dir} do
       store = start_store(tmp_dir)
-      assert {:error, :not_found} = Store.toggle_dir_worktree("bad", "/any", store)
+      assert {:error, :not_found} = Store.set_dir_worktree("bad", "/any", true, store)
     end
 
     test "returns :not_found when dir is not in the initiative", %{tmp_dir: tmp_dir} do
       store = start_store(tmp_dir)
       {:ok, %{id: id}} = Store.create("No Dir", [], store)
-      assert {:error, :not_found} = Store.toggle_dir_worktree(id, "/nonexistent", store)
+      assert {:error, :not_found} = Store.set_dir_worktree(id, "/nonexistent", true, store)
     end
   end
 

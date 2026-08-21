@@ -10,7 +10,15 @@ import {
   type AgentProfile,
   type Initiative,
 } from "$lib/api";
-import { connect, onAgent, onAgentStatus, type AgentInfo, type AgentStatus } from "$lib/stream";
+import {
+  connect,
+  onAgent,
+  onAgentStatus,
+  onInitiativeChange,
+  type AgentInfo,
+  type AgentStatus,
+  type InitiativeChange,
+} from "$lib/stream";
 
 export type Row =
   | { kind: "init"; initId: string }
@@ -122,6 +130,7 @@ class Workspace {
   constructor() {
     onAgentStatus((agentId, status) => this.#applyStatus(agentId, status));
     onAgent((agent) => this.#upsertAgent(agent));
+    onInitiativeChange((change) => this.#applyInitiativeChange(change));
     connect();
   }
 
@@ -427,6 +436,61 @@ class Workspace {
     } catch {
       this.contextFiles = { ...this.contextFiles, [id]: [] };
     }
+  }
+
+  /**
+   * Fold in an initiative created, changed, or deleted outside this session —
+   * a shell running `codrift initiative create`, an MCP agent, a second window.
+   *
+   * Patches the one row the frame names rather than calling `load()`. `load()`
+   * fans out `get_initiative_agents` per initiative, so making it the refresh
+   * primitive would turn every rename into O(initiatives) round trips; it also
+   * flips `loading`, which would blank the sidebar on someone else's edit.
+   */
+  #applyInitiativeChange(change: InitiativeChange) {
+    if (change.kind === "deleted") return this.#removeInitiative(change.initiativeId);
+
+    const next = change.initiative;
+    const i = this.initiatives.findIndex((init) => init.id === next.id);
+    if (i >= 0) {
+      const updated = this.initiatives.slice();
+      updated[i] = next;
+      this.initiatives = updated;
+      return;
+    }
+
+    // Sorted by creation time, matching list_initiatives, so a new initiative
+    // lands where a reload would have put it rather than at the end.
+    this.initiatives = [...this.initiatives, next].sort((a, b) =>
+      a.created_at.localeCompare(b.created_at),
+    );
+    // Nothing can have started in it yet, but the key has to exist so the row
+    // renders as "no agents" instead of waiting on a fetch that never happens.
+    if (!this.agentsByInit[next.id]) {
+      this.agentsByInit = { ...this.agentsByInit, [next.id]: [] };
+    }
+  }
+
+  #removeInitiative(id: string) {
+    this.initiatives = this.initiatives.filter((init) => init.id !== id);
+
+    const agents = { ...this.agentsByInit };
+    delete agents[id];
+    this.agentsByInit = agents;
+
+    const files = { ...this.contextFiles };
+    delete files[id];
+    this.contextFiles = files;
+
+    if (this.expanded.has(id)) {
+      const next = new Set(this.expanded);
+      next.delete(id);
+      this.expanded = next;
+    }
+    // Folder expansion is keyed `${initId}:${path}`, so it needs pruning too or
+    // the set grows a stale entry for every initiative ever deleted.
+    const folders = new Set([...this.expandedFolders].filter((k) => !k.startsWith(`${id}:`)));
+    if (folders.size !== this.expandedFolders.size) this.expandedFolders = folders;
   }
 
   #upsertAgent(agent: AgentInfo) {

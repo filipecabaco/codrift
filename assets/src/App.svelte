@@ -2,7 +2,7 @@
   import { onMount, untrack } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
   import { ArrowPath, CommandLine, Identification, Link, Swatch } from "@steeze-ui/heroicons";
-  import { rpc, quitApp, QUIT_REQUESTED, type Agent } from "$lib/api";
+  import { rpc, quitApp, QUIT_REQUESTED, type Agent, type Initiative } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
   import { onPaneRequest, type PaneRequest } from "$lib/stream";
   import { workspace as ws, type Row } from "$lib/workspace.svelte";
@@ -509,8 +509,46 @@
     }
   }
 
+  type ChooserKind = "agent" | "terminal" | "file";
+
+  /**
+   * What a fresh split can be filled with, in the order it renders.
+   *
+   * One list feeds both the buttons and the number keys, so the digit printed on
+   * an option and the digit that presses it are the same index and cannot drift
+   * apart when an option is added or reordered.
+   */
+  function chooserOptions(
+    init: Initiative,
+  ): { kind: ChooserKind; title: string; detail: string }[] {
+    return [
+      {
+        kind: "agent",
+        // Names the agent that will actually launch (the initiative's choice,
+        // else default_agent, else claude) rather than a generic "Start an
+        // agent" — a profile like claude-work reads here too.
+        title: `Start ${ws.agentChoiceFor(init)}`,
+        detail: `This initiative's agent, in ${init.dirs[0] ? base(init.dirs[0].path) : "its scratchpad"}`,
+      },
+      {
+        kind: "terminal",
+        title: "Open a terminal",
+        detail: "A plain shell in the same directory",
+      },
+      {
+        kind: "file",
+        title: "Open a file",
+        detail: "Browse this initiative's files",
+      },
+    ];
+  }
+
+  // True when the active pane is still asking what goes in it, so the number keys
+  // should answer that question rather than switch a view mode.
+  const choosing = $derived(active.chooser && !active.agentId && !!selectedInitiative);
+
   // Answers the chooser a fresh split put in pane `idx`.
-  async function choosePaneContent(idx: number, kind: "agent" | "terminal" | "file") {
+  async function choosePaneContent(idx: number, kind: ChooserKind) {
     const view = panes[idx];
     view.chooser = false;
     if (kind === "file") {
@@ -966,6 +1004,20 @@
 
     if (typingTarget()) return;
 
+    // A pane still showing the chooser has no view mode to switch — the chooser
+    // branch renders ahead of `view.tab`, so 1/2/3 are inert there today. Point
+    // them at the options actually on screen instead: same digits the mode
+    // switcher already teaches, applied to what the pane is currently asking.
+    if (choosing) {
+      const picked = ["1", "2", "3"].indexOf(spec);
+      if (picked >= 0) {
+        e.preventDefault();
+        const options = chooserOptions(selectedInitiative!);
+        if (options[picked]) choosePaneContent(activePane, options[picked].kind);
+        return;
+      }
+    }
+
     if (spec === "left" || spec === "right") {
       e.preventDefault();
       treeHorizontal(spec);
@@ -1029,6 +1081,9 @@
     if (paneFocus === "main" && active.agentId) {
       return [{ spec: LEAVE_MAIN, label: "Sidebar" }, { spec: "⇧⏎", label: "Newline" }, palette];
     }
+    // While a pane is still asking, the numbers are the only thing worth saying:
+    // every other hint here acts on content this pane does not have yet.
+    if (choosing) return [{ spec: "1–3", label: "Fill this pane" }, palette];
     const hints = [{ spec: "↑↓", label: "Move" }];
     if (active.tab === "tree") hints.push({ spec: "⇥", label: "Sidebar" }, { spec: "/", label: "Filter files" });
     else if (active.agentId && active.tab === "context") hints.push({ spec: "⇥", label: "Terminal" });
@@ -1363,35 +1418,30 @@
           <div class="w-full max-w-sm">
             <h2 class="text-base font-semibold text-fg">What goes in this pane?</h2>
             <p class="mt-1 text-[13px] text-fg/70">{init.name}</p>
+            <!-- Rendered from chooserOptions so the badge on a row is the same
+                 index the key handler uses. The digit is shown rather than
+                 documented: a shortcut nobody can see is a shortcut nobody uses,
+                 and this screen is where a new user first meets the split. -->
             <div class="mt-5 flex flex-col gap-2">
-              <button
-                class="rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent"
-                onclick={() => choosePaneContent(idx, "agent")}
-              >
-                <!-- Names the agent that will actually launch (the initiative's
-                     choice, else default_agent, else claude) rather than a generic
-                     "Start an agent" — a profile like claude-work reads here too. -->
-                <span class="font-semibold">Start {ws.agentChoiceFor(init)}</span>
-                <span class="mt-0.5 block text-[12px] text-fg/60">
-                  This initiative's agent, in {init.dirs[0] ? base(init.dirs[0].path) : "its scratchpad"}
-                </span>
-              </button>
-              <button
-                class="rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent"
-                onclick={() => choosePaneContent(idx, "terminal")}
-              >
-                <span class="font-semibold">Open a terminal</span>
-                <span class="mt-0.5 block text-[12px] text-fg/60">A plain shell in the same directory</span>
-              </button>
-              <button
-                class="rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent"
-                onclick={() => choosePaneContent(idx, "file")}
-              >
-                <span class="font-semibold">Open a file</span>
-                <span class="mt-0.5 block text-[12px] text-fg/60">Browse this initiative's files</span>
-              </button>
+              {#each chooserOptions(init) as option, n (option.kind)}
+                <button
+                  class="flex items-start gap-3 rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent"
+                  onclick={() => choosePaneContent(idx, option.kind)}
+                >
+                  <kbd
+                    class="mt-px rounded border border-border bg-canvas px-1.5 py-px text-[11px] text-fg/80"
+                    aria-hidden="true">{n + 1}</kbd
+                  >
+                  <span class="min-w-0">
+                    <span class="font-semibold">{option.title}</span>
+                    <span class="mt-0.5 block text-[12px] text-fg/60">{option.detail}</span>
+                  </span>
+                </button>
+              {/each}
             </div>
-            <p class="mt-4 text-[12px] text-fg/50">Or pick anything in the sidebar.</p>
+            <p class="mt-4 text-[12px] text-fg/50">
+              Press a number, or pick anything in the sidebar.
+            </p>
           </div>
         </div>
       {:else if view.tab === "context"}

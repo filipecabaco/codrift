@@ -3,7 +3,7 @@ defmodule Codrift do
   Application entry point and HTTP router.
 
   Starts the supervision tree (Registry, Initiative.Store, AgentSupervisor,
-  ConductorSupervisor, Bandit) and declares all HTTP routes.
+  ConductorSupervisor, Freshness, Bandit) and declares all HTTP routes.
 
   ## MCP server
 
@@ -62,6 +62,7 @@ defmodule Codrift do
       {Task.Supervisor, name: Codrift.TaskSupervisor},
       Codrift.OAuth.StateStore,
       Codrift.Scheduler,
+      Codrift.Freshness,
       {Bandit,
        [plug: __MODULE__, startup_log: false] ++
          Application.get_env(:codrift, :bandit_opts, [])}

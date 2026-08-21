@@ -37,6 +37,42 @@ The `rowid` is implicit and serves as the stable delete handle.
 
 The `initiative.md` file in each initiative's context folder (picked up automatically by Claude Code via `--add-dir`) includes the initiative ID and usage instructions. Agents can use either MCP tools or CLI commands.
 
+## How search works
+
+Agents are told to search before starting work, so the queries that arrive are
+questions rather than keywords. Two things make those answerable:
+
+- **Terms are OR-joined and English stopwords dropped.** FTS5 reads a space
+  between terms as `AND`, so an eight-word question used to demand all eight
+  tokens appear in one entry — measured over 34 hand-labelled questions against
+  two real stores, every one returned nothing. Ranking a broad match is what
+  BM25 is for. A query that is *only* stopwords keeps them, since "how to" is a
+  real thing to look for.
+- **Chunks are indexed, entries are returned.** BM25 divides by document length
+  and real entries run 0.6–2.7 kB, so entries are split (600 characters, 150 of
+  overlap) and matching chunks collapse back to their parent, best chunk first.
+  The chunk table is derived: the `memory` table stays the store of record and
+  is never migrated, so an existing hand-curated database gains an index and
+  risks nothing.
+
+Quoting is unchanged and still necessary — FTS5 treats `(`, `)`, `*`, `:` and
+`"` as operators, so `greet()` would otherwise be a syntax error. Terms are not
+silently prefixed: measured, that lowered MRR from 0.87 to 0.85 by broadening
+the match set. A trailing `*` you type is honoured.
+
+`mix codrift.memory.eval` scores the search against a labelled question set and
+can fail a build on a regression:
+
+```bash
+mix codrift.memory.eval
+mix codrift.memory.eval --max-empty 0 --min-top1 0.7 --min-mrr 0.8
+```
+
+The default set in `priv/memory_eval/default.json` is synthetic, because real
+initiative memory is private and does not belong in git. To score a real store,
+write a set of questions whose `expect` holds that store's rowids and pass
+`--initiative <id>`.
+
 ### MCP tools (Claude Code — preferred)
 
 | Tool | Arguments |

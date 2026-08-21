@@ -26,6 +26,9 @@ defmodule Codrift.MCP.Handler do
     - `add_dir` — add a directory to an initiative
     - `delete_initiative` — delete an initiative
     - `set_initiative_status` — set initiative lifecycle status
+    - `list_worktrees` — Codrift-managed git worktrees and what still claims them
+    - `set_dir_worktree` — turn a worktree on or off for one directory
+    - `prune_worktrees` — remove worktrees nothing claims (dry run unless forced)
     - `memory_search` — FTS5 full-text search over an initiative's memory store
     - `memory_add` — store a new memory entry (decision/summary/snippet/file_context/note)
     - `memory_delete` — delete a memory entry by id
@@ -330,9 +333,73 @@ defmodule Codrift.MCP.Handler do
         }
       },
       %{
+        "name" => "list_worktrees",
+        "description" =>
+          "List Codrift-managed git worktrees. Each lives at " <>
+            "~/.codrift/initiatives/<id>/worktrees/<slug>. `state` is \"linked\" when an " <>
+            "initiative still claims it, or \"orphan\" when nothing does — `reason` says " <>
+            "whether the initiative was deleted or the directory was removed from it. " <>
+            "`dirty` means the worktree has uncommitted changes.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{
+              "type" => "string",
+              "description" => "Optional — restrict the listing to one initiative"
+            }
+          },
+          "required" => []
+        }
+      },
+      %{
+        "name" => "prune_worktrees",
+        "description" =>
+          "Remove worktrees no initiative claims, and clear stale git registrations " <>
+            "(worktrees a repository still lists after the folder is gone). " <>
+            "DRY RUN BY DEFAULT: without force=true nothing is deleted and the result " <>
+            "only reports what would be. Check `dirty` on each orphan before forcing — " <>
+            "a dirty worktree holds uncommitted work that removal destroys. Committed " <>
+            "work is never lost: removing a worktree leaves its branch in place.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "force" => %{
+              "type" => "boolean",
+              "description" => "Actually remove. Defaults to false — report only."
+            }
+          },
+          "required" => []
+        }
+      },
+      %{
+        "name" => "set_dir_worktree",
+        "description" =>
+          "Turn a git worktree on or off for one directory of an initiative. Enabling " <>
+            "checks the directory out into ~/.codrift/initiatives/<id>/worktrees/<slug> on " <>
+            "its own codrift/<id>/<slug> branch, so agents work there instead of the " <>
+            "source checkout. Idempotent, and disabling keeps the branch.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "dir" => %{
+              "type" => "string",
+              "description" => "A directory already on the initiative"
+            },
+            "enabled" => %{
+              "type" => "boolean",
+              "description" => "true to create the worktree, false to remove it. Default true."
+            }
+          },
+          "required" => ["initiative_id", "dir"]
+        }
+      },
+      %{
         "name" => "memory_search",
         "description" =>
-          "Full-text search over an initiative's memory store. Returns up to 20 results ranked by relevance.",
+          "Search an initiative's memory store. Ask a whole question in plain language — " <>
+            "terms are OR-joined and ranked by relevance, so you do not need to guess keywords. " <>
+            "Returns up to 20 entries, best match first.",
         "inputSchema" => %{
           "type" => "object",
           "properties" => %{
@@ -340,7 +407,10 @@ defmodule Codrift.MCP.Handler do
             "query" => %{
               "type" => "string",
               "description" =>
-                "FTS5 query: plain words, quoted phrases, AND/OR/NOT operators supported"
+                "A question or a few words. Terms are OR-joined and stopwords dropped, " <>
+                  "so \"does a sprite sleep while an agent is working\" works as written. " <>
+                  "Quote a phrase to require it verbatim, use AND/OR/NOT to be explicit, " <>
+                  "and end a term with * for a prefix match."
             }
           },
           "required" => ["initiative_id", "query"]

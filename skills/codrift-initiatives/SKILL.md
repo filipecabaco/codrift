@@ -60,13 +60,41 @@ Rules:
 - **Never `git checkout` another branch.** Your directory may be a worktree
   another agent is working in; switching it out from under them breaks their
   session.
-- **Never `git worktree remove`** a `codrift/` tree. Codrift owns those.
+- **Never `git worktree remove`** a `codrift/` tree, and never `git worktree add`
+  one of your own. Codrift owns those, and one you make by hand lands outside
+  `~/.codrift`, where nothing can find it again. Use `set_dir_worktree` instead.
 - Committing on your worktree branch is fine and expected. Merging back to the
   user's default branch is not yours to do unless asked.
 
-Enable or inspect worktrees from the CLI:
+**Every Codrift worktree lives at
+`~/.codrift/initiatives/<id>/worktrees/<slug>`** on a `codrift/<id>/<slug>`
+branch. That is the only place to look for one, and the only place to put one.
+
+Manage them with these tools:
+
+```
+list_worktrees   { }                                   # or { initiative_id }
+set_dir_worktree { initiative_id, dir, enabled: true }  # false to remove it
+prune_worktrees  { }                                   # report only
+prune_worktrees  { force: true }                       # actually remove
+```
+
+`state` is `"linked"` when an initiative still claims the worktree, or
+`"orphan"` when nothing does — `reason` says whether the initiative was deleted
+or the directory was removed from it.
+
+**Before pruning with `force`, read `dirty` on every orphan.** A dirty worktree
+holds uncommitted work that removal destroys. Committed work is safe either way:
+removing a worktree keeps its branch. When something is dirty and you did not put
+it there, ask rather than force.
+
+The same operations from a shell:
 
 ```bash
+codrift worktree list
+codrift prune                       # dry run
+codrift prune --force
+
 codrift initiative worktree-status  <id>
 codrift initiative worktree-enable  <id> <path>
 codrift initiative worktree-disable <id> <path>

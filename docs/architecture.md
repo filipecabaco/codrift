@@ -25,6 +25,9 @@ Codrift (Application)
       │     GenServer — in-memory PKCE verifier state (10-minute TTL)
       ├── Codrift.Scheduler
       │     Quantum — runs Codrift.Integration.Sync every 5 minutes
+      ├── Codrift.Freshness
+      │     GenServer — polls initiatives.json and each memory.db for writes made
+      │     by another OS process (the CLI), turning them into lifecycle frames
       ├── Codrift (Francis / Bandit)
       │     HTTP + WebSocket server on port 43117 (SSE only for the MCP transport)
       └── Codrift.ShutdownManager        (desktop release only)
@@ -42,7 +45,7 @@ Codrift (Application)
 | `GET` | `/api/diff/:id` | Diff for an initiative (JSON) |
 | `GET` | `/api/agent/:id` | Agent status (JSON) |
 | `GET` | `/api/agent/:id/output` | Recent PTY output, Base64, oldest-first (`?n=`, ≤1000) — terminal scrollback replay |
-| `WS` | `/ws/initiative/:id` | The live surface, both ways: `output` / `status` / `stopped` / `conductor_*` frames down (Base64 payloads); `{t:"d",agent_id,d}` keystrokes and `{t:"r",agent_id,cols,rows}` resizes up |
+| `WS` | `/ws/initiative/:id` | The live surface, both ways: `output` / `status` / `stopped` / `conductor_*` / `initiative_*` / `memory_changed` frames down (Base64 payloads for PTY bytes); `{t:"d",agent_id,d}` keystrokes and `{t:"r",agent_id,cols,rows}` resizes up |
 | `POST` | `/mcp` | MCP JSON-RPC (HTTP transport) |
 | `SSE` | `/mcp/sse` | MCP server-sent events endpoint |
 | `GET` | `/oauth/start/:service` | Begin OAuth2 flow |
@@ -110,6 +113,27 @@ Keystrokes / resize (xterm.js)
   → WS /ws/initiative/:id  (same socket, framed with agent_id)
     → AgentProcess.send_raw / .resize → PTY
 ```
+
+## Change notification
+
+The initiative list and the memory store have writers outside the open window,
+and a UI that only refetched on its own actions could not see them. Both are
+announced as WebSocket frames the client patches state from, rather than as a
+signal to reload — the client's `load()` fans out `get_initiative_agents` per
+initiative, so making it the refresh primitive would turn every rename into
+O(initiatives) round trips.
+
+| Frame | Broadcast by | Covers |
+|-------|--------------|--------|
+| `initiative_created` / `initiative_updated` / `initiative_deleted` | `Codrift.Initiative.Store` on every write | The app itself, an MCP-connected agent, a second window |
+| `memory_changed` | `Codrift.Memory` on add and delete | Same |
+| all of the above | `Codrift.Freshness`, from a file change on disk | `codrift initiative create` / `codrift memory add`, which run in a separate OS process, and any other external writer |
+
+`Codrift.Memory` and `Codrift.CLI.Initiative` are pure and write their files
+directly so they work under `bin/codrift eval` with no booted system. That is
+why the CLI cannot broadcast and is polled for instead; when `Freshness` sees
+`initiatives.json` move it calls `Store.reload/1`, which both catches the
+running store up with disk and broadcasts one frame per actual difference.
 
 Agent output is buffered in `AgentProcess` (newest-first, cap 1000) and streamed
 to all subscribers; the Svelte UI replays scrollback from

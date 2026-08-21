@@ -1,5 +1,6 @@
 <script lang="ts">
   import { rpc, type MemoryEntry } from "$lib/api";
+  import { onMemoryChange } from "$lib/stream";
 
   let { initiativeId }: { initiativeId: string } = $props();
 
@@ -16,8 +17,10 @@
     note: "bg-zinc-500/20 text-zinc-300",
   };
 
-  async function run(q: string) {
-    loading = true;
+  // `silent` for refreshes the user didn't ask for: flipping `loading` would
+  // replace the list they are reading with "Loading…" every time an agent writes.
+  async function run(q: string, silent = false) {
+    if (!silent) loading = true;
     error = null;
     try {
       const trimmed = q.trim();
@@ -37,6 +40,23 @@
     run("");
   });
 
+  // Agents are the main writer here — `memory_add` over MCP, `codrift memory
+  // add` from a shell — and this view used to fetch on query change only, so
+  // everything they wrote stayed invisible until the query was retyped. The
+  // frame says only that the store moved, which is the most it could say: the
+  // open query is this component's, so re-running it is the refresh.
+  $effect(() =>
+    onMemoryChange((changed) => {
+      // Debounced through the same timer the input uses: an in-VM write
+      // broadcasts directly and also moves memory.db, so Codrift.Freshness
+      // announces it a second time a tick later. An agent writing a burst of
+      // entries would otherwise fire a query per entry, twice.
+      if (changed !== initiativeId) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => run(query, true), 250);
+    }),
+  );
+
   let timer: ReturnType<typeof setTimeout>;
   function onInput() {
     clearTimeout(timer);
@@ -51,7 +71,7 @@
       oninput={onInput}
       name="memory-search"
       aria-label="Search memory"
-      placeholder={'Search memory…  (FTS5: words, "phrases", AND / OR / NOT)'}
+      placeholder={'Ask a question, or search for words…'}
       class="w-full rounded-md border border-border bg-canvas px-3 py-1.5 text-sm text-fg outline-none focus:border-accent"
     />
   </div>

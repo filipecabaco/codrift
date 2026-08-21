@@ -30,7 +30,7 @@ defmodule Codrift.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  @cli_commands ~w(mcp initiative session memory integration update start)
+  @cli_commands ~w(mcp initiative session memory integration update start worktree prune)
 
   defp releases do
     [

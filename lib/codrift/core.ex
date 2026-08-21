@@ -16,6 +16,7 @@ defmodule Codrift.Core do
   alias Codrift.MCP.Handler
   alias Codrift.OAuth.Config, as: OAuthConfig
   alias Codrift.Web.EventRelay
+  alias Codrift.Worktree.Inventory
 
   @doc """
   Invokes a named operation with a string-keyed argument map.
@@ -472,6 +473,53 @@ defmodule Codrift.Core do
     end
   end
 
+  # ── Worktrees ───────────────────────────────────────────────────────────────
+  #
+  # Worktrees have always lived at ~/.codrift/initiatives/<id>/worktrees/<slug>,
+  # but nothing could enumerate them, so one left behind by a deleted initiative
+  # stayed on disk holding a checkout and a branch that nobody could see. These
+  # three operations are the whole loop — see what exists, clean up what nothing
+  # claims, and turn one on or off for a directory.
+
+  def call("list_worktrees", args) do
+    entries = Inventory.scan(Store.list())
+
+    filtered =
+      case Map.get(args, "initiative_id") do
+        nil -> entries
+        id -> Enum.filter(entries, &(&1.initiative_id == id))
+      end
+
+    {:ok, Enum.map(filtered, &Inventory.to_map/1)}
+  end
+
+  def call("prune_worktrees", args) do
+    # Defaults to a dry run: removing a worktree can destroy uncommitted work in
+    # it, so a caller has to ask twice. Committed work survives either way — a
+    # removed worktree keeps its branch.
+    force? = Map.get(args, "force", false) == true
+    {:ok, Inventory.prune_to_map(Inventory.prune(Store.list(), force: force?))}
+  end
+
+  def call("set_dir_worktree", %{"initiative_id" => id, "dir" => dir} = args) do
+    enabled? = Map.get(args, "enabled", true) == true
+
+    with {:ok, initiative} <- Store.get(id),
+         {:ok, entry} <- find_dir(initiative, dir),
+         {:ok, updated} <- Store.set_dir_worktree(id, entry.path, enabled?) do
+      {:ok, initiative_map(updated)}
+    else
+      {:error, :not_found} ->
+        {:error, "initiative not found: #{id}"}
+
+      {:error, :no_such_dir} ->
+        {:error, "#{dir} is not a directory of initiative #{id}"}
+
+      {:error, {:worktree_failed, reason}} ->
+        {:error, "could not create the worktree for #{dir}: #{reason}"}
+    end
+  end
+
   def call("toggle_dir_branch", %{"initiative_id" => id, "dir" => dir}) do
     case Store.toggle_dir_branch(id, dir) do
       {:ok, initiative} -> {:ok, initiative_map(initiative)}
@@ -774,9 +822,29 @@ defmodule Codrift.Core do
     end
   end
 
-  # Initiative map enriched with its context folder path, so the UI can offer
-  # the context folder as a scratch workspace and label it nicely.
-  defp initiative_map(initiative) do
+  # Stored paths are whatever the caller passed to add_dir, so match the literal
+  # string first and fall back to comparing expanded forms — an agent passing
+  # `~/code/app` should still find the directory added as an absolute path.
+  defp find_dir(initiative, dir) do
+    expanded = Path.expand(dir)
+
+    case Enum.find(initiative.dirs, &(&1.path == dir || Path.expand(&1.path) == expanded)) do
+      nil -> {:error, :no_such_dir}
+      entry -> {:ok, entry}
+    end
+  end
+
+  @doc """
+  Initiative map enriched with its context folder path, so the UI can offer
+  the context folder as a scratch workspace and label it nicely.
+
+  This is the initiative's shape at the API boundary, shared by every surface
+  that emits one: `list_initiatives` here and the lifecycle frames in
+  `Codrift.Web.EventRelay`. A frame the client patches state from has to match
+  what it originally loaded, or the patched row loses `context_path` and the
+  per-dir `git` flag.
+  """
+  def initiative_map(initiative) do
     initiative
     |> Codrift.Initiative.to_map()
     |> Map.put("context_path", Store.context_path(initiative.id))

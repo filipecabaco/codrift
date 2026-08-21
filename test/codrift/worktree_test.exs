@@ -131,6 +131,30 @@ defmodule Codrift.WorktreeTest do
       assert is_binary(branch) and branch != ""
     end
 
+    # Codrift itself writes .claude/settings.json into every worktree it creates.
+    # Counting that would make `dirty?` true from birth, and `dirty?` is the
+    # signal `codrift prune` checks before destroying uncommitted work — a
+    # warning that is always on protects nothing.
+    test "ignores the settings file Codrift writes into the worktree", %{tmp_dir: tmp_dir} do
+      repo = Path.join(tmp_dir, "repo")
+      File.mkdir_p!(repo)
+      init_git_repo(repo)
+
+      ctx = Path.join(tmp_dir, "ctx")
+      File.mkdir_p!(ctx)
+      {:ok, wt_path} = Worktree.ensure(ctx, "claude-settings", repo)
+      File.mkdir_p!(Path.join(wt_path, ".claude"))
+      File.write!(Path.join([wt_path, ".claude", "settings.json"]), ~s({"permissions":{}}))
+
+      assert %{dirty?: false} = Worktree.status(wt_path)
+
+      # Anything else the user keeps in .claude/ is still their work, and git
+      # would otherwise collapse the whole directory into one untracked entry.
+      File.write!(Path.join([wt_path, ".claude", "notes.md"]), "mine")
+
+      assert %{dirty?: true} = Worktree.status(wt_path)
+    end
+
     test "returns dirty?: true when the worktree has uncommitted changes", %{tmp_dir: tmp_dir} do
       repo = Path.join(tmp_dir, "repo")
       File.mkdir_p!(repo)

@@ -6,6 +6,28 @@ defmodule Codrift.Memory do
   `~/.codrift/initiatives/{id}/memory.db` using SQLite's built-in FTS5
   extension — no extra dependencies, no embeddings.
 
+  ## How retrieval works
+
+  Every initiative brief tells agents to search this store before starting
+  work, so the queries that arrive are questions — "does a sprite sleep while
+  an agent is working" — not keywords. Two things make that answerable:
+
+    * **Terms are OR-joined, and stopwords are dropped.** FTS5 reads a space
+      between terms as `AND`, so an eight-word question used to demand all
+      eight tokens appear in one entry. Measured over 34 hand-labelled
+      questions against two real stores, *every one* returned nothing. The
+      point of BM25 is to rank a broad match, not to filter a narrow one.
+    * **Chunks are indexed, entries are returned.** BM25 divides by document
+      length and real entries run 0.6–2.7 kB, so `Codrift.Memory.Chunker`
+      splits them and search collapses matching chunks back to their parent
+      entry, best-ranked chunk first.
+
+  `mix codrift.memory.eval` is the regression gate for both.
+
+  Terms are *not* silently turned into prefix queries: measured, that lowered
+  MRR from 0.87 to 0.85 by broadening the match set and diluting the ranking.
+  A trailing `*` a caller types is still honoured.
+
   This is a **pure module** with no supervised process. It opens and closes
   its own DB connection on every call, making it safe for use in `eval`
   context (release CLI), inside GenServers, and in tests.
@@ -34,6 +56,9 @@ defmodule Codrift.Memory do
       Codrift.Memory.stats("abc123")
   """
 
+  alias Codrift.Memory.Chunker
+  alias Codrift.Web.EventRelay
+
   @db_file "memory.db"
   @valid_types ~w(decision summary snippet file_context note)
 
@@ -42,6 +67,15 @@ defmodule Codrift.Memory do
   def db_path(initiative_id),
     do: Path.join(Codrift.Paths.initiative_dir(initiative_id), @db_file)
 
+  @doc """
+  The DB file name inside an initiative's context folder.
+
+  Exposed for `Codrift.Freshness`, which resolves the file against the base
+  directory its store reports rather than the global one.
+  """
+  @spec db_file() :: String.t()
+  def db_file, do: @db_file
+
   @doc "Returns the list of valid chunk type strings."
   @spec valid_types() :: [String.t()]
   def valid_types, do: @valid_types
@@ -49,13 +83,15 @@ defmodule Codrift.Memory do
   @doc """
   Full-text searches all memory entries for an initiative.
 
-  The `query` string uses SQLite FTS5 MATCH syntax — plain words, phrases in
-  quotes, and `AND`/`OR`/`NOT` operators are supported.
+  Plain words are OR-joined and English stopwords dropped, so a whole question
+  works as a query. Quoted phrases match as phrases, explicit `AND`/`OR`/`NOT`
+  are preserved, and a trailing `*` makes a term a prefix.
 
-  Returns up to 20 results ordered by relevance (best match first).
-  `rank` is a negative BM25 score; closer to 0 means more relevant.
+  Returns up to 20 entries ordered by relevance (best match first).
+  `rank` is a negative BM25 score; closer to 0 means more relevant — it is the
+  rank of the entry's best-matching chunk, so callers can threshold on it.
 
-      iex> Codrift.Memory.search("init1", "JWT authentication")
+      iex> Codrift.Memory.search("init1", "why did we pick JWT over sessions")
       [%{id: 3, chunk_type: "decision", content: "Use JWT, not sessions",
          source: "agent-abc", rank: -1.5}]
   """
@@ -76,60 +112,150 @@ defmodule Codrift.Memory do
 
       match ->
         with_db(initiative_id, fn db ->
-          {:ok, stmt} =
-            Exqlite.Sqlite3.prepare(db, """
-            SELECT rowid, chunk_type, content, source, rank
-            FROM memory
-            WHERE memory MATCH ?1
-            ORDER BY rank
-            LIMIT 20
-            """)
+          backfill_chunks(db)
 
-          :ok = Exqlite.Sqlite3.bind(stmt, [match])
-          rows = collect_rows(db, stmt, &search_row_to_map/1, [])
-          :ok = Exqlite.Sqlite3.release(db, stmt)
-          rows
+          db
+          |> ranked_parents(match)
+          |> fetch_entries(db)
         end)
     end
   end
 
+  # Chunks are ranked, entries are returned. Over-fetching before the dedupe is
+  # what makes that honest: several chunks of one long entry can outrank every
+  # chunk of the next entry, so taking 20 chunks could collapse to two results.
+  @chunk_fetch 200
+  @result_limit 20
+
+  defp ranked_parents(db, match) do
+    db
+    |> query(
+      """
+      SELECT parent_id, rank FROM memory_chunks
+      WHERE memory_chunks MATCH ?1 ORDER BY rank LIMIT #{@chunk_fetch}
+      """,
+      [match],
+      fn [parent_id, rank] -> {parent_id, rank} end
+    )
+    # Ordered by rank already, so the first chunk seen for an entry is its best.
+    |> Enum.uniq_by(&elem(&1, 0))
+    |> Enum.take(@result_limit)
+  end
+
+  defp fetch_entries([], _db), do: []
+
+  defp fetch_entries(ranked, db) do
+    ids = Enum.map(ranked, &elem(&1, 0))
+    placeholders = Enum.map_join(1..length(ids), ",", &"?#{&1}")
+
+    rows =
+      query(
+        db,
+        "SELECT rowid, chunk_type, content, source FROM memory WHERE rowid IN (#{placeholders})",
+        ids,
+        &row_to_map/1
+      )
+
+    by_id = Map.new(rows, &{&1.id, &1})
+
+    # Re-ordered by chunk rank: `IN` returns rows in rowid order, which is
+    # insertion order, which is not relevance.
+    for {id, rank} <- ranked, entry = by_id[id], do: Map.put(entry, :rank, rank)
+  end
+
   # FTS5 treats `(`, `)`, `*`, `:` and `"` as operators, so a literal query like
-  # `greet()` is a syntax error. Quote bare terms; keep boolean operators that
-  # sit between terms; preserve quoted phrases.
+  # `greet()` is a syntax error. Quoting every bare term is what makes such a
+  # query safe, and it stays — the bug was never the quoting, it was joining the
+  # quoted terms with a space, which FTS5 reads as AND.
   @fts_operators ~w(AND OR NOT)
 
+  # Words that carry no retrieval signal but, under an implicit AND, each
+  # demanded a row contain them: "does a sprite sleep while an agent is working"
+  # has four content words in nine.
+  @stopwords MapSet.new(~w(
+    a an the and or but if is are was were be been being do does did doing
+    have has had having i we you he she it its they them our your their
+    this that these those to of in on at by for with about into over
+    after before while when where why how what which who whom whose
+    there here not no so than then too very can could should would will
+    shall may might must am as from up down out off again further once
+    any all some own same now get got make made use used using
+  ))
+
   defp to_match_expr(query) when is_binary(query) do
-    ~r/"([^"]*)"|(\S+)/
-    |> Regex.scan(query)
-    |> Enum.map(&classify/1)
-    |> Enum.reject(&(&1 == :skip))
-    |> drop_edge_operators()
-    |> Enum.map_join(" ", fn
-      {:op, op} -> op
-      {:term, term} -> ~s("#{String.replace(term, ~s("), ~s(""))}")
-    end)
+    tokens = tokens(query)
+    # A question made entirely of stopwords means them literally — "how to" is a
+    # real thing to look for, and answering it with nothing is the failure this
+    # whole path exists to fix.
+    kept = with [] <- drop_stopwords(tokens), do: tokens
+
+    kept |> sanitize_operators() |> join()
   end
 
   defp to_match_expr(_), do: ""
 
-  # An unmatched capture group comes back as "".
-  defp classify([_, phrase]), do: term_or_skip(phrase)
+  defp tokens(query) do
+    ~r/"([^"]*)"|(\S+)/
+    |> Regex.scan(query)
+    |> Enum.map(&classify/1)
+    |> Enum.reject(&(&1 == :skip))
+  end
+
+  # An unmatched capture group comes back as "". Quoted input stays a `:phrase`
+  # and bare input a `:term`, because the two are treated differently from here:
+  # only a bare term is a stopword candidate, and only a bare term can carry a
+  # prefix `*`.
+  defp classify([_, phrase]), do: phrase_or_skip(phrase)
 
   defp classify([_, "", token]),
     do: if(token in @fts_operators, do: {:op, token}, else: {:term, token})
 
-  defp classify([_, phrase, _]), do: term_or_skip(phrase)
+  defp classify([_, phrase, _]), do: phrase_or_skip(phrase)
 
-  defp term_or_skip(text), do: if(String.trim(text) == "", do: :skip, else: {:term, text})
+  defp phrase_or_skip(text), do: if(String.trim(text) == "", do: :skip, else: {:phrase, text})
 
-  # `foo AND` / `OR foo` are syntax errors.
-  defp drop_edge_operators(tokens) do
+  defp drop_stopwords(tokens) do
+    Enum.reject(tokens, fn
+      {:term, t} -> MapSet.member?(@stopwords, String.downcase(t))
+      _ -> false
+    end)
+  end
+
+  # Every position FTS5 cannot parse an operator in: leading, trailing, or
+  # adjacent to another. Dropping a stopword between two operators produces the
+  # last of those, so all three are one pass.
+  defp sanitize_operators(tokens) do
     tokens
-    |> Enum.drop_while(&match?({:op, _}, &1))
-    |> Enum.reverse()
+    |> Enum.reduce([], fn
+      {:op, _}, [] -> []
+      {:op, _}, [{:op, _} | _] = acc -> acc
+      token, acc -> [token | acc]
+    end)
     |> Enum.drop_while(&match?({:op, _}, &1))
     |> Enum.reverse()
   end
+
+  # OR between terms the caller merely listed; operators they typed themselves
+  # are left to mean what they say.
+  defp join([]), do: ""
+  defp join([token]), do: render(token)
+  defp join([{:op, op} | rest]), do: op <> " " <> join(rest)
+  defp join([token, {:op, _} = op | rest]), do: render(token) <> " " <> join([op | rest])
+  defp join([token | rest]), do: render(token) <> " OR " <> join(rest)
+
+  defp render({:phrase, text}), do: quoted(text)
+
+  defp render({:term, text}) do
+    # `"foo*"` is not a prefix query — FTS5 tokenizes the `*` away inside the
+    # quotes. Outside them it is, so a trailing `*` has to survive the quoting
+    # rather than be swallowed by it.
+    case String.split_at(text, -1) do
+      {stem, "*"} when stem != "" -> quoted(stem) <> "*"
+      _ -> quoted(text)
+    end
+  end
+
+  defp quoted(text), do: ~s("#{String.replace(text, ~s("), ~s(""))}")
 
   @doc """
   Stores a new memory entry for an initiative.
@@ -143,18 +269,21 @@ defmodule Codrift.Memory do
   """
   @spec add(String.t(), String.t(), String.t(), String.t()) :: {:ok, integer()}
   def add(initiative_id, chunk_type, content, source \\ "user") do
-    with_db(initiative_id, fn db ->
-      {:ok, stmt} =
-        Exqlite.Sqlite3.prepare(db, """
-        INSERT INTO memory (chunk_type, content, source) VALUES (?1, ?2, ?3)
-        """)
+    result =
+      with_db(initiative_id, fn db ->
+        exec(db, "INSERT INTO memory (chunk_type, content, source) VALUES (?1, ?2, ?3)", [
+          chunk_type,
+          content,
+          source
+        ])
 
-      :ok = Exqlite.Sqlite3.bind(stmt, [chunk_type, content, source])
-      :done = Exqlite.Sqlite3.step(db, stmt)
-      :ok = Exqlite.Sqlite3.release(db, stmt)
+        rowid = last_insert_rowid(db)
+        index_chunks(db, rowid, content)
+        {:ok, rowid}
+      end)
 
-      {:ok, last_insert_rowid(db)}
-    end)
+    notify_changed(initiative_id)
+    result
   end
 
   @doc """
@@ -176,15 +305,16 @@ defmodule Codrift.Memory do
       :ok = Exqlite.Sqlite3.release(db, exists_stmt)
 
       if found do
-        {:ok, del_stmt} = Exqlite.Sqlite3.prepare(db, "DELETE FROM memory WHERE rowid = ?1")
-
-        :ok = Exqlite.Sqlite3.bind(del_stmt, [rowid])
-        :done = Exqlite.Sqlite3.step(db, del_stmt)
-        :ok = Exqlite.Sqlite3.release(db, del_stmt)
+        exec(db, "DELETE FROM memory WHERE rowid = ?1", [rowid])
+        delete_chunks(db, rowid)
         :ok
       else
         {:error, :not_found}
       end
+    end)
+    |> tap(fn
+      :ok -> notify_changed(initiative_id)
+      {:error, :not_found} -> :ok
     end)
   end
 
@@ -257,6 +387,20 @@ defmodule Codrift.Memory do
 
   # ── Private helpers ──────────────────────────────────────────────────────────
 
+  # Tells open windows the store moved, so an entry an agent just wrote shows up
+  # without a reload. Only *that* it changed: the memory view owns a query string
+  # no event could reproduce, so the only correct refresh is it re-running its
+  # own query.
+  #
+  # Keeping this module pure and process-free is the constraint everything else
+  # here bends around, and this respects it — `broadcast/1` is a `Registry`
+  # dispatch that no-ops when there is no registry, which is exactly the truth in
+  # `eval` context: nobody is watching. A CLI write reaches open windows through
+  # `Codrift.Freshness` instead.
+  defp notify_changed(initiative_id) do
+    EventRelay.broadcast({:memory_changed, initiative_id})
+  end
+
   defp with_db(initiative_id, fun) do
     path = db_path(initiative_id)
     path |> Path.dirname() |> File.mkdir_p!()
@@ -280,21 +424,56 @@ defmodule Codrift.Memory do
         tokenize = 'porter unicode61'
       )
       """)
+
+    # Derived from `memory`, never authoritative: `memory` remains the store of
+    # record and is not migrated, so an existing hand-curated database gains an
+    # index and risks nothing. `parent_id` is UNINDEXED because it is a join key,
+    # not something to full-text search.
+    :ok =
+      Exqlite.Sqlite3.execute(db, """
+      CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks USING fts5(
+        content,
+        parent_id UNINDEXED,
+        tokenize = 'porter unicode61'
+      )
+      """)
   end
 
-  defp last_insert_rowid(db) do
-    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, "SELECT last_insert_rowid()")
-    {:row, [rowid]} = Exqlite.Sqlite3.step(db, stmt)
-    :ok = Exqlite.Sqlite3.release(db, stmt)
-    rowid
+  defp index_chunks(db, rowid, content) do
+    for chunk <- Chunker.split(content) do
+      exec(db, "INSERT INTO memory_chunks (content, parent_id) VALUES (?1, ?2)", [chunk, rowid])
+    end
+
+    :ok
   end
 
-  defp count_all(db) do
-    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, "SELECT COUNT(*) FROM memory")
-    {:row, [count]} = Exqlite.Sqlite3.step(db, stmt)
-    :ok = Exqlite.Sqlite3.release(db, stmt)
-    count
+  defp delete_chunks(db, rowid) do
+    exec(db, "DELETE FROM memory_chunks WHERE CAST(parent_id AS INTEGER) = ?1", [rowid])
   end
+
+  # Indexes whatever is in `memory` but not yet in `memory_chunks`.
+  #
+  # Chunking arrived after entries did, and `codrift memory add` from an older
+  # binary can still write an unchunked row, so the read path repairs rather
+  # than assuming. It is idempotent and cannot lose anything: chunks are derived
+  # data, rebuilt from the entry they came from.
+  #
+  defp backfill_chunks(db) do
+    db
+    |> query(
+      """
+      SELECT rowid, content FROM memory
+      WHERE rowid NOT IN (SELECT CAST(parent_id AS INTEGER) FROM memory_chunks)
+      """,
+      [],
+      & &1
+    )
+    |> Enum.each(fn [rowid, content] -> index_chunks(db, rowid, content) end)
+  end
+
+  defp last_insert_rowid(db), do: scalar(db, "SELECT last_insert_rowid()")
+
+  defp count_all(db), do: scalar(db, "SELECT COUNT(*) FROM memory")
 
   defp count_by_type(db) do
     {:ok, stmt} =
@@ -305,6 +484,30 @@ defmodule Codrift.Memory do
     rows = collect_rows(db, stmt, fn [type, count] -> {type, count} end, [])
     :ok = Exqlite.Sqlite3.release(db, stmt)
     Map.new(rows)
+  end
+
+  # Every read in this module was the same four lines around collect_rows/4.
+  defp query(db, sql, params, mapper) do
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, sql)
+    :ok = Exqlite.Sqlite3.bind(stmt, params)
+    rows = collect_rows(db, stmt, mapper, [])
+    :ok = Exqlite.Sqlite3.release(db, stmt)
+    rows
+  end
+
+  defp scalar(db, sql) do
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, sql)
+    {:row, [value]} = Exqlite.Sqlite3.step(db, stmt)
+    :ok = Exqlite.Sqlite3.release(db, stmt)
+    value
+  end
+
+  defp exec(db, sql, params) do
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, sql)
+    :ok = Exqlite.Sqlite3.bind(stmt, params)
+    :done = Exqlite.Sqlite3.step(db, stmt)
+    :ok = Exqlite.Sqlite3.release(db, stmt)
+    :ok
   end
 
   defp collect_rows(db, stmt, mapper, acc) do
@@ -320,10 +523,6 @@ defmodule Codrift.Memory do
         Logger.warning("memory query failed: #{inspect(reason)}")
         Enum.reverse(acc)
     end
-  end
-
-  defp search_row_to_map([rowid, chunk_type, content, source, rank]) do
-    %{id: rowid, chunk_type: chunk_type, content: content, source: source, rank: rank}
   end
 
   defp row_to_map([rowid, chunk_type, content, source]) do

@@ -20,17 +20,29 @@ memory_recent { initiative_id, limit: 20 }
 memory_list   { initiative_id, chunk_type: "decision" }
 ```
 
-`memory_search` is FTS5 and returns up to 20 results ranked by relevance:
+**Ask the question you actually have.** Terms are OR-joined and stopwords
+dropped, so a whole sentence works as a query and you do not have to guess which
+keywords the author used:
+
+```
+memory_search { initiative_id, query: "does a sprite sleep while an agent is working" }
+```
+
+Returns up to 20 entries ranked by relevance, best first. `rank` is a negative
+BM25 score — closer to zero is a better match — so you can stop reading once it
+falls away.
 
 | Query | Matches |
 |---|---|
-| `auth token` | either word |
+| `auth token` | either word, entries with both ranked higher |
 | `"refresh token"` | the exact phrase |
 | `auth AND jwt` | both |
 | `auth NOT oauth` | the first without the second |
+| `notar*` | any word starting with `notar` |
 
-Search two or three different phrasings before concluding nothing is recorded —
-entries are only findable by the words their author happened to use.
+An empty result now means the store really has nothing, so take it at face value
+rather than retrying synonyms. One caveat if you use `*`: terms are stemmed, so
+`notariz*` finds nothing while `notar*` works — prefer a shorter prefix.
 
 ## Write back what the next agent would need
 
@@ -55,8 +67,10 @@ The parameter is `chunk_type`, not `type`. Valid values:
 
 ## What makes an entry useful
 
-Entries are retrieved by keyword search, so **lead with the terms someone would
-search for**, and keep each entry to one self-contained claim.
+Entries are chunked before indexing and returned whole, so length is not held
+against you — write the rationale out rather than compressing it away. Still
+**lead with the terms someone would search for**, and keep each entry to one
+self-contained claim.
 
 Good:
 
