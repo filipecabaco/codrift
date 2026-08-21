@@ -111,4 +111,97 @@ defmodule Codrift.CLI.MCPTest do
       assert File.read!(path) == first
     end
   end
+
+  # A launch profile that sets CLAUDE_CONFIG_DIR gives its agents their own
+  # config directory, which a plain `codrift mcp install` never writes to. These
+  # cover the three decisions that make `--profile` register in the right place:
+  # which profiles were asked for, where that profile's config lives, and whether
+  # the server is already there.
+  describe "profile_selection/1" do
+    setup do
+      path = Path.join(Codrift.Paths.data_dir(), "settings.json")
+      File.mkdir_p!(Path.dirname(path))
+
+      File.write!(
+        path,
+        JSON.encode!(%{
+          "profiles" => %{
+            "work" => %{"adapter" => "claude"},
+            "personal" => %{"adapter" => "claude"}
+          }
+        })
+      )
+
+      on_exit(fn -> File.rm_rf(path) end)
+      :ok
+    end
+
+    test "no flag means the default config directory" do
+      assert MCP.profile_selection([]) == :default
+      assert MCP.profile_selection(["--port=1234"]) == :default
+    end
+
+    test "--profile= selects exactly that one, without consulting settings" do
+      assert MCP.profile_selection(["--profile=work"]) == {:profiles, ["work"]}
+    end
+
+    test "--all-profiles expands to every configured profile, sorted" do
+      assert MCP.profile_selection(["--all-profiles"]) == {:profiles, ["personal", "work"]}
+    end
+
+    test "--all-profiles wins over --profile= when both are passed" do
+      assert MCP.profile_selection(["--profile=work", "--all-profiles"]) ==
+               {:profiles, ["personal", "work"]}
+    end
+  end
+
+  describe "profile_config_dir/1" do
+    test "expands the ~ that settings.json stores verbatim" do
+      profile = %{"env" => %{"CLAUDE_CONFIG_DIR" => "~/.claude-work"}}
+
+      dir = MCP.profile_config_dir(profile)
+
+      assert dir == Path.expand("~/.claude-work")
+      refute String.contains?(dir, "~")
+    end
+
+    # No directory of its own means the profile shares the default config, which
+    # `codrift mcp install` already registered. Reporting that beats registering
+    # the same file twice and calling it a fresh success.
+    test "is nil when the profile sets no config directory" do
+      assert MCP.profile_config_dir(%{"adapter" => "claude"}) == nil
+      assert MCP.profile_config_dir(%{"env" => %{}}) == nil
+      assert MCP.profile_config_dir(%{"env" => %{"OTHER" => "x"}}) == nil
+    end
+
+    test "treats an empty value as absent rather than as the current directory" do
+      assert MCP.profile_config_dir(%{"env" => %{"CLAUDE_CONFIG_DIR" => ""}}) == nil
+    end
+  end
+
+  describe "registered?/1" do
+    test "matches the server on its own listing line" do
+      assert MCP.registered?("""
+             other: https://example.com/mcp (HTTP) - connected
+             codrift: http://localhost:43117/mcp/sse (SSE) - connected
+             """)
+    end
+
+    test "tolerates the indentation and health suffixes claude prints" do
+      assert MCP.registered?("Checking MCP server health...\n\n  codrift: http://x - ok\n")
+    end
+
+    test "is false when nothing is registered" do
+      refute MCP.registered?("")
+      refute MCP.registered?("other: https://example.com/mcp (HTTP) - connected\n")
+    end
+
+    # The reason this is anchored rather than a substring search: another server
+    # whose name merely contains ours, or a URL mentioning it, is not this
+    # registration and must not be reported as one.
+    test "does not match a different server that merely mentions the name" do
+      refute MCP.registered?("codrift-staging: http://localhost:1/mcp/sse - connected\n")
+      refute MCP.registered?("notes: https://example.com/codrift: - connected\n")
+    end
+  end
 end

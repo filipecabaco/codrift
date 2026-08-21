@@ -33,22 +33,14 @@ defmodule Codrift.CLI.Pane do
   @doc "Dispatches pane CLI subcommands from argv."
   @spec run([String.t()]) :: :ok
   def run(["terminal", initiative_id | rest]) do
-    args =
-      %{"initiative_id" => initiative_id}
-      |> put_flag(rest, "dir")
-      |> put_flag(rest, "command")
-      |> put_flag(rest, "reason")
-
-    case rpc("open_terminal", args) do
+    case rpc("open_terminal", terminal_args(initiative_id, rest)) do
       {:ok, result} -> print_json(result)
       {:error, reason} -> fail(reason)
     end
   end
 
   def run(["focus", agent_id | rest]) do
-    args = put_flag(%{"agent_id" => agent_id}, rest, "reason")
-
-    case rpc("focus_agent", args) do
+    case rpc("focus_agent", focus_args(agent_id, rest)) do
       {:ok, result} -> print_json(result)
       {:error, reason} -> fail(reason)
     end
@@ -73,6 +65,21 @@ defmodule Codrift.CLI.Pane do
     ran. The desktop app must be running.
     """)
   end
+
+  # ── Argument parsing ─────────────────────────────────────────────────────────
+
+  @doc false
+  @spec terminal_args(String.t(), [String.t()]) :: map()
+  def terminal_args(initiative_id, argv) do
+    %{"initiative_id" => initiative_id}
+    |> put_flag(argv, "dir")
+    |> put_flag(argv, "command")
+    |> put_flag(argv, "reason")
+  end
+
+  @doc false
+  @spec focus_args(String.t(), [String.t()]) :: map()
+  def focus_args(agent_id, argv), do: put_flag(%{"agent_id" => agent_id}, argv, "reason")
 
   # ── Helpers ──────────────────────────────────────────────────────────────────
 

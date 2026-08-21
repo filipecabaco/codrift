@@ -214,7 +214,9 @@ defmodule Codrift.CLI.MCP do
   # Anchored to the start of a listing line. A bare substring search would count
   # any server whose name merely contains "codrift" — including one pointing at
   # something else entirely — as this one being installed.
-  defp registered?(output) do
+  @doc false
+  @spec registered?(String.t()) :: boolean()
+  def registered?(output) do
     output
     |> String.split("\n")
     |> Enum.any?(&String.starts_with?(String.trim_leading(&1), @server_name <> ":"))
@@ -225,7 +227,9 @@ defmodule Codrift.CLI.MCP do
 
   # ── Profile selection ────────────────────────────────────────────────────────
 
-  defp profile_selection(args) do
+  @doc false
+  @spec profile_selection([String.t()]) :: :default | {:profiles, [String.t()]}
+  def profile_selection(args) do
     cond do
       "--all-profiles" in args ->
         {:profiles, Settings.profiles() |> Map.keys() |> Enum.sort()}
@@ -240,7 +244,9 @@ defmodule Codrift.CLI.MCP do
 
   # `~` is stored verbatim in settings.json so the file stays portable; it is
   # expanded at launch, and has to be expanded here for the same reason.
-  defp profile_config_dir(profile) do
+  @doc false
+  @spec profile_config_dir(map()) :: String.t() | nil
+  def profile_config_dir(profile) do
     case profile |> Map.get("env", %{}) |> Map.get("CLAUDE_CONFIG_DIR") do
       dir when is_binary(dir) and dir != "" -> Path.expand(dir)
       _ -> nil
