@@ -2,7 +2,7 @@
 
 **Stack:** Elixir · Francis · ex_tauri · Svelte · xterm.js · Git · SQLite (Exqlite)
 
-**Docs:** [Architecture](docs/architecture.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md) · [Keyboard](docs/keyboard.md) · [Tree View](docs/tree-view.md) · [Diff Mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md) · [Agent profiles](docs/agent-profiles.md)
+**Docs:** [Architecture](docs/architecture.md) · [Modules](docs/modules.md) · [Decisions](docs/decisions.md) · [Keyboard](docs/keyboard.md) · [Tree View](docs/tree-view.md) · [Diff Mode](docs/diff-mode.md) · [Worktrees](docs/worktrees.md) · [Memory](docs/memory.md) · [Integrations](docs/integrations.md) · [Agent profiles](docs/agent-profiles.md) · [Hosting](docs/hosting.md)
 
 ---
 
