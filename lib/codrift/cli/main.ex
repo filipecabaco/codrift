@@ -6,6 +6,9 @@ defmodule Codrift.CLI.Main do
   Also serves as the `main/1` entry point if the project is ever built as an
   escript.
 
+  Every command comes through `run/1`, which is also where the standard-io
+  encoding is forced to `:unicode` — see `force_unicode_io/0`.
+
   ## Usage
 
       codrift initiative <subcommand>
@@ -31,20 +34,49 @@ defmodule Codrift.CLI.Main do
   def main(args), do: run(args)
 
   @spec run([String.t()]) :: :ok
-  def run(["initiative" | rest]), do: Initiative.run(rest)
-  def run(["integration" | rest]), do: Integration.run(rest)
-  def run(["session" | rest]), do: Session.run(rest)
-  def run(["memory" | rest]), do: Memory.run(rest)
-  def run(["mcp" | rest]), do: MCP.run(rest)
-  def run(["pane" | rest]), do: Pane.run(rest)
-  def run(["update" | rest]), do: Update.run(rest)
-  def run(["start" | rest]), do: Start.run(rest)
-  def run(["worktree" | rest]), do: Worktree.run(rest)
+  def run(args) do
+    force_unicode_io()
+    dispatch(args)
+  end
+
+  # The BEAM takes its standard-io encoding from the caller's locale. With LANG
+  # and LC_ALL unset it settles on latin1, and writing a UTF-8 binary to a
+  # latin1 device mangles every non-ASCII codepoint in two different ways:
+  # above U+00FF into Erlang's literal `\x{2014}` notation, which is not a
+  # legal JSON escape and so breaks every agent parsing `codrift memory ...`;
+  # and U+0080..U+00FF into a raw latin1 byte, which is not valid UTF-8 at all
+  # (an accented name in a memory entry is enough). Both the JSON path and the
+  # human-readable one go through this device, and so does `fail/1` on stderr.
+  #
+  # Forcing the encoding here makes correct output the default rather than
+  # something the caller has to arrange a locale for, and it covers every
+  # command because every command is dispatched from `run/1`. Setting the
+  # locale in the Burrito launcher would fix only that one channel; writing
+  # bytes from `print_json/1` would fix only the JSON half.
+  #
+  # `:standard_io` resolves to the calling process's group leader, which under
+  # `ExUnit.CaptureIO` is a StringIO that may refuse `setopts` — the return is
+  # discarded so a test never fails on it.
+  defp force_unicode_io do
+    _ = :io.setopts(:standard_io, encoding: :unicode)
+    _ = :io.setopts(:standard_error, encoding: :unicode)
+    :ok
+  end
+
+  defp dispatch(["initiative" | rest]), do: Initiative.run(rest)
+  defp dispatch(["integration" | rest]), do: Integration.run(rest)
+  defp dispatch(["session" | rest]), do: Session.run(rest)
+  defp dispatch(["memory" | rest]), do: Memory.run(rest)
+  defp dispatch(["mcp" | rest]), do: MCP.run(rest)
+  defp dispatch(["pane" | rest]), do: Pane.run(rest)
+  defp dispatch(["update" | rest]), do: Update.run(rest)
+  defp dispatch(["start" | rest]), do: Start.run(rest)
+  defp dispatch(["worktree" | rest]), do: Worktree.run(rest)
   # Top-level rather than `worktree prune`: cleaning up is the verb people reach
   # for, and it is the one worktree operation worth typing without a noun.
-  def run(["prune" | rest]), do: Worktree.run(["prune" | rest])
+  defp dispatch(["prune" | rest]), do: Worktree.run(["prune" | rest])
 
-  def run(_) do
+  defp dispatch(_) do
     IO.puts("""
     Usage:
       codrift start                   Launch the Codrift desktop app
