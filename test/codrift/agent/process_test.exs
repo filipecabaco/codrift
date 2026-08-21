@@ -205,6 +205,78 @@ defmodule Codrift.AgentProcessTest do
     end
   end
 
+  # The output buffer is the hottest path in Codrift — a full-screen TUI emits a
+  # chunk per repaint — and it is also the one place an idle agent can quietly
+  # accumulate memory for the rest of the day. Both caps exist for that: a count
+  # so the queue stays cheap, and a byte ceiling because "a chunk" is whatever
+  # the process happened to flush, which leaves the count alone saying nothing
+  # about actual memory.
+  describe "output buffer limits" do
+    @count_limit 1_000
+    @byte_limit 1_048_576
+
+    defp drain_until(marker, timeout \\ 15_000) do
+      receive do
+        {:agent_output, _id, data} ->
+          if String.contains?(data, marker), do: :ok, else: drain_until(marker, timeout)
+      after
+        timeout -> flunk("never saw #{marker} in the agent's output")
+      end
+    end
+
+    defp flood(pid) do
+      :ok = AgentProcess.subscribe(pid)
+      AgentProcess.send_input(pid, "OLDEST-MARKER")
+
+      # ~1.6 MB, comfortably past the byte cap.
+      filler = String.duplicate("x", 4_000)
+      for i <- 1..400, do: AgentProcess.send_input(pid, "line#{i}-#{filler}")
+
+      AgentProcess.send_input(pid, "NEWEST-MARKER")
+      drain_until("NEWEST-MARKER")
+      AgentProcess.recent_output(pid, 1_000_000)
+    end
+
+    test "holds to both the count and the byte ceiling" do
+      out = flood(start_agent())
+
+      assert length(out) <= @count_limit
+      assert out |> Enum.map(&byte_size/1) |> Enum.sum() <= @byte_limit
+    end
+
+    test "evicts the oldest output and keeps the newest" do
+      joined = start_agent() |> flood() |> Enum.join()
+
+      refute String.contains?(joined, "OLDEST-MARKER")
+      assert String.contains?(joined, "NEWEST-MARKER")
+    end
+
+    test "eviction preserves chronological order" do
+      joined = start_agent() |> flood() |> Enum.join()
+
+      numbers =
+        ~r/line(\d+)-/
+        |> Regex.scan(joined)
+        |> Enum.map(fn [_, n] -> String.to_integer(n) end)
+
+      refute Enum.empty?(numbers)
+      assert numbers == Enum.sort(numbers)
+    end
+
+    test "a quiet agent keeps everything it produced" do
+      pid = start_agent()
+      :ok = AgentProcess.subscribe(pid)
+
+      AgentProcess.send_input(pid, "alpha")
+      AgentProcess.send_input(pid, "omega")
+      drain_until("omega")
+
+      joined = pid |> AgentProcess.recent_output(1_000_000) |> Enum.join()
+      assert String.contains?(joined, "alpha")
+      assert String.contains?(joined, "omega")
+    end
+  end
+
   # `env` writes its whole environment in one go, but it can still arrive in
   # several chunks; drain before asserting on absence.
   defp collect_output(pid) do

@@ -8,6 +8,9 @@ defmodule Codrift.CLI.MCP do
   ## Usage
 
       codrift mcp install [--port=43117]
+      codrift mcp install --profile=<name>
+      codrift mcp install --all-profiles
+      codrift mcp status  [--profile=<name> | --all-profiles]
 
   Registers the Codrift SSE endpoint with every detected AI CLI:
 
@@ -21,7 +24,27 @@ defmodule Codrift.CLI.MCP do
   Editing someone else's config file is destructive, so every write pretty-
   prints (a minified one-liner is not a config a human can keep maintaining),
   leaves a `.bak` sibling, and warns when a JSONC round-trip drops comments.
+
+  ## Launch profiles
+
+  A profile that sets `CLAUDE_CONFIG_DIR` gives its agents a *different* config
+  directory, and `claude mcp add --scope user` writes to whichever one is in the
+  environment when it runs. So a plain `codrift mcp install` registers Codrift
+  for the default config and for nothing else: agents launched under that
+  profile start up with no Codrift tools at all, which reads as "the MCP server
+  is broken" rather than "it was never installed here".
+
+  `--profile=<name>` re-runs the registration with that profile's environment,
+  and `--all-profiles` does every profile in `settings.json`. Both are additive
+  — the default registration is untouched — so the usual sequence is:
+
+      codrift mcp install
+      codrift mcp install --all-profiles
+
+  `codrift mcp status --all-profiles` says which of them actually took.
   """
+
+  alias Codrift.Config.Settings
 
   @server_name "codrift"
   @default_port 43_117
@@ -29,13 +52,22 @@ defmodule Codrift.CLI.MCP do
   @doc "Dispatches MCP CLI subcommands from argv."
   @spec run([String.t()]) :: :ok
   def run(["install" | args]), do: install(args)
+  def run(["status" | args]), do: status(args)
 
   def run(_) do
     IO.puts("""
     Usage:
-      codrift mcp install [--port=<port>]
+      codrift mcp install [--port=<port>]     Register with every detected AI CLI
+      codrift mcp install --profile=<name>    Register for one launch profile
+      codrift mcp install --all-profiles      Register for every launch profile
+      codrift mcp status [--all-profiles]     Report what is registered where
 
-    Registers the Codrift MCP server with all detected AI CLIs.
+    A launch profile that sets CLAUDE_CONFIG_DIR has its own config directory,
+    which a plain install never touches. Agents started under it would come up
+    with no Codrift tools, so install for the default AND for the profiles:
+
+      codrift mcp install
+      codrift mcp install --all-profiles
     """)
   end
 
@@ -48,6 +80,14 @@ defmodule Codrift.CLI.MCP do
     # Codrift.Plugs.LocalGuard); registrations embed the stable local token.
     token = Codrift.AuthToken.fetch()
 
+    case profile_selection(args) do
+      :default -> install_default(sse_url, token)
+      {:profiles, []} -> IO.puts("No launch profiles configured in settings.json.")
+      {:profiles, names} -> Enum.each(names, &install_for_profile(&1, sse_url, token))
+    end
+  end
+
+  defp install_default(sse_url, token) do
     results = [
       install_claude(sse_url, token),
       install_gemini(sse_url, token),
@@ -69,23 +109,166 @@ defmodule Codrift.CLI.MCP do
       header on requests.
       """)
     end
+
+    if Settings.profiles() != %{} do
+      IO.puts("""
+
+      Launch profiles are configured. Any that set CLAUDE_CONFIG_DIR keep their
+      own config directory, which the registration above did not touch:
+
+          codrift mcp install --all-profiles
+      """)
+    end
+  end
+
+  # Re-runs the Claude Code registration inside one profile's environment.
+  #
+  # Only `CLAUDE_CONFIG_DIR` is honoured, because it is the only redirection
+  # Codrift itself applies when launching a profile (see
+  # `Codrift.AgentProcess.profile_config_dir/1`). A profile without it shares the
+  # default config, so the plain install already covered it — saying so is more
+  # useful than re-registering into the same file and calling it a success.
+  defp install_for_profile(name, sse_url, token) do
+    case Settings.profile(name) do
+      {:error, :not_found} ->
+        IO.puts("Profile #{name}: not found in settings.json - skipping")
+        :skip
+
+      {:ok, profile} ->
+        case profile_config_dir(profile) do
+          nil ->
+            IO.puts(
+              "Profile #{name}: no CLAUDE_CONFIG_DIR - shares the default config, " <>
+                "already registered by `codrift mcp install`"
+            )
+
+            :skip
+
+          dir ->
+            IO.puts("Profile #{name}: registering in #{short(dir)}...")
+            # `claude mcp add` writes into the directory; if the profile has never
+            # been launched it does not exist yet, and the add would fail on a
+            # path rather than on anything the user could act on.
+            File.mkdir_p!(dir)
+            install_claude(sse_url, token, [{"CLAUDE_CONFIG_DIR", dir}])
+        end
+    end
+  end
+
+  # ── Status ───────────────────────────────────────────────────────────────────
+
+  defp status(args) do
+    case profile_selection(args) do
+      :default ->
+        report_status("default", [])
+
+      {:profiles, []} ->
+        IO.puts("No launch profiles configured in settings.json.")
+
+      {:profiles, names} ->
+        report_status("default", [])
+        Enum.each(names, &report_profile_status/1)
+    end
+  end
+
+  defp report_profile_status(name) do
+    case Settings.profile(name) do
+      {:error, :not_found} -> IO.puts("#{name}: not found in settings.json")
+      {:ok, profile} -> report_profile_dir(name, profile_config_dir(profile))
+    end
+  end
+
+  # A profile with no directory of its own was covered by the default line
+  # already printed above; saying which is more useful than repeating it.
+  defp report_profile_dir(name, nil),
+    do: IO.puts("#{name}: shares the default config (above)")
+
+  defp report_profile_dir(name, dir),
+    do: report_status(name, [{"CLAUDE_CONFIG_DIR", dir}])
+
+  # `claude mcp list` rather than `mcp get`: the output format of `get` has moved
+  # between releases, but the name appearing in the list has not.
+  defp report_status(label, env) do
+    case System.find_executable("claude") do
+      nil ->
+        IO.puts("#{label}: claude not found in PATH")
+
+      _bin ->
+        report_listing(
+          label,
+          System.cmd("claude", ["mcp", "list"], env: env, stderr_to_stdout: true)
+        )
+    end
+  end
+
+  defp report_listing(label, {output, 0}) do
+    if registered?(output),
+      do: IO.puts("#{label}: [ok] #{@server_name} registered"),
+      else: IO.puts("#{label}: [missing] run `codrift mcp install#{flag_for(label)}`")
+  end
+
+  defp report_listing(label, {output, code}) do
+    IO.puts("#{label}: [error] claude mcp list exited #{code}: #{String.trim(output)}")
+  end
+
+  # Anchored to the start of a listing line. A bare substring search would count
+  # any server whose name merely contains "codrift" — including one pointing at
+  # something else entirely — as this one being installed.
+  @doc false
+  @spec registered?(String.t()) :: boolean()
+  def registered?(output) do
+    output
+    |> String.split("\n")
+    |> Enum.any?(&String.starts_with?(String.trim_leading(&1), @server_name <> ":"))
+  end
+
+  defp flag_for("default"), do: ""
+  defp flag_for(name), do: " --profile=#{name}"
+
+  # ── Profile selection ────────────────────────────────────────────────────────
+
+  @doc false
+  @spec profile_selection([String.t()]) :: :default | {:profiles, [String.t()]}
+  def profile_selection(args) do
+    cond do
+      "--all-profiles" in args ->
+        {:profiles, Settings.profiles() |> Map.keys() |> Enum.sort()}
+
+      flag = Enum.find(args, &String.starts_with?(&1, "--profile=")) ->
+        {:profiles, [String.slice(flag, 10..-1//1)]}
+
+      true ->
+        :default
+    end
+  end
+
+  # `~` is stored verbatim in settings.json so the file stays portable; it is
+  # expanded at launch, and has to be expanded here for the same reason.
+  @doc false
+  @spec profile_config_dir(map()) :: String.t() | nil
+  def profile_config_dir(profile) do
+    case profile |> Map.get("env", %{}) |> Map.get("CLAUDE_CONFIG_DIR") do
+      dir when is_binary(dir) and dir != "" -> Path.expand(dir)
+      _ -> nil
+    end
   end
 
   # ── Per-client installers ────────────────────────────────────────────────────
 
-  defp install_claude(sse_url, token) do
+  defp install_claude(sse_url, token, env \\ []) do
     case System.find_executable("claude") do
       nil ->
         :skip
 
       _bin ->
-        IO.puts("Claude Code: registering via `claude mcp add`...")
+        if env == [], do: IO.puts("Claude Code: registering via `claude mcp add`...")
 
         # `claude mcp add` refuses to overwrite an existing name, so a second
         # `codrift mcp install` would otherwise always fail. Scope is `user`
         # because the default (`local`) binds the server to the directory the
         # installer happened to run in.
         System.cmd("claude", ["mcp", "remove", @server_name, "--scope", "user"],
+          env: env,
           stderr_to_stdout: true
         )
 
@@ -102,7 +285,7 @@ defmodule Codrift.CLI.MCP do
           "X-Codrift-Token: #{token}"
         ]
 
-        case System.cmd("claude", args, stderr_to_stdout: true) do
+        case System.cmd("claude", args, env: env, stderr_to_stdout: true) do
           {output, 0} ->
             IO.puts("  ✓ #{String.trim(output)}")
             :ok

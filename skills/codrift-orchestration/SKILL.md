@@ -93,6 +93,59 @@ all must act on. Do not use it for status updates or questions — you will
 derail several sessions at once to collect answers you could have read from
 `get_agent_output`.
 
+## Handing back to the human
+
+Some steps are not yours to take. The user may reserve `git commit` and
+`git push` for themselves, a deploy may need a human to approve it, a login may
+need a password you must never see. Spawning another *agent* for those is the
+wrong move — it just relocates the thing you are not allowed to do.
+
+`open_terminal` puts a real shell in a Codrift pane and moves the user's
+keyboard into it:
+
+```
+open_terminal {
+  initiative_id,
+  dir:     "/Users/me/code/api",
+  command: "git commit -m \"add refresh-token rotation\"",
+  reason:  "review the staged auth changes and commit"
+}
+```
+
+`command` is **typed at the prompt but not run**. The user reads it and presses
+Return themselves — that is the whole point, and it is what makes the tool safe
+to reach for on exactly the steps you are forbidden from taking. Newlines in it
+are flattened to spaces so nothing can submit itself; use repeated flags rather
+than embedded newlines.
+
+Then stop and wait. The tool returns as soon as the pane opens, which is *not*
+the same as the command having run:
+
+```
+get_agent_output { agent_id }
+```
+
+Read it before you continue, and do not assume success. The user may edit your
+command, run something else, or close the terminal without running anything.
+
+To send them back to a terminal or agent you opened earlier — rather than
+opening a second one — use `focus_agent { agent_id, reason }`.
+
+If you have a shell but not these tools, the CLI does the same two things:
+
+```bash
+codrift pane terminal <initiative_id> --dir=/path \
+  --command='git commit -m "…"' --reason='review and commit'
+codrift pane focus <agent_id> --reason='back to you'
+```
+
+Missing tools usually means the MCP server was never registered for the config
+directory *you* are running in — see `codrift mcp status` in `codrift-mcp`.
+
+Two things to respect: this **takes the keyboard away from whatever they were
+doing**, and `reason` is the only explanation they get for why. Ask once, ask
+for something specific, and make the reason a sentence they can act on.
+
 ## Before you spawn anything
 
 Check what is already running. Starting a second agent in a directory that

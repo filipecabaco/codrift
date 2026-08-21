@@ -4,6 +4,7 @@
   import { ArrowPath, CommandLine, Identification, Link, Swatch } from "@steeze-ui/heroicons";
   import { rpc, quitApp, QUIT_REQUESTED, type Agent } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
+  import { onPaneRequest, type PaneRequest } from "$lib/stream";
   import { workspace as ws, type Row } from "$lib/workspace.svelte";
   import {
     ACTION_LABELS,
@@ -67,6 +68,52 @@
   // The pane the sidebar and keyboard actions currently target.
   const active = $derived(panes[activePane] ?? panes[0]);
 
+  /**
+   * Panes belong to an initiative, not to the window.
+   *
+   * A split is a statement about one piece of work — "this agent beside that
+   * terminal" — and it stopped making sense the moment the sidebar cursor moved
+   * to unrelated work. So the whole layout is filed under the initiative it
+   * describes: leave an initiative and its layout is put away intact; come back
+   * and it is exactly as you left it. An initiative you never split opens as a
+   * single pane, and stays that way no matter what the previous one looked like.
+   *
+   * `layoutInit` names the initiative the live `panes` / `activePane` / `split`
+   * currently describe. `layouts` holds every *other* initiative's, so the live
+   * three are always the authority for the one on screen — see `paneStrips`,
+   * which has to overlay them onto the map to read the truth.
+   */
+  type Layout = { panes: PaneView[]; activePane: number; split: typeof split };
+  let layouts = $state<Record<string, Layout>>({});
+  let layoutInit = $state<string | null>(null);
+
+  function useInitiative(id: string | null) {
+    if (id === layoutInit) return;
+    if (layoutInit) layouts[layoutInit] = { panes, activePane, split };
+    layoutInit = id;
+
+    const saved = id ? layouts[id] : null;
+    if (saved) {
+      panes = saved.panes;
+      activePane = saved.activePane;
+      split = saved.split;
+    } else {
+      panes = [{ ...newView(), initiativeId: id }];
+      activePane = 0;
+      split = null;
+    }
+  }
+
+  // Every selection path funnels through here: switch to the target's layout
+  // first, THEN take the active pane — otherwise the pane we hand back belongs
+  // to the initiative we are leaving.
+  function viewFor(initId: string): PaneView {
+    useInitiative(initId);
+    const v = activeView();
+    v.initiativeId = initId;
+    return v;
+  }
+
   let sidebarCollapsed = $state(false);
   let sidebarWidth = $state(300);
   let status = $state<string | null>(null);
@@ -84,6 +131,68 @@
   // the PTY, which coding CLIs read as "interrupt the running command". Comes
   // from the keymap (`focus_sidebar`), so it is overridable like every other key.
   const LEAVE_MAIN = $derived(formatSpec(keymap.focus_left));
+
+  /**
+   * One pane, named the way the sidebar names the same thing elsewhere.
+   *
+   * The strip is a map of the content area, so a chip reading "Pane 2" would
+   * send the reader to the screen to find out what it meant — which is the work
+   * the strip exists to save.
+   */
+  type PaneChip = { label: string; kind: "terminal" | "agent" | "view"; active: boolean };
+
+  function paneChip(p: PaneView): { label: string; kind: PaneChip["kind"] } {
+    const agent = p.agentId ? ws.agent(p.agentId) : null;
+    if (agent) {
+      // A terminal is named by where it is, an agent by what it is: two shells
+      // in one initiative are told apart by their directory, two Claudes by
+      // nothing else the chip has room for.
+      return agent.adapter === "terminal"
+        ? { label: base(agent.dir), kind: "terminal" }
+        : { label: agent.adapter, kind: "agent" };
+    }
+    if (p.chooser) return { label: "Empty", kind: "view" };
+    return {
+      label: p.tab === "diff" ? "Diff" : p.tab === "tree" ? "Files" : "Context",
+      kind: "view",
+    };
+  }
+
+  /**
+   * The pane strip the sidebar draws under each initiative, keyed by id.
+   *
+   * Only split initiatives get one: with a single pane there is nothing to
+   * choose between, and a one-chip strip would be chrome that says nothing. The
+   * live `panes`/`activePane`/`split` are layered over `layouts` because the
+   * map's entry for the current initiative is a snapshot from the last switch —
+   * stale by construction, and the strip has to show what is on screen now.
+   */
+  const paneStrips = $derived.by<Record<string, PaneChip[]>>(() => {
+    const all: Record<string, Layout> = { ...layouts };
+    if (layoutInit) all[layoutInit] = { panes, activePane, split };
+
+    const out: Record<string, PaneChip[]> = {};
+    for (const [id, l] of Object.entries(all)) {
+      if (!l.split || l.panes.length < 2) continue;
+      out[id] = l.panes.map((p, i) => ({
+        ...paneChip(p),
+        active: id === layoutInit && i === l.activePane,
+      }));
+    }
+    return out;
+  });
+
+  // Clicking a chip adopts that initiative's layout and lands in the pane. The
+  // cursor follows what the pane holds, so the sidebar highlight and the content
+  // never disagree — same invariant `reconcileCursor` keeps for the keyboard.
+  function selectPane(initId: string, idx: number) {
+    useInitiative(initId);
+    ws.expand(initId);
+    const held = panes[idx]?.agentId;
+    if (held) ws.syncCursor((r) => r.kind === "agent" && r.agentId === held);
+    else ws.syncCursor((r) => r.kind === "init" && r.initId === initId);
+    enterPane(idx);
+  }
 
   // Element refs for pointer-drag resizing (sidebar width and the split divider).
   let bodyEl = $state<HTMLElement | null>(null);
@@ -215,12 +324,12 @@
 
   async function load() {
     await ws.load();
-    const v = activeView();
     // Only expand on the *first* selection: re-expanding on every refresh would
     // undo a collapse the user just made (r, status cycling, starting an agent…).
-    if (!v.initiativeId && ws.initiatives.length > 0) {
-      v.initiativeId = ws.initiatives[0].id;
-      ws.expand(v.initiativeId);
+    if (!activeView().initiativeId && ws.initiatives.length > 0) {
+      const first = ws.initiatives[0].id;
+      viewFor(first);
+      ws.expand(first);
     }
   }
 
@@ -249,30 +358,26 @@
   }
 
   function applyRow(row: Row) {
-    const v = activeView();
+    const v = viewFor(row.initId);
     switch (row.kind) {
       case "init":
       case "dir":
       case "folder":
-        v.initiativeId = row.initId;
         v.agentId = null;
         v.wantFile = null;
         break;
       case "file":
-        v.initiativeId = row.initId;
         v.agentId = null;
         v.wantFile = row.name;
         v.wantPanel = "file";
         v.tab = "context";
         break;
       case "memory":
-        v.initiativeId = row.initId;
         v.agentId = null;
         v.wantPanel = "memory";
         v.tab = "context";
         break;
       case "agent":
-        v.initiativeId = row.initId;
         claimAgent(activePane, row.agentId);
         v.wantFile = null;
         v.tab = "context";
@@ -293,8 +398,7 @@
   }
 
   function selectInitiative(id: string) {
-    const v = activeView();
-    v.initiativeId = id;
+    const v = viewFor(id);
     v.agentId = null;
     v.wantFile = null;
     paneFocus = "sidebar";
@@ -303,8 +407,7 @@
   }
 
   function openContextFile(initId: string, name: string) {
-    const v = activeView();
-    v.initiativeId = initId;
+    const v = viewFor(initId);
     v.agentId = null;
     v.wantFile = name;
     v.wantPanel = "file";
@@ -315,8 +418,7 @@
   }
 
   function openMemory(initId: string) {
-    const v = activeView();
-    v.initiativeId = initId;
+    const v = viewFor(initId);
     v.agentId = null;
     v.wantPanel = "memory";
     v.tab = "context";
@@ -326,8 +428,7 @@
   }
 
   function toggleContextFolder(initId: string, path: string) {
-    const v = activeView();
-    v.initiativeId = initId;
+    const v = viewFor(initId);
     v.agentId = null;
     paneFocus = "sidebar";
     ws.toggleFolder(initId, path);
@@ -335,8 +436,7 @@
   }
 
   function selectAgent(initId: string, agentId: string) {
-    const v = activeView();
-    v.initiativeId = initId;
+    const v = viewFor(initId);
     claimAgent(activePane, agentId);
     v.wantFile = null;
     v.tab = "context";
@@ -345,8 +445,7 @@
   }
 
   function selectDir(initId: string, path: string) {
-    const v = activeView();
-    v.initiativeId = initId;
+    const v = viewFor(initId);
     v.agentId = null;
     v.wantFile = null;
     paneFocus = "sidebar";
@@ -426,6 +525,61 @@
       claimAgent(idx, started.id);
       focusMain();
     }
+  }
+
+  /**
+   * Put `agentId` in a pane and hand it the keyboard, because an agent asked us
+   * to — see `open_terminal` / `focus_agent` in the MCP server.
+   *
+   * This is the one place the UI moves focus on someone else's behalf, so it
+   * tries hard not to destroy what the user was doing: it never displaces the
+   * pane they are sitting in. With a single pane it splits and lands in the new
+   * one; already split, it takes the pane the user isn't in. A pane that already
+   * holds this agent is simply re-entered, so an agent that asks twice doesn't
+   * accumulate splits.
+   *
+   * The reason is toasted rather than shown in a dialog on purpose: the point is
+   * to arrive ready to type, and a dialog would just be one more thing to
+   * dismiss before the keyboard is usable.
+   */
+  function openAgentPane({ agentId, initiativeId, reason }: PaneRequest) {
+    // The agent's initiative owns the layout this pane goes into, so adopt it
+    // before measuring: a split opened against the wrong layout would strand
+    // the terminal behind whatever the user next selects.
+    useInitiative(initiativeId);
+    let idx = panes.findIndex((p) => p.agentId === agentId);
+
+    // A pane holding nothing is not worth protecting. Without this, an
+    // initiative the user has never opened acquires a split with a dead half the
+    // first time one of its agents asks for them.
+    const here = panes[activePane];
+    if (idx === -1 && !split && !here.agentId && !here.wantFile && here.tab === "context") {
+      idx = activePane;
+    }
+
+    if (idx === -1 && !split) {
+      panes = [panes[activePane], { ...newView(), initiativeId }];
+      split = { dir: "vertical", fraction: 0.5 };
+      idx = 1;
+    } else if (idx === -1) {
+      idx = activePane === 0 ? 1 : 0;
+    }
+
+    const v = panes[idx];
+    v.initiativeId = initiativeId;
+    v.wantFile = null;
+    v.wantPanel = "file";
+    v.chooser = false;
+    v.tab = "context";
+    claimAgent(idx, agentId);
+
+    // Expand first: syncCursor can only land on a row that exists, and the
+    // agent's row is a child of its initiative.
+    ws.expand(initiativeId);
+    ws.syncCursor((r) => r.kind === "agent" && r.agentId === agentId);
+    enterPane(idx);
+
+    toast(reason ? `Agent needs you: ${reason}` : "An agent opened a terminal for you.");
   }
 
   // Opens a terminal in the initiative and types the setup commands into it.
@@ -904,6 +1058,19 @@
     ws.reconcileCursor(active.initiativeId);
   });
 
+  // A deleted initiative takes its layout with it. Skipped while the workspace
+  // is empty or loading — an in-flight refresh briefly looks like "everything
+  // was deleted", and acting on that would drop every stored split.
+  $effect(() => {
+    if (ws.loading || !ws.initiatives.length) return;
+    const live = new Set(ws.initiatives.map((i) => i.id));
+    // Untracked: this effect depends on the initiative list, never on the map it
+    // is pruning, or its own delete would schedule it again.
+    untrack(() => {
+      for (const id of Object.keys(layouts)) if (!live.has(id)) delete layouts[id];
+    });
+  });
+
   // An agent that closed — a clean exit, a stop from another window, a server
   // restart — leaves its pane holding a terminal for something that no longer
   // exists. Fall the pane back to the initiative overview, and hand the
@@ -953,6 +1120,10 @@
     window.addEventListener(QUIT_REQUESTED, confirmQuit);
     return () => window.removeEventListener(QUIT_REQUESTED, confirmQuit);
   });
+
+  // Agents asking for a human. The frame arrives after the `agent_started` that
+  // created the terminal, so `ws` already knows the agent by the time we look.
+  $effect(() => onPaneRequest((req) => openAgentPane(req)));
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
@@ -1077,6 +1248,8 @@
     {:else}
       <Sidebar
         focused={paneFocus === "sidebar"}
+        {paneStrips}
+        onSelectPane={selectPane}
         width={sidebarWidth}
         newInitiativeKey={formatSpec(keymap.new_initiative)}
         collapseKey={formatSpec(keymap.toggle_sidebar)}

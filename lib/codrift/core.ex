@@ -15,6 +15,7 @@ defmodule Codrift.Core do
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.MCP.Handler
   alias Codrift.OAuth.Config, as: OAuthConfig
+  alias Codrift.Web.EventRelay
 
   @doc """
   Invokes a named operation with a string-keyed argument map.
@@ -110,6 +111,32 @@ defmodule Codrift.Core do
       {:ok, status}
     else
       {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  def call("open_terminal", %{"initiative_id" => init_id} = params) do
+    with {:ok, dir} <- resolve_agent_dir(init_id, Map.get(params, "dir")),
+         {:ok, pid} <-
+           Codrift.AgentSupervisor.start_agent(init_id, dir, Codrift.Agent.Adapters.Terminal) do
+      status = EventRelay.describe(pid)
+      command = prefill(pid, Map.get(params, "command"))
+      EventRelay.broadcast({:pane_request, init_id, status.id, Map.get(params, "reason")})
+
+      {:ok, Map.merge(status, %{prefilled: command, awaiting_user: true})}
+    else
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  def call("focus_agent", %{"agent_id" => agent_id} = params) do
+    case Codrift.AgentSupervisor.find_agent(agent_id) do
+      {:ok, pid} ->
+        %{initiative_id: init_id} = Codrift.AgentProcess.status(pid)
+        EventRelay.broadcast({:pane_request, init_id, agent_id, Map.get(params, "reason")})
+        {:ok, %{"focused" => agent_id}}
+
+      {:error, :not_found} ->
+        {:error, "agent not found: #{agent_id}"}
     end
   end
 
@@ -963,6 +990,41 @@ defmodule Codrift.Core do
       {:ok, Store.context_path(init_id)}
     end
   end
+
+  # A shell that is still coming up flushes whatever is sitting in the tty queue
+  # when its line editor (ZLE, readline) takes over. Typing into it the moment
+  # `:exec.run` returns is therefore a coin flip, and losing the prefill is worse
+  # than a beat of latency: the user is left staring at a bare prompt with no
+  # idea what the agent meant them to run.
+  @prefill_delay_ms 300
+
+  # Types `command` at the prompt WITHOUT submitting it.
+  #
+  # `send_input/2` appends CRLF — that runs things, which is exactly what this
+  # tool must not do. `send_raw/2` leaves the line sitting at the prompt for the
+  # user to read and press Return on themselves. Newlines inside the command are
+  # flattened to spaces for the same reason: an embedded `\n` would submit every
+  # line before it, turning a draft into an execution.
+  #
+  # Returns the text actually typed, so the caller can report it back.
+  defp prefill(_pid, blank) when blank in [nil, ""], do: nil
+
+  defp prefill(pid, command) when is_binary(command) do
+    typed = command |> String.replace(~r/[\r\n]+/, " ") |> String.trim()
+
+    if typed == "" do
+      nil
+    else
+      Task.Supervisor.start_child(Codrift.TaskSupervisor, fn ->
+        Process.sleep(@prefill_delay_ms)
+        Codrift.AgentProcess.send_raw(pid, typed)
+      end)
+
+      typed
+    end
+  end
+
+  defp prefill(_pid, _other), do: nil
 
   # Clamps memory_recent limit to 1..100. Accepts integers only; any other
   # type (float, nil) falls back to the default of 20.

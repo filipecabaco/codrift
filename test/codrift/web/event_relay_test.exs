@@ -43,6 +43,22 @@ defmodule Codrift.Web.EventRelayTest do
                EventRelay.frame({:agent_started, agent})
     end
 
+    # Not a notification like the rest: an agent asking the window to put a pane
+    # in front of the user, because it has hit a step only a human can take.
+    test "carries a pane request with its initiative, agent and reason" do
+      assert %{
+               event: "pane_request",
+               initiative_id: "i1",
+               agent_id: "a1",
+               reason: "review and commit"
+             } = EventRelay.frame({:pane_request, "i1", "a1", "review and commit"})
+    end
+
+    test "a pane request without a reason still frames" do
+      assert %{event: "pane_request", reason: nil} =
+               EventRelay.frame({:pane_request, "i1", "a1", nil})
+    end
+
     test "drops messages the client has no use for" do
       assert EventRelay.frame({:agent_ready, "a1"}) == nil
       assert EventRelay.frame(:some_unrelated_message) == nil
@@ -56,7 +72,9 @@ defmodule Codrift.Web.EventRelayTest do
             {:agent_stopped, "a1", 1},
             {:conductor_output, "i1", "a1", <<0xFF>>},
             {:conductor_agent_ready, "i1", "a1"},
-            {:conductor_agent_stopped, "i1", "a1", 2}
+            {:conductor_agent_stopped, "i1", "a1", 2},
+            {:pane_request, "i1", "a1", "review and commit"},
+            {:pane_request, "i1", "a1", nil}
           ] do
         assert {:ok, _} = msg |> EventRelay.frame() |> Jason.encode()
       end
@@ -81,6 +99,42 @@ defmodule Codrift.Web.EventRelayTest do
       assert is_binary(adapter)
       assert is_binary(status)
       assert {:ok, _} = Jason.encode(described)
+    end
+  end
+
+  describe "broadcast/1" do
+    # Agent lifecycle events reach a window because AgentSupervisor wires each
+    # new agent to the watchers. A pane request has no lifecycle to hang off —
+    # nothing about the agent changed — so it goes through this door instead.
+    test "reaches every connected window as a client frame" do
+      {:ok, relay} = EventRelay.start_link(self())
+      Process.unlink(relay)
+
+      EventRelay.broadcast({:pane_request, "i-broadcast", "a-broadcast", "come here"})
+
+      assert_receive %{
+                       event: "pane_request",
+                       initiative_id: "i-broadcast",
+                       agent_id: "a-broadcast",
+                       reason: "come here"
+                     },
+                     2_000
+    end
+
+    # frame/1 drops what it does not recognise, so an event nobody has taught the
+    # client about is inert rather than fatal to the socket. Proven by sending a
+    # good event *after* the bad one and seeing it arrive: a bare refute on the
+    # mailbox would only prove that no OTHER test happened to broadcast, since
+    # every relay is registered against the same global watcher registry.
+    test "an unroutable event leaves the relay working" do
+      {:ok, relay} = EventRelay.start_link(self())
+      Process.unlink(relay)
+
+      EventRelay.broadcast({:definitely_not_a_frame, 1, 2})
+      EventRelay.broadcast({:pane_request, "i-after-junk", "a-after-junk", nil})
+
+      assert_receive %{event: "pane_request", initiative_id: "i-after-junk"}, 2_000
+      assert Process.alive?(relay)
     end
   end
 

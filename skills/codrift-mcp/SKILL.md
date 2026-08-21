@@ -24,6 +24,48 @@ This needs the `codrift` CLI on `PATH`. Homebrew installs it alongside the app
 (the cask depends on the `codrift-cli` formula); the curl installer puts it in
 `~/.local/bin`.
 
+## Launch profiles need their own registration
+
+This is the one that bites. A launch profile that sets `CLAUDE_CONFIG_DIR`
+gives its agents a **different config directory**, and `claude mcp add --scope
+user` writes to whichever directory is in the environment when it runs. So the
+command above registers Codrift for the default config and for nothing else —
+an agent started under `claude-work` comes up with no Codrift tools at all,
+which reads as "the MCP server is broken" rather than "it was never installed
+here".
+
+Install for the default *and* for every profile — the two are additive:
+
+```bash
+codrift mcp install
+codrift mcp install --all-profiles
+```
+
+One profile at a time, and a read-only check of what actually took:
+
+```bash
+codrift mcp install --profile=claude-work
+codrift mcp status --all-profiles
+```
+
+```
+default:         [ok] codrift registered
+claude-work:     [missing] run `codrift mcp install --profile=claude-work`
+```
+
+A profile with no `CLAUDE_CONFIG_DIR` shares the default config and is already
+covered; `status` says so rather than pretending it did something.
+
+By hand, if you prefer — this is all `--profile` does:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude-work claude mcp add codrift \
+  --scope user --transport sse http://localhost:43117/mcp/sse \
+  --header "X-Codrift-Token: $(cat ~/.codrift/auth-token)"
+```
+
+Re-run after the token changes, and after adding a profile.
+
 ## The endpoint, by hand
 
 For any client `codrift mcp install` doesn't cover:
@@ -77,6 +119,11 @@ around.
 | Initiatives | `list_initiatives`, `create_initiative`, `add_dir`, `set_initiative_status`, `get_diff` | `codrift-initiatives` |
 | Memory | `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list` | `codrift-memory` |
 | Agents | `start_agent`, `send_to_agent`, `get_agent_output`, `broadcast_to_initiative` | `codrift-orchestration` |
+| Handoff | `open_terminal`, `focus_agent` | `codrift-orchestration` |
+
+The handoff pair is also on the CLI as `codrift pane terminal` / `codrift pane
+focus`, which is the way to reach it when the MCP server is not registered for
+the config directory you are running under.
 | Conductor | `start_conductor`, `start_orchestration`, `get_conductor_status`, `stop_orchestration` | `codrift-orchestration` |
 | Integrations | `start_oauth_flow`, `list_assigned_items`, `import_from_integration` | `codrift-integrations` |
 | Profiles | `list_agent_profiles` | `codrift-profiles` |
