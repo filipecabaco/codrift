@@ -1,6 +1,9 @@
 // One WebSocket for the whole workspace: every agent's output and status down,
 // keystrokes and resizes up, keyed by agent id. Reconnects with backoff.
 
+// Type-only, so this stays the leaf module it is at runtime.
+import type { Initiative } from "$lib/api";
+
 export type AgentStatus =
   | "starting"
   | "running"
@@ -33,11 +36,30 @@ export type PaneRequest = {
   reason: string | null;
 };
 
+/**
+ * An initiative appearing, changing, or going away somewhere other than here.
+ *
+ * The sidebar is not the only writer: `codrift initiative create` in a shell, an
+ * MCP-connected agent, and a second window all mutate the list behind this
+ * session's back, and until these frames existed none of it was visible without
+ * a manual reload.
+ *
+ * `created` and `updated` carry the whole record, in the same shape
+ * `list_initiatives` returns, so a handler can patch the one row it names —
+ * re-running the workspace's `load()` instead would refetch every initiative's
+ * agents on every rename.
+ */
+export type InitiativeChange =
+  | { kind: "created" | "updated"; initiative: Initiative }
+  | { kind: "deleted"; initiativeId: string };
+
 const outputSubs = new Map<string, Set<(bytes: Uint8Array) => void>>();
 const stoppedSubs = new Map<string, Set<(code: number) => void>>();
 const statusSubs = new Set<(agentId: string, status: AgentStatus) => void>();
 const agentSubs = new Set<(agent: AgentInfo) => void>();
 const paneSubs = new Set<(req: PaneRequest) => void>();
+const initiativeSubs = new Set<(change: InitiativeChange) => void>();
+const memorySubs = new Set<(initiativeId: string) => void>();
 
 let socket: WebSocket | null = null;
 let retry: ReturnType<typeof setTimeout> | null = null;
@@ -73,6 +95,25 @@ function dispatch(frame: Record<string, unknown>) {
           reason: (frame.reason as string) ?? null,
         }),
       );
+      break;
+    case "initiative_created":
+    case "initiative_updated":
+      initiativeSubs.forEach((fn) =>
+        fn({
+          kind: frame.event === "initiative_created" ? "created" : "updated",
+          initiative: frame.initiative as Initiative,
+        }),
+      );
+      break;
+    case "initiative_deleted":
+      initiativeSubs.forEach((fn) =>
+        fn({ kind: "deleted", initiativeId: frame.initiative_id as string }),
+      );
+      break;
+    // Says only *that* the store moved. The memory view owns a query string no
+    // frame could reproduce, so re-running that query is the only correct refresh.
+    case "memory_changed":
+      memorySubs.forEach((fn) => fn(frame.initiative_id as string));
       break;
     case "output": {
       const subs = outputSubs.get(agentId);
@@ -173,6 +214,18 @@ export function onAgent(fn: (agent: AgentInfo) => void): () => void {
 export function onPaneRequest(fn: (req: PaneRequest) => void): () => void {
   paneSubs.add(fn);
   return () => paneSubs.delete(fn);
+}
+
+/** Subscribe to initiatives created, changed, or deleted outside this session. */
+export function onInitiativeChange(fn: (change: InitiativeChange) => void): () => void {
+  initiativeSubs.add(fn);
+  return () => initiativeSubs.delete(fn);
+}
+
+/** Subscribe to an initiative's memory store being written to. */
+export function onMemoryChange(fn: (initiativeId: string) => void): () => void {
+  memorySubs.add(fn);
+  return () => memorySubs.delete(fn);
 }
 
 /** Subscribe to agent status transitions. */

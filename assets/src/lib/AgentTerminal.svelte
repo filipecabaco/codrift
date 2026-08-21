@@ -303,8 +303,16 @@
   });
 </script>
 
-<div class="relative size-full overflow-hidden bg-canvas" bind:this={pane}>
-  <div class="size-full p-1.5" bind:this={el}></div>
+<!-- The padding lives on the wrapper, never on `el`. FitAddon sizes the grid from
+     `getComputedStyle(el).height/width`, and under `box-sizing: border-box` — which
+     Tailwind sets globally — that INCLUDES el's own padding, while it only ever
+     subtracts the `.xterm` element's padding (0). With `p-1.5` on `el` it therefore
+     fitted a grid to 12px more space than existed in both axes, overflowed the
+     clipped pane by 9px, and told the PTY the terminal was a row and a column
+     bigger than it is — which is what made full-screen redraws address a phantom
+     row and paint over themselves. -->
+<div class="relative size-full overflow-hidden bg-canvas p-1.5" bind:this={pane}>
+  <div class="size-full" bind:this={el}></div>
   {#if dropping}
     <!-- pointer-events-none keeps this out of the hit test: the drop has to
          reach the pane underneath, not the hint drawn on top of it. -->

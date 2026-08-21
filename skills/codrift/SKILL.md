@@ -52,7 +52,13 @@ A directory in an initiative can be checked out to a dedicated worktree branch
 (`codrift/{id}/{slug}`) so agents never touch the user's main checkout. Run
 `git rev-parse --abbrev-ref HEAD` before reasoning about branch state, and never
 `git checkout` another branch — you would move a tree another agent is working
-in. See `codrift-initiatives`.
+in.
+
+Every Codrift worktree lives at `~/.codrift/initiatives/<id>/worktrees/<slug>`.
+If you need one, ask for it with `set_dir_worktree` rather than running
+`git worktree add` yourself: a worktree you create by hand lands wherever you
+chose, outside that tree, where `list_worktrees` and `codrift prune` will never
+find it again. See `codrift-initiatives`.
 
 ## Identifiers
 

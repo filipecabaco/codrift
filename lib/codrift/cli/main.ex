@@ -13,6 +13,8 @@ defmodule Codrift.CLI.Main do
       codrift memory     <subcommand>
       codrift mcp        <subcommand>
       codrift pane       <subcommand>
+      codrift worktree   <subcommand>
+      codrift prune
   """
 
   alias Codrift.CLI.Initiative
@@ -23,6 +25,7 @@ defmodule Codrift.CLI.Main do
   alias Codrift.CLI.Session
   alias Codrift.CLI.Start
   alias Codrift.CLI.Update
+  alias Codrift.CLI.Worktree
 
   @spec main([String.t()]) :: :ok
   def main(args), do: run(args)
@@ -36,6 +39,10 @@ defmodule Codrift.CLI.Main do
   def run(["pane" | rest]), do: Pane.run(rest)
   def run(["update" | rest]), do: Update.run(rest)
   def run(["start" | rest]), do: Start.run(rest)
+  def run(["worktree" | rest]), do: Worktree.run(rest)
+  # Top-level rather than `worktree prune`: cleaning up is the verb people reach
+  # for, and it is the one worktree operation worth typing without a noun.
+  def run(["prune" | rest]), do: Worktree.run(["prune" | rest])
 
   def run(_) do
     IO.puts("""
@@ -47,6 +54,8 @@ defmodule Codrift.CLI.Main do
       codrift memory      <subcommand>
       codrift mcp         <subcommand>
       codrift pane        <subcommand>  Open a terminal / focus an agent for the user
+      codrift worktree    <subcommand>  List Codrift-managed git worktrees
+      codrift prune       [--force]     Remove worktrees no initiative claims
       codrift update
 
     Run `codrift <command>` with no arguments for per-command help.

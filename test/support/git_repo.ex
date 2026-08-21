@@ -26,9 +26,17 @@ defmodule Codrift.Test.GitRepo do
   def init!(dir) do
     File.mkdir_p!(dir)
     git(dir, ["init"])
+    isolate!(dir)
     commit!(dir, "initial", allow_empty: true)
     dir
   end
+
+  # A developer's global gitignore must not change what these tests see. Codrift
+  # writes `.claude/settings.json` into every worktree it creates, and a machine
+  # whose `~/.gitignore_global` covers `.claude` hides a file CI reports — which
+  # is exactly how a bug in worktree dirty-detection passed locally and failed
+  # in CI.
+  defp isolate!(dir), do: git(dir, ["config", "core.excludesFile", "/dev/null"])
 
   @doc "Stages everything in `dir` and commits it."
   def commit!(dir, message, opts \\ []) do
@@ -46,6 +54,7 @@ defmodule Codrift.Test.GitRepo do
   def init_with!(dir, files) do
     File.mkdir_p!(dir)
     git(dir, ["init"])
+    isolate!(dir)
 
     Enum.each(files, fn {path, content} ->
       full = Path.join(dir, path)

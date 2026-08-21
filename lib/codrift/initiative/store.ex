@@ -14,6 +14,14 @@ defmodule Codrift.Initiative.Store do
   `~/.codrift/initiatives/{id}/` where users can place project context files
   (READMEs, ticket exports, documentation) to feed to AI agents. The folder
   is created automatically on `create/2` and removed on `delete/1`.
+
+  ## Change notification
+
+  Every mutation broadcasts an `:initiative_created` / `:initiative_updated` /
+  `:initiative_deleted` tuple through `Codrift.Web.EventRelay`, so open windows
+  see a change made by an MCP agent or another window without a reload. That
+  covers everything routed through this process; `reload/1` is how a write made
+  by a *different OS process* (the CLI) gets the same treatment.
   """
 
   use GenServer
@@ -22,6 +30,7 @@ defmodule Codrift.Initiative.Store do
 
   alias Codrift.{Branch, ClaudePermissions, Initiative}
   alias Codrift.Initiative.DirEntry
+  alias Codrift.Web.EventRelay
   alias Codrift.Worktree
 
   @doc "Returns the context folder path for an initiative (pure function, no GenServer call)."
@@ -62,6 +71,33 @@ defmodule Codrift.Initiative.Store do
   @doc "Returns all initiatives sorted by creation time (oldest first)."
   def list(server \\ __MODULE__) do
     GenServer.call(server, :list)
+  end
+
+  @doc """
+  Re-reads the initiatives file, then broadcasts one lifecycle event per change.
+
+  CLI commands run in their own OS process — `codrift initiative create` writes
+  `initiatives.json` directly and never reaches this GenServer — so a running app
+  is left holding a stale list *and* windows that never heard about it. Reloading
+  fixes both at once: state catches up with disk, and the diff against the
+  previous state is exactly the set of frames the windows need.
+
+  Returns the initiatives as `list/1` would.
+  """
+  def reload(server \\ __MODULE__) do
+    GenServer.call(server, :reload)
+  end
+
+  @doc """
+  The files this store reads and writes: the initiatives JSON, and the base
+  directory holding every initiative's context folder.
+
+  `Codrift.Freshness` watches exactly what the store it is pointed at uses,
+  rather than recomputing the global paths — so a store started against a
+  different file (tests, a second instance) is still watched correctly.
+  """
+  def paths(server \\ __MODULE__) do
+    GenServer.call(server, :paths)
   end
 
   @doc """
@@ -139,13 +175,19 @@ defmodule Codrift.Initiative.Store do
   end
 
   @doc """
-  Toggles git worktree on or off for an existing directory.
+  Turns a git worktree on or off for an existing directory.
 
-  Enabling creates the worktree. Disabling removes it and clears the path.
-  Returns `{:error, :not_found}` when the initiative or dir is absent.
+  Idempotent: asking for the state a directory is already in returns it
+  unchanged, without touching git, persisting, or broadcasting. An agent that
+  retries — or two that both ask — must not create a worktree and then destroy
+  it, which is what a toggle would do.
+
+  Returns `{:error, :not_found}` when the initiative or dir is absent, and
+  `{:error, {:worktree_failed, reason}}` carrying git's own message when the
+  checkout cannot be created.
   """
-  def toggle_dir_worktree(id, dir, server \\ __MODULE__) do
-    GenServer.call(server, {:toggle_dir_worktree, id, dir})
+  def set_dir_worktree(id, dir, enabled?, server \\ __MODULE__) do
+    GenServer.call(server, {:set_dir_worktree, id, dir, enabled?})
   end
 
   @impl true
@@ -177,7 +219,7 @@ defmodule Codrift.Initiative.Store do
   @impl true
   def handle_call({:create, name, dirs}, _from, state) do
     initiative = Initiative.new(name, dirs)
-    new_state = put_initiative(state, initiative)
+    new_state = put_initiative(state, initiative, :initiative_created)
     {:reply, {:ok, initiative}, new_state, {:continue, {:setup_context, initiative}}}
   end
 
@@ -189,12 +231,25 @@ defmodule Codrift.Initiative.Store do
   end
 
   def handle_call(:list, _from, state) do
-    sorted =
-      state.initiatives
-      |> Map.values()
-      |> Enum.sort_by(& &1.created_at, DateTime)
+    {:reply, sorted(state.initiatives), state}
+  end
 
-    {:reply, sorted, state}
+  def handle_call(:paths, _from, state) do
+    {:reply, %{file: state.path, context_dir_base: state.context_dir_base}, state}
+  end
+
+  def handle_call(:reload, _from, state) do
+    case load(state.path) do
+      # A partial read is indistinguishable from mass deletion, and acting on it
+      # would broadcast a delete for every initiative the unreadable file failed
+      # to yield. Same guard as the orphan pruning in init/1.
+      {_initiatives, false} ->
+        {:reply, sorted(state.initiatives), state}
+
+      {initiatives, true} ->
+        Enum.each(diff(state.initiatives, initiatives), &EventRelay.broadcast/1)
+        {:reply, sorted(initiatives), %{state | initiatives: initiatives}}
+    end
   end
 
   def handle_call({:add_dir, id, dir, opts}, _from, state) do
@@ -235,6 +290,7 @@ defmodule Codrift.Initiative.Store do
       {initiative, initiatives} ->
         new_state = %{state | initiatives: initiatives}
         persist(new_state)
+        EventRelay.broadcast({:initiative_deleted, id})
         # Worktree and context-dir cleanup are synchronous: callers (TUI, tests)
         # expect the directory to be absent before the reply returns.
         Enum.each(initiative.dirs, &cleanup_worktree/1)
@@ -279,10 +335,13 @@ defmodule Codrift.Initiative.Store do
     end
   end
 
-  def handle_call({:toggle_dir_worktree, id, dir}, _from, state) do
-    case Map.fetch(state.initiatives, id) do
-      {:ok, initiative} -> do_toggle_dir_worktree(state, initiative, id, dir)
+  def handle_call({:set_dir_worktree, id, dir, enabled?}, _from, state) do
+    with {:ok, initiative} <- Map.fetch(state.initiatives, id),
+         %DirEntry{} = entry <- Enum.find(initiative.dirs, &(&1.path == dir)) do
+      set_worktree(state, initiative, id, entry, enabled?)
+    else
       :error -> {:reply, {:error, :not_found}, state}
+      nil -> {:reply, {:error, :not_found}, state}
     end
   end
 
@@ -334,40 +393,41 @@ defmodule Codrift.Initiative.Store do
      {:continue, {:update_initiative_md, updated}}}
   end
 
-  defp do_toggle_dir_worktree(state, initiative, id, dir) do
-    case Enum.find(initiative.dirs, &(&1.path == dir)) do
-      nil ->
-        {:reply, {:error, :not_found}, state}
-
-      entry ->
-        updated = apply_worktree_toggle(initiative, entry, id, dir, state)
-        new_state = put_initiative(state, updated)
-        {:reply, {:ok, updated}, new_state, {:continue, {:update_initiative_md, updated}}}
-    end
+  # Nothing to do — and saying so before any side effect is what makes the
+  # operation idempotent.
+  defp set_worktree(state, initiative, _id, %DirEntry{worktree_path: wt}, enabled?)
+       when is_binary(wt) == enabled? do
+    {:reply, {:ok, initiative}, state}
   end
 
-  defp apply_worktree_toggle(initiative, %DirEntry{worktree_path: nil} = entry, id, dir, state) do
-    ctx = ctx_path(state.context_dir_base, id)
-    updated_entry = enable_worktree_entry(entry, ctx, id, dir)
-    update_initiative_dirs(initiative, dir, updated_entry)
-  end
-
-  defp apply_worktree_toggle(initiative, entry, _id, dir, _state) do
-    cleanup_worktree(entry)
-    cleared = %{entry | worktree_enabled: false, worktree_path: nil}
-    update_initiative_dirs(initiative, dir, cleared)
-  end
-
-  defp enable_worktree_entry(entry, ctx, id, dir) do
-    case Worktree.ensure(ctx, id, dir) do
+  defp set_worktree(state, initiative, id, entry, true) do
+    case Worktree.ensure(ctx_path(state.context_dir_base, id), id, entry.path) do
       {:ok, wt_path} ->
         ClaudePermissions.add(wt_path, "Read")
-        %{entry | worktree_enabled: true, worktree_path: wt_path}
 
+        commit_dir_entry(state, initiative, %{
+          entry
+          | worktree_enabled: true,
+            worktree_path: wt_path
+        })
+
+      # Reported rather than logged and swallowed: the caller is asking for this
+      # explicitly, and only here is git's actual reason still in hand.
       {:error, reason} ->
-        Logger.warning("Codrift.Worktree: enable failed for #{dir}: #{inspect(reason)}")
-        entry
+        {:reply, {:error, {:worktree_failed, reason}}, state}
     end
+  end
+
+  defp set_worktree(state, initiative, _id, entry, false) do
+    cleanup_worktree(entry)
+    commit_dir_entry(state, initiative, %{entry | worktree_enabled: false, worktree_path: nil})
+  end
+
+  defp commit_dir_entry(state, initiative, entry) do
+    updated = update_initiative_dirs(initiative, entry.path, entry)
+
+    {:reply, {:ok, updated}, put_initiative(state, updated),
+     {:continue, {:update_initiative_md, updated}}}
   end
 
   defp update_initiative_dirs(initiative, dir, updated_entry) do
@@ -410,10 +470,35 @@ defmodule Codrift.Initiative.Store do
     {:noreply, state}
   end
 
-  defp put_initiative(state, initiative) do
+  # The one place every mutation lands — add_dir, remove_dir, set_status,
+  # link_integration, the branch and worktree toggles — so broadcasting here
+  # cannot be forgotten by whatever mutation is added next. `create` is the only
+  # caller that passes an event, since it is the only one that isn't an update.
+  #
+  # The tuple carries the struct, not a serialised map: shaping it for the client
+  # stats the filesystem, and that belongs in the relay (per socket, off this
+  # process) rather than in a GenServer every write is queued behind.
+  defp put_initiative(state, initiative, event \\ :initiative_updated) do
     new_state = %{state | initiatives: Map.put(state.initiatives, initiative.id, initiative)}
     persist(new_state)
+    EventRelay.broadcast({event, initiative})
     new_state
+  end
+
+  defp sorted(initiatives) do
+    initiatives
+    |> Map.values()
+    |> Enum.sort_by(& &1.created_at, DateTime)
+  end
+
+  # Lifecycle events for the difference between two id => initiative maps.
+  # Deletes come last so a client applying the list in order never briefly holds
+  # a state with neither the old nor the new record for a replaced id.
+  defp diff(old, new) do
+    created = for {id, i} <- new, not is_map_key(old, id), do: {:initiative_created, i}
+    updated = for {id, i} <- new, prev = Map.get(old, id), prev != i, do: {:initiative_updated, i}
+    deleted = for {id, _} <- old, not is_map_key(new, id), do: {:initiative_deleted, id}
+    created ++ updated ++ deleted
   end
 
   defp update_initiative(state, id, fun) do

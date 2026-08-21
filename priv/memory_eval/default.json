@@ -1,0 +1,139 @@
+{
+  "name": "codrift-default",
+  "about": [
+    "A self-contained eval set for `mix codrift.memory.eval`.",
+    "",
+    "Entries are written the way agents really write them — a decision plus the",
+    "rationale the code does not record, several hundred bytes to a couple of kB —",
+    "because entry length is what makes chunking matter. Their content is drawn",
+    "only from what is already public in this repository, so the set can live in",
+    "git while real initiative stores stay private.",
+    "",
+    "`expect` lists the entries a competent answer must surface. Keep it to the",
+    "entries that genuinely answer the question: padding it makes recall look",
+    "worse and top-1 look better, both dishonestly."
+  ],
+  "entries": [
+    {
+      "id": 1,
+      "chunk_type": "decision",
+      "source": "agent-arch",
+      "content": "Codrift.Core is the single shared operation layer. Every product capability - initiatives, agents, memory, conductor, integrations - is reachable through Core.call/2 with a string name and a string-keyed argument map, returning {:ok, result} or {:error, message}. Three front doors route through it and none of them may grow their own logic: POST /api/rpc backs the whole Svelte UI, the MCP handler exposes the same operations as tools to connected agents, and the CLI dispatches to it as well. The reason is that a capability added for the UI is then automatically available to an agent over MCP, with no second implementation to keep in step. When a new operation needs argument validation, that validation belongs in Core, not in the route or the tool schema, or the two callers will disagree about what is valid."
+    },
+    {
+      "id": 2,
+      "chunk_type": "decision",
+      "source": "agent-arch",
+      "content": "Codrift.Memory is deliberately a pure module with no supervised process. It opens and closes its own SQLite connection on every call. This looks wasteful and is not negotiable: rel/commands/memory.sh runs the memory CLI through `bin/codrift eval`, which evaluates against a NON-BOOTED system where no supervision tree exists and no GenServer can be called. Any design that needs a resident model, a long-lived connection pool, or a warm cache breaks that path or makes it unusably slow. The same constraint applies to Codrift.CLI.Initiative, which reads and writes initiatives.json directly rather than calling the Store GenServer. Connection setup against a local SQLite file is on the order of tens of microseconds, so the cost is real but small enough that correctness of the eval path wins."
+    },
+    {
+      "id": 3,
+      "chunk_type": "decision",
+      "source": "agent-search",
+      "content": "Memory search OR-joins its terms instead of AND-joining them. FTS5 reads a space between two terms as an implicit AND, so the previous query builder, which quoted every term and joined with spaces, turned an eight-word question into a demand that all eight tokens appear in one row. Measured over 34 hand-labelled questions against two real stores, every single one returned an empty list. Ranking, not filtering, is what BM25 is for. English stopwords are dropped before the join because under an implicit AND each one was a further filter, and a question like 'does a sprite sleep while an agent is working' has four content words in nine. A query consisting only of stopwords falls back to keeping them, because 'how to' is a real thing to search for and answering it with nothing is the failure being fixed."
+    },
+    {
+      "id": 4,
+      "chunk_type": "decision",
+      "source": "agent-search",
+      "content": "Terms are NOT automatically turned into prefix queries. Appending a star to every term was proposed and measured, and it made ranking worse: MRR fell from 0.87 to 0.85 and top-1 accuracy from 76 percent to 74 percent, because prefix expansion broadens the match set and dilutes the BM25 score. A trailing star that a caller types is still honoured. It has to be emitted outside the quotes as \"term\"* rather than inside as \"term*\", because FTS5 tokenizes the star away within a quoted phrase and the query silently stops being a prefix query. Note that the porter stemmer imposes its own limit here: it stems 'notarization' shorter than 'notariz', so notariz* misses while notar* hits, and no amount of correct prefix syntax changes that."
+    },
+    {
+      "id": 5,
+      "chunk_type": "decision",
+      "source": "agent-search",
+      "content": "Memory entries are chunked for indexing and returned whole. BM25 normalises a term's weight by document length, and real entries run 0.6 to 2.7 kB because an agent writing a decision writes the whole rationale, so a long entry mentioning a term once ranked below a short one that did. Codrift.Memory.Chunker splits on whitespace at 600 characters with 150 of overlap, and search collapses matching chunks back to their parent entry, best-ranked chunk first. Measured, this moved top-1 accuracy from 76 to 82 percent and MRR from 0.87 to 0.90 - the only change in the lexical stack that improved ranking rather than merely recall. The chunk table is derived data and never authoritative: the memory table remains the store of record and is not migrated, so an existing hand-curated database gains an index and risks nothing."
+    },
+    {
+      "id": 6,
+      "chunk_type": "note",
+      "source": "agent-search",
+      "content": "Quoting every bare term in a memory query is not the bug and must stay. FTS5 treats parentheses, star, colon and double quote as operators, so a literal query like greet() is a syntax error without it, and so are codrift:mode and a 3:1 ratio. What was wrong was joining the quoted terms with a space. Quoting and prefix matching are not in tension either, which the original analysis assumed: FTS5 accepts a star directly after a closing quote, so you never had to choose between protecting greet() and supporting a prefix."
+    },
+    {
+      "id": 7,
+      "chunk_type": "decision",
+      "source": "agent-ui",
+      "content": "Initiative and memory changes reach open windows as WebSocket frames the client patches state from, never as a signal to reload. The workspace's load() fans out a get_initiative_agents call per initiative, so making it the refresh primitive would turn every rename into O(initiatives) round trips, and it flips a loading flag that would blank the sidebar whenever somebody else made an edit. The frames are initiative_created, initiative_updated, initiative_deleted and memory_changed. The initiative frames carry the whole record in the same shape list_initiatives returns, including the fields derived at the API boundary - context_path and per-directory git - because patching with the leaner Initiative.to_map shape would silently strip them from whichever row changed."
+    },
+    {
+      "id": 8,
+      "chunk_type": "decision",
+      "source": "agent-ui",
+      "content": "The memory_changed frame deliberately says only THAT an initiative's store moved, never what changed in it. The memory view owns a query string that no server-side event could reproduce, so the only correct refresh is the view re-running its own query. That refresh is silent - it does not flip the loading flag - because an agent writing entries in the background would otherwise replace the list the user is reading with a Loading placeholder every few seconds."
+    },
+    {
+      "id": 9,
+      "chunk_type": "decision",
+      "source": "agent-ui",
+      "content": "Codrift.Freshness polls initiatives.json and each initiative's memory.db for changes made by another OS process. Every in-VM mutation already broadcasts on its own - Initiative.Store on each write, Codrift.Memory on add and delete - which covers the app itself, a second window, and an MCP-connected agent. It does not cover the CLI, because `codrift initiative create` and `codrift memory add` run through bin/codrift eval in a separate process and write those files directly. Routing them back through the VM was rejected: the whole point of those paths being pure is that they work with no booted system. Watching the files instead needs no change to the writers and picks up every external writer there will ever be, including a hand edit. When the initiatives file moves, Freshness calls Store.reload, which diffs disk against GenServer state and broadcasts one event per real difference - that also stops a running app from serving a list that no longer matches disk."
+    },
+    {
+      "id": 10,
+      "chunk_type": "file_context",
+      "source": "agent-arch",
+      "content": "lib/codrift/initiative/store.ex is the GenServer holding initiatives in memory and persisting them to ~/.config/codrift/initiatives.json. The important structural fact is put_initiative/3: it is the single funnel every mutation lands in - add_dir, remove_dir, set_status, link_integration, the branch and worktree toggles - which is why the change broadcast lives there rather than being repeated per mutation and forgotten by whatever gets added next. create/2 is the only caller that passes an explicit event, since it is the only one that is not an update. Accepts :path, :name and :context_dir_base options for test isolation."
+    },
+    {
+      "id": 11,
+      "chunk_type": "note",
+      "source": "agent-desktop",
+      "content": "The packaged desktop app detects that it is running as the Tauri sidecar by checking two environment variables, not one. A plain mix release boots through bin/desktop, which exports RELEASE_NAME. The shipped build is Burrito-wrapped, and Burrito's launcher execve's erl directly with a hand-built environment that sets RELEASE_ROOT and __BURRITO but never RELEASE_NAME. Checking only RELEASE_NAME therefore worked in development and silently failed in every released app: no login PATH, so the claude binary and its siblings were never found; no file logging; no port check; and no ShutdownManager."
+    },
+    {
+      "id": 12,
+      "chunk_type": "note",
+      "source": "agent-desktop",
+      "content": "When launched as the desktop sidecar the process inherits macOS's minimal launchd PATH, which has no ~/.local/bin, no mise shims and no homebrew, so agent CLIs cannot be found. The fix runs the user's login shell with -lic to source both the login and the interactive files, since version managers put their shims in either. An interactive shell with no TTY is also exactly the shape that can block forever on a dotfile waiting for input, and this runs before the supervision tree starts, so a wedged shell would hang the whole app at boot. It is capped with a five second timeout after which the launchd PATH is used and the orphan exits on its own."
+    },
+    {
+      "id": 13,
+      "chunk_type": "decision",
+      "source": "agent-security",
+      "content": "The HTTP server binds the loopback interface only. Codrift is a local desktop sidecar and its routes are unauthenticated - POST /api/rpc reaches Core.write_file and Core.start_agent - so the socket must never be reachable from the LAN. Codrift.Plugs.LocalGuard additionally rejects browser-borne cross-origin and DNS-rebinding requests before any route runs, which is a separate defence from the bind address: the bind stops a remote host connecting at all, the guard stops a page in the user's own browser from driving the local server. The guard is disabled by default under mix test so the bulk of the HTTP tests can use Plug.Test's default host."
+    },
+    {
+      "id": 14,
+      "chunk_type": "snippet",
+      "source": "agent-arch",
+      "content": "Agent output is base64-encoded before it goes onto the WebSocket, because PTY bytes are binary and can be a partial UTF-8 sequence mid-frame, which JSON encoding would either mangle or reject. It is buffered in AgentProcess newest-first with a cap of 1000 chunks and streamed to every subscriber. The browser replays scrollback from GET /api/agent/:id/output on connect and then feeds live bytes straight into xterm.js. When no live process exists the same endpoint falls back to the durable transcript log, so the scrollback of stopped and crashed agents survives a restart."
+    },
+    {
+      "id": 15,
+      "chunk_type": "summary",
+      "source": "agent-arch",
+      "content": "The EventRelay is one process per WebSocket connection, not a single shared one. Agents and conductors broadcast plain Elixir tuples, and Francis passes whatever the socket receives to format_response/2, which raises on a bare tuple - so something has to translate tuples into socket-shaped frames, and it subscribes on the socket's behalf. frame/1 returns nil for events the client has no use for, and those are dropped rather than crashing the connection, which is what lets a new event tuple be introduced anywhere in the system without taking existing sockets down."
+    }
+  ],
+  "questions": [
+    { "q": "why does memory search use OR instead of AND", "expect": [3] },
+    { "q": "does a question with only stopwords return nothing", "expect": [3] },
+    { "q": "should I add a star to every search term", "expect": [4] },
+    { "q": "why doesn't notariz* match anything", "expect": [4] },
+    { "q": "how are long memory entries indexed", "expect": [5] },
+    { "q": "did chunking actually improve the numbers", "expect": [5] },
+    { "q": "will existing memory databases be migrated or lost", "expect": [5] },
+    { "q": "why are query terms wrapped in quotes", "expect": [6] },
+    { "q": "can I search for greet() without a syntax error", "expect": [6] },
+    { "q": "how does the UI learn an initiative changed", "expect": [7] },
+    { "q": "why not just call load() again on every change", "expect": [7] },
+    { "q": "what does the memory_changed event carry", "expect": [8] },
+    { "q": "why does the memory list not flash Loading when an agent writes", "expect": [8] },
+    { "q": "how do CLI writes reach a running app", "expect": [9] },
+    { "q": "why is there a poller instead of broadcasting from the CLI", "expect": [9] },
+    { "q": "where should I put a new broadcast when I add a mutation", "expect": [10] },
+    { "q": "what is the single funnel every initiative mutation goes through", "expect": [10] },
+    { "q": "why can't Codrift.Memory use a GenServer or a connection pool", "expect": [2] },
+    { "q": "where do I add validation for a new operation", "expect": [1] },
+    { "q": "how do MCP tools and the web UI share code", "expect": [1] },
+    { "q": "why did the packaged app not find the claude binary", "expect": [11, 12] },
+    { "q": "why check two environment variables for the sidecar", "expect": [11] },
+    { "q": "why is there a timeout on reading the login shell PATH", "expect": [12] },
+    { "q": "is the local server reachable from other machines on the network", "expect": [13] },
+    { "q": "what protects against DNS rebinding", "expect": [13] },
+    { "q": "why is terminal output base64 encoded", "expect": [14] },
+    { "q": "what happens to scrollback after an agent crashes", "expect": [14] },
+    { "q": "why is there one relay per socket", "expect": [15] },
+    { "q": "what happens when an unknown event tuple reaches a socket", "expect": [15] }
+  ]
+}

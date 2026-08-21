@@ -27,6 +27,16 @@ defmodule Codrift.CLI.Initiative do
 
   # ── Dispatch ─────────────────────────────────────────────────────────────────
 
+  @doc """
+  Every initiative, read straight from disk, oldest first.
+
+  Public so other CLI commands — `codrift prune` — can read the store without a
+  running `Codrift.Initiative.Store`, which is the whole reason this module
+  parses the JSON itself.
+  """
+  @spec all() :: [Codrift.Initiative.t()]
+  def all, do: load_sorted()
+
   @doc "Dispatches initiative CLI subcommands from argv."
   @spec run([String.t()]) :: :ok
   def run(["list" | _]) do

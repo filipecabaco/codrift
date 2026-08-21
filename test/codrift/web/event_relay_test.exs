@@ -5,6 +5,37 @@ defmodule Codrift.Web.EventRelayTest do
   alias Codrift.Test.EchoAdapter
   alias Codrift.Web.EventRelay
 
+  describe "frame/1 — initiative lifecycle" do
+    # The client patches its state straight from this payload, so it has to be
+    # the same shape `list_initiatives` returns — including `context_path`,
+    # which `Initiative.to_map/1` alone does not carry.
+    test "created and updated carry the API-boundary initiative map" do
+      initiative = Codrift.Initiative.new("Fresh")
+      id = initiative.id
+
+      assert %{event: "initiative_created", initiative: created} =
+               EventRelay.frame({:initiative_created, initiative})
+
+      assert %{"id" => ^id, "name" => "Fresh", "context_path" => path} = created
+      assert is_binary(path)
+
+      assert %{event: "initiative_updated", initiative: %{"id" => ^id}} =
+               EventRelay.frame({:initiative_updated, initiative})
+    end
+
+    test "deleted carries only the id, since the record is gone" do
+      assert %{event: "initiative_deleted", initiative_id: "i1"} =
+               EventRelay.frame({:initiative_deleted, "i1"})
+    end
+
+    # Deliberately says only *that* memory moved: the memory view owns a query
+    # string no frame could reproduce, so re-running it is the only refresh.
+    test "memory_changed names the initiative and nothing else" do
+      assert %{event: "memory_changed", initiative_id: "i1"} =
+               EventRelay.frame({:memory_changed, "i1"})
+    end
+  end
+
   describe "frame/1" do
     test "encodes agent output as base64 so binary PTY bytes survive JSON" do
       assert %{event: "output", agent_id: "a1", content: content} =

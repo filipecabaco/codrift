@@ -117,6 +117,7 @@ around.
 | Category | Tools | Skill |
 |---|---|---|
 | Initiatives | `list_initiatives`, `create_initiative`, `add_dir`, `set_initiative_status`, `get_diff` | `codrift-initiatives` |
+| Worktrees | `list_worktrees`, `set_dir_worktree`, `prune_worktrees` | `codrift-initiatives` |
 | Memory | `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list` | `codrift-memory` |
 | Agents | `start_agent`, `send_to_agent`, `get_agent_output`, `broadcast_to_initiative` | `codrift-orchestration` |
 | Handoff | `open_terminal`, `focus_agent` | `codrift-orchestration` |

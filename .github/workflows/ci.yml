@@ -109,6 +109,12 @@ jobs:
       - name: Run tests
         run: mix test
 
+      # Retrieval quality is otherwise argued about rather than measured, and the
+      # regression it catches is silent: a query returns nothing and the caller
+      # concludes the store is empty.
+      - name: Memory search eval
+        run: mix codrift.memory.eval --max-empty 0 --min-top1 0.7 --min-mrr 0.8
+
   # ── 3. Build + E2E ───────────────────────────────────────────────────────────
   build_and_e2e:
     name: Build release + E2E

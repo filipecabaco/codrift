@@ -30,19 +30,58 @@ GenServer. Persists to `~/.config/codrift/initiatives.json`. Context folders liv
 
 Accepts `:path`, `:name`, `:context_dir_base` opts for test isolation.
 
-API: `create/2`, `get/1`, `list/0`, `add_dir/2,3,4`, `remove_dir/2`, `delete/1`, `set_status/2`, `set_worktree_default/3`, `toggle_dir_worktree/3`, `context_path/1`
+Every mutation broadcasts an `:initiative_created` / `:initiative_updated` /
+`:initiative_deleted` tuple through `Codrift.Web.EventRelay`. `reload/1` re-reads
+the file and broadcasts one event per difference — how a write made by the CLI,
+in its own OS process, reaches both this state and the open windows.
+
+API: `create/2`, `get/1`, `list/0`, `reload/0`, `paths/0`, `add_dir/2,3,4`, `remove_dir/2`, `delete/1`, `set_status/2`, `set_worktree_default/3`, `set_dir_worktree/4`, `context_path/1`
 
 ## Codrift.Worktree
 
 Pure module. Git worktree lifecycle management. See [worktrees.md](worktrees.md).
 
-API: `git_repo?/1`, `ensure/3`, `remove/2`, `status/1`, `worktree_path/2`, `branch_name/2`
+API: `git_repo?/1`, `ensure/3`, `remove/2`, `status/1`, `worktree_path/2`, `worktrees_dir/1`, `branch_name/2`
+
+## Codrift.Worktree.Inventory
+
+Pure module. Enumerates every managed worktree under
+`~/.codrift/initiatives/*/worktrees/*` and classifies each as linked or orphaned
+against the initiatives it is given — taken as an argument, not read from the
+store, so `codrift prune` works under `bin/codrift eval`. Also finds worktrees
+git still lists in a repository whose folder is gone.
+
+API: `scan/1`, `stale_registrations/1`, `prune/2`, `to_map/1`, `prune_to_map/1`
 
 ## Codrift.Memory
 
 Pure module. Per-initiative FTS5 full-text search over agent knowledge. See [memory.md](memory.md).
 
-API: `search/2`, `add/4`, `delete/2`, `recent/2`, `list/2`, `stats/1`, `valid_types/0`
+`add/4` and `delete/2` broadcast `:memory_changed` so an open memory view
+re-runs its query. Broadcasting is a `Registry` dispatch that no-ops when no
+registry is running, which keeps the module usable under `bin/codrift eval`.
+
+Search OR-joins its terms and drops stopwords, so a whole question works as a
+query; it ranks chunks and returns entries. See [memory.md](memory.md).
+
+API: `search/2`, `add/4`, `delete/2`, `recent/2`, `list/2`, `stats/1`, `valid_types/0`, `db_path/1`, `db_file/0`
+
+## Codrift.Memory.Chunker
+
+Pure module. Splits an entry into overlapping chunks (600 chars, 150 overlap) so
+BM25 judges an entry by its best passage rather than its average length.
+
+API: `split/1`, `size/0`
+
+## Codrift.Freshness
+
+GenServer. Polls the files this VM is not the only writer of — `initiatives.json`
+and each initiative's `memory.db` — and turns an external change into the same
+lifecycle frames an in-VM write produces. Covers the CLI, which writes those
+files from a separate OS process and so cannot broadcast.
+
+Accepts `:interval` (`false` disables polling; the default under `mix test`),
+`:store`, and `:name` opts. `poll/1` runs one pass synchronously.
 
 ## Codrift.SessionStore
 

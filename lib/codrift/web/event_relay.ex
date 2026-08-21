@@ -16,11 +16,19 @@ defmodule Codrift.Web.EventRelay do
       %{event: "conductor_agent_ready",   initiative_id: iid, agent_id: id}
       %{event: "conductor_agent_stopped", initiative_id: iid, agent_id: id, exit_code: 0}
       %{event: "pane_request", initiative_id: iid, agent_id: id, reason: "…"}
+
+  Initiative and memory frames are not keyed by `agent_id` — they carry the
+  changed record (or just the initiative id) so a client can patch one row:
+
+      %{event: "initiative_created", initiative: %{"id" => iid, …}}
+      %{event: "initiative_updated", initiative: %{"id" => iid, …}}
+      %{event: "initiative_deleted", initiative_id: iid}
+      %{event: "memory_changed", initiative_id: iid}
   """
 
   use GenServer
 
-  alias Codrift.{AgentProcess, AgentSupervisor, Conductor, ConductorSupervisor}
+  alias Codrift.{AgentProcess, AgentSupervisor, Conductor, ConductorSupervisor, Core}
 
   @doc """
   Starts a relay forwarding frames to `socket`.
@@ -139,6 +147,38 @@ defmodule Codrift.Web.EventRelay do
       agent_id: agent_id,
       reason: reason
     }
+
+  # ── Initiative lifecycle ────────────────────────────────────────────────────
+  #
+  # The open window is not the only writer of the initiative list: `codrift
+  # initiative create` from a shell, an MCP-connected agent, and a second window
+  # all mutate it behind this session's back, and until these frames existed the
+  # change was invisible until a manual reload.
+  #
+  # The frame carries the whole record rather than just the id so the client can
+  # patch the row it names. Re-running the client's `load()` instead would cost
+  # an N+1 of `get_initiative_agents` per initiative on every rename.
+  #
+  # `Core.initiative_map/1` — not `Initiative.to_map/1` — because the client's
+  # `Initiative` type includes fields derived at the API boundary (`context_path`,
+  # per-dir `git`). Patching with the leaner shape would silently strip them from
+  # whichever row changed. It stats the filesystem, so it runs here, per socket,
+  # rather than inside the store's GenServer on every write.
+
+  def frame({:initiative_created, initiative}),
+    do: %{event: "initiative_created", initiative: Core.initiative_map(initiative)}
+
+  def frame({:initiative_updated, initiative}),
+    do: %{event: "initiative_updated", initiative: Core.initiative_map(initiative)}
+
+  def frame({:initiative_deleted, initiative_id}),
+    do: %{event: "initiative_deleted", initiative_id: initiative_id}
+
+  # Deliberately says only *that* memory changed, never what. The memory view
+  # owns a query string this frame cannot reproduce, so the only correct refresh
+  # is the view re-running its own query.
+  def frame({:memory_changed, initiative_id}),
+    do: %{event: "memory_changed", initiative_id: initiative_id}
 
   def frame(_other), do: nil
 end

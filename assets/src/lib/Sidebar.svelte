@@ -67,7 +67,11 @@
 
 <aside
   class={[
-    "shrink-0 overflow-y-auto border-r bg-canvas p-2",
+    // overflow-x-hidden is not redundant: CSS resolves a `visible` axis to
+    // `auto` when the other axis is not visible, so `overflow-y-auto` alone gave
+    // the sidebar a horizontal scrollbar the moment any row outgrew it — and that
+    // scrollbar then ate 15px of vertical room off the bottom of the list.
+    "shrink-0 overflow-x-hidden overflow-y-auto border-r bg-canvas p-2",
     focused ? "border-accent/50" : "border-border",
   ]}
   style="width: {width}px"
@@ -104,7 +108,11 @@
             </button>
             <button
               class={[
-                "flex flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs font-semibold",
+                // min-w-0 is what makes the truncate below work. `flex-1` sets
+                // the basis but not the floor: a flex item's default min-width is
+                // auto — its min-content width — so a long initiative name pushed
+                // the whole row wider than the sidebar instead of ellipsing.
+                "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left text-xs font-semibold",
                 selected(`i:${init.id}`) ? "bg-accent/20 text-white" : "text-fg hover:bg-surface",
               ]}
               onclick={() => onSelectInitiative(init.id)}
