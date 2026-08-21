@@ -20,10 +20,24 @@ export type AgentInfo = {
   profile?: string | null;
 };
 
+/**
+ * An agent asking for the user's attention at a specific agent or terminal.
+ *
+ * Unlike every other frame here this one is a *request*, not a notification:
+ * the backend has no way to open a pane, so a tool that needs a human at the
+ * keyboard says so and the window acts on it.
+ */
+export type PaneRequest = {
+  agentId: string;
+  initiativeId: string;
+  reason: string | null;
+};
+
 const outputSubs = new Map<string, Set<(bytes: Uint8Array) => void>>();
 const stoppedSubs = new Map<string, Set<(code: number) => void>>();
 const statusSubs = new Set<(agentId: string, status: AgentStatus) => void>();
 const agentSubs = new Set<(agent: AgentInfo) => void>();
+const paneSubs = new Set<(req: PaneRequest) => void>();
 
 let socket: WebSocket | null = null;
 let retry: ReturnType<typeof setTimeout> | null = null;
@@ -48,6 +62,17 @@ function dispatch(frame: Record<string, unknown>) {
       break;
     case "agent_started":
       agentSubs.forEach((fn) => fn(frame.agent as AgentInfo));
+      break;
+    // Ordered after the `agent_started` for the same agent — both ride this one
+    // socket — so a handler can rely on the workspace already knowing about it.
+    case "pane_request":
+      paneSubs.forEach((fn) =>
+        fn({
+          agentId,
+          initiativeId: frame.initiative_id as string,
+          reason: (frame.reason as string) ?? null,
+        }),
+      );
       break;
     case "output": {
       const subs = outputSubs.get(agentId);
@@ -142,6 +167,12 @@ export function onAgentOutput(
 export function onAgent(fn: (agent: AgentInfo) => void): () => void {
   agentSubs.add(fn);
   return () => agentSubs.delete(fn);
+}
+
+/** Subscribe to agents asking to be put in front of the user. */
+export function onPaneRequest(fn: (req: PaneRequest) => void): () => void {
+  paneSubs.add(fn);
+  return () => paneSubs.delete(fn);
 }
 
 /** Subscribe to agent status transitions. */

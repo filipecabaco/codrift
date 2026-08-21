@@ -1,0 +1,58 @@
+## Customize flags given to the VM: https://www.erlang.org/doc/man/erl.html
+## -mode/-name/-sname/-setcookie are configured via env vars, do not set them here
+
+## Codrift is a desktop sidecar, not a server. It sits idle most of the time,
+## on battery, next to the editor and browser the user actually came for — so
+## the defaults, which are tuned for a machine that exists to run the BEAM, are
+## the wrong shape. Everything below trades throughput we cannot use for CPU and
+## RSS the rest of the desktop can.
+
+## ── Stop the schedulers spinning ──────────────────────────────────────────────
+## The big one. By default a scheduler with no work busy-waits before it sleeps,
+## on the bet that more work is milliseconds away. On a server that bet pays; in
+## a sidecar waiting on a human it burns a slice of a core per scheduler forever,
+## which is what a laptop reports as "the fans came on and nothing is happening".
+## `none` sleeps immediately. The cost is microseconds of wake latency on the
+## next message, against a workload whose deadlines are set by typing speed.
++sbwt none
++sbwtdcpu none
++sbwtdio none
+
+## ── Fewer schedulers ──────────────────────────────────────────────────────────
+## One scheduler per core is right for work that parallelises. Codrift's does
+## not: it is a few GenServers shuffling terminal bytes between a PTY and a
+## WebSocket, and it is I/O-bound end to end. Every extra scheduler still costs
+## its own allocator arenas, so on an 18-core laptop the default is mostly RSS
+## with nothing to run on it.
+##
+## A fixed four rather than a percentage, in both directions. On a large machine
+## it saves more (measured 42 MB against 46 MB for +SP 50:50). On a small one it
+## is the safer choice: 50% of two cores is a single scheduler, and one scheduler
+## means any NIF that blocks — exqlite servicing the memory store, say — stalls
+## every other process until it returns. Four schedulers on two cores merely
+## sleep, which with busy-wait off costs nothing.
++S 4:4
+
+## Dirty CPU schedulers exist for NIFs that block — crypto over huge payloads,
+## heavy regex. Codrift calls none of them, so the default (one per core) is
+## pure overhead.
++SDPcpu 25:25
+
+## Dirty I/O is the transcript log and the odd config read. Ten is the default;
+## four is more than this ever needs.
++SDio 4
+
+## ── Smaller preallocated tables ───────────────────────────────────────────────
+## Both are arrays sized at boot, not on demand. Codrift runs on the order of a
+## hundred processes and a handful of ports per agent; these leave three orders
+## of magnitude of headroom and hand back a couple of MB of RSS at startup.
++P 32768
++Q 16384
+
+## ── Give binaries back sooner ─────────────────────────────────────────────────
+## Terminal output is refc binaries, and a refc binary is only released when the
+## process holding the last reference does a fullsweep. Agents are long-lived and
+## mostly idle, so without this an agent that scrolled a lot at 09:00 is still
+## holding that memory at 17:00. Ten generational collections per fullsweep costs
+## a little CPU on a path that is already cheap.
+-env ERL_FULLSWEEP_AFTER 10

@@ -18,6 +18,7 @@ defmodule Codrift.MCP.Handler do
     - `list_agents` — running agents
     - `get_initiative_agents` — running agents filtered by initiative, with status
     - `start_agent` — spawn an agent in a directory
+    - `open_terminal` — put a shell in front of the user for a step only they can do
     - `send_to_agent` — send input to a running agent
     - `get_agent_output` — fetch recent output from an agent
     - `broadcast_to_initiative` — send the same prompt to all agents in an initiative
@@ -212,7 +213,9 @@ defmodule Codrift.MCP.Handler do
         "name" => "start_agent",
         "description" =>
           "Start an AI coding agent in a directory. Omit `dir` for a folderless " <>
-            "initiative — the agent runs in the initiative's own scratchpad (context) folder.",
+            "initiative — the agent runs in the initiative's own scratchpad (context) " <>
+            "folder. For a shell the *user* is meant to drive, use `open_terminal` " <>
+            "instead — it opens a pane and moves their keyboard into it.",
         "inputSchema" => %{
           "type" => "object",
           "properties" => %{
@@ -235,6 +238,64 @@ defmodule Codrift.MCP.Handler do
             }
           },
           "required" => ["initiative_id", "adapter"]
+        }
+      },
+      %{
+        "name" => "open_terminal",
+        "description" =>
+          "Open an interactive shell in front of the user, in a Codrift pane that " <>
+            "takes the keyboard. Use this when a step needs a human — anything you " <>
+            "are not permitted to run yourself (`git commit`, `git push`, a deploy), " <>
+            "a credential prompt, or a choice only they can make. Pass `command` to " <>
+            "draft the command line for them: it is TYPED AT THE PROMPT BUT NOT RUN, " <>
+            "so they read it and press Return themselves. State `reason` — it is " <>
+            "shown to them as the terminal opens, and it is the only explanation " <>
+            "they get for why their keyboard just moved. Poll `get_agent_output` to " <>
+            "see what happened, and do not assume the command ran.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "dir" => %{
+              "type" => "string",
+              "description" =>
+                "Working directory for the shell. Optional — defaults to the " <>
+                  "initiative's scratchpad folder."
+            },
+            "command" => %{
+              "type" => "string",
+              "description" =>
+                "Single-line command to type at the prompt without running it. " <>
+                  "Newlines are flattened to spaces so nothing can submit itself; " <>
+                  "use repeated flags (e.g. two `-m`) rather than embedded newlines."
+            },
+            "reason" => %{
+              "type" => "string",
+              "description" =>
+                "One line telling the user what you need from them, e.g. " <>
+                  "\"review and commit the staged auth changes\"."
+            }
+          },
+          "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "focus_agent",
+        "description" =>
+          "Bring an already-running agent or terminal into a pane and give it the " <>
+            "user's keyboard. Use it to hand back to a session you opened earlier " <>
+            "instead of opening a second one, or to point the user at an agent that " <>
+            "is blocked waiting on them.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "agent_id" => %{"type" => "string"},
+            "reason" => %{
+              "type" => "string",
+              "description" => "One line telling the user why they are being sent here."
+            }
+          },
+          "required" => ["agent_id"]
         }
       },
       %{

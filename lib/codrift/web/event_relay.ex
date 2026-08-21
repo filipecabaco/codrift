@@ -15,6 +15,7 @@ defmodule Codrift.Web.EventRelay do
       %{event: "conductor_output", initiative_id: iid, agent_id: id, content: base64}
       %{event: "conductor_agent_ready",   initiative_id: iid, agent_id: id}
       %{event: "conductor_agent_stopped", initiative_id: iid, agent_id: id, exit_code: 0}
+      %{event: "pane_request", initiative_id: iid, agent_id: id, reason: "…"}
   """
 
   use GenServer
@@ -29,6 +30,24 @@ defmodule Codrift.Web.EventRelay do
   """
   def start_link(socket \\ self()) do
     GenServer.start_link(__MODULE__, socket)
+  end
+
+  @doc """
+  Pushes an event tuple to every connected window.
+
+  `AgentSupervisor` wires each new agent to the watchers on its own, which
+  covers everything keyed to an agent's lifecycle. This is the door for events
+  that aren't: a tool asking the UI to *do* something — surface a pane, move the
+  keyboard — where there is no state change to infer it from. Unroutable events
+  are dropped by `frame/1`, so a new tuple can't take a socket down.
+  """
+  def broadcast(event) do
+    Registry.dispatch(Codrift.AgentWatchers, :all, fn watchers ->
+      Enum.each(watchers, fn {watcher, _} -> send(watcher, event) end)
+    end)
+  rescue
+    # No registry (tests, CLI-only runs) simply means nobody is watching.
+    ArgumentError -> :ok
   end
 
   @doc """
@@ -109,6 +128,16 @@ defmodule Codrift.Web.EventRelay do
       initiative_id: initiative_id,
       agent_id: agent_id,
       exit_code: code
+    }
+
+  # Not a state change, but a request: an agent asking the window to put this
+  # agent in front of the user because it needs a human at the keyboard.
+  def frame({:pane_request, initiative_id, agent_id, reason}),
+    do: %{
+      event: "pane_request",
+      initiative_id: initiative_id,
+      agent_id: agent_id,
+      reason: reason
     }
 
   def frame(_other), do: nil

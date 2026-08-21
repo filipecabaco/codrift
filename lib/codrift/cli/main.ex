@@ -12,12 +12,14 @@ defmodule Codrift.CLI.Main do
       codrift session    <subcommand>
       codrift memory     <subcommand>
       codrift mcp        <subcommand>
+      codrift pane       <subcommand>
   """
 
   alias Codrift.CLI.Initiative
   alias Codrift.CLI.Integration
   alias Codrift.CLI.MCP
   alias Codrift.CLI.Memory
+  alias Codrift.CLI.Pane
   alias Codrift.CLI.Session
   alias Codrift.CLI.Start
   alias Codrift.CLI.Update
@@ -31,6 +33,7 @@ defmodule Codrift.CLI.Main do
   def run(["session" | rest]), do: Session.run(rest)
   def run(["memory" | rest]), do: Memory.run(rest)
   def run(["mcp" | rest]), do: MCP.run(rest)
+  def run(["pane" | rest]), do: Pane.run(rest)
   def run(["update" | rest]), do: Update.run(rest)
   def run(["start" | rest]), do: Start.run(rest)
 
@@ -43,6 +46,7 @@ defmodule Codrift.CLI.Main do
       codrift session     <subcommand>
       codrift memory      <subcommand>
       codrift mcp         <subcommand>
+      codrift pane        <subcommand>  Open a terminal / focus an agent for the user
       codrift update
 
     Run `codrift <command>` with no arguments for per-command help.

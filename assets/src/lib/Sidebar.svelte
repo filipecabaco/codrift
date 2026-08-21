@@ -18,6 +18,8 @@
   let {
     focused,
     width,
+    paneStrips,
+    onSelectPane,
     newInitiativeKey,
     collapseKey,
     onSelectInitiative,
@@ -30,6 +32,12 @@
   }: {
     focused: boolean;
     width: number;
+    /** Open panes per initiative, for initiatives that currently have a split. */
+    paneStrips: Record<
+      string,
+      { label: string; kind: "terminal" | "agent" | "view"; active: boolean }[]
+    >;
+    onSelectPane: (initId: string, idx: number) => void;
     newInitiativeKey: string;
     collapseKey: string;
     onSelectInitiative: (id: string) => void;
@@ -117,6 +125,37 @@
               {/if}
             </button>
           </div>
+
+          <!-- The initiative's open panes. Drawn whether or not the initiative
+               is expanded, and whether or not it is the one on screen: this row
+               is how you find out that the initiative below has a split waiting
+               for you, which is the whole reason layouts are kept per
+               initiative rather than per window. -->
+          {#if paneStrips[init.id]}
+            <div class="flex items-center gap-1 py-0.5 pl-6 pr-1" role="group" aria-label="Open panes">
+              {#each paneStrips[init.id] as chip, i}
+                <button
+                  class={[
+                    "flex min-w-0 flex-1 items-center gap-1 rounded border px-1 py-px text-[10px]",
+                    chip.active
+                      ? "border-accent/50 bg-accent/20 text-white"
+                      : "border-border bg-surface text-muted hover:text-fg",
+                  ]}
+                  title="Pane {i + 1}: {chip.label}"
+                  onclick={() => onSelectPane(init.id, i)}
+                >
+                  {#if chip.kind !== "view"}
+                    <Icon
+                      src={chip.kind === "terminal" ? TerminalAgentIcon : AgentIcon}
+                      class="size-2.5 shrink-0"
+                      title={chip.kind === "terminal" ? "Terminal" : "Agent"}
+                    />
+                  {/if}
+                  <span class="min-w-0 truncate">{chip.label}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
 
           {#if open}
             <ul role="group" class="list-none">
