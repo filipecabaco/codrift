@@ -101,6 +101,20 @@ defmodule Codrift.MCP.Handler do
     encode_error(nil, -32_600, "Invalid request")
   end
 
+  @doc """
+  True when `request` is a JSON-RPC *notification* — a call carrying a `method`
+  but no `id`, such as the `notifications/initialized` every MCP client sends
+  right after `initialize`.
+
+  JSON-RPC 2.0 forbids answering one. Without this check a notification falls
+  through to the catch-all `dispatch/1` clause and comes back as
+  `-32600 Invalid request` with a null id, which is a response to a message
+  that must not be responded to at all.
+  """
+  @spec notification?(term()) :: boolean()
+  def notification?(%{"method" => _} = request), do: not Map.has_key?(request, "id")
+  def notification?(_request), do: false
+
   defp encode_ok(id, result) do
     JSON.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => result})
   end

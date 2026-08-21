@@ -46,8 +46,9 @@ Codrift (Application)
 | `GET` | `/api/agent/:id` | Agent status (JSON) |
 | `GET` | `/api/agent/:id/output` | Recent PTY output, Base64, oldest-first (`?n=`, ≤1000) — terminal scrollback replay |
 | `WS` | `/ws/initiative/:id` | The live surface, both ways: `output` / `status` / `stopped` / `conductor_*` / `initiative_*` / `memory_changed` frames down (Base64 payloads for PTY bytes); `{t:"d",agent_id,d}` keystrokes and `{t:"r",agent_id,cols,rows}` resizes up |
-| `POST` | `/mcp` | MCP JSON-RPC (HTTP transport) |
-| `SSE` | `/mcp/sse` | MCP server-sent events endpoint |
+| `POST` | `/mcp` | MCP JSON-RPC, streamable HTTP (2025-03-26) — the response is the body. With `?sessionId=`, it is the POST half of the HTTP+SSE transport instead and is only acknowledged (202) |
+| `GET`/`DELETE` | `/mcp` | 405 — no server-initiated stream, no session teardown |
+| `SSE` | `/mcp/sse` | MCP HTTP+SSE transport (2024-11-05). Opens a session and carries its JSON-RPC responses |
 | `GET` | `/oauth/start/:service` | Begin OAuth2 flow |
 | `GET` | `/oauth/callback/:service` | OAuth2 redirect callback |
 | `GET` | `/oauth/status` | Token status for all services |

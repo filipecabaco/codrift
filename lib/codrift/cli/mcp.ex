@@ -12,14 +12,28 @@ defmodule Codrift.CLI.MCP do
       codrift mcp install --all-profiles
       codrift mcp status  [--profile=<name> | --all-profiles]
 
-  Registers the Codrift SSE endpoint with every detected AI CLI:
+  Registers the Codrift streamable-HTTP endpoint (`/mcp`) with every detected
+  AI CLI:
 
-    - **Claude Code** — `claude mcp add --scope user --transport sse`
+    - **Claude Code** — `claude mcp add --scope user --transport http`
     - **Gemini CLI** — merges `mcpServers` into `~/.gemini/settings.json`
     - **Opencode** — merges `mcp` block into `~/.config/opencode/opencode.jsonc`
     - **Cursor CLI** — merges `mcpServers` into `~/.cursor/mcp.json`
-    - **Codex** — prints manual instructions (it only speaks streamable HTTP)
+    - **Codex** — `codex mcp add --url`
     - **Copilot** — prints manual instructions (gh copilot has no MCP config)
+
+  ## Why `/mcp` and not `/mcp/sse`
+
+  Registrations used to point at `/mcp/sse` with `--transport sse`, and no
+  client that followed them ever connected. Under HTTP+SSE the client ignores
+  the POST body and waits for each JSON-RPC response on the SSE stream, so a
+  server that answers in the body — as `POST /mcp` does — leaves the handshake
+  hanging until the client's timeout, with no error to explain it.
+
+  `/mcp` is streamable HTTP (MCP 2025-03-26), where answering in the body is
+  the protocol. `Codrift.MCP.SSESession` fixed the SSE stream too, so an
+  existing `--transport sse` registration works again, but it is the deprecated
+  transport and no longer what a fresh install writes.
 
   Editing someone else's config file is destructive, so every write pretty-
   prints (a minified one-liner is not a config a human can keep maintaining),
@@ -45,6 +59,7 @@ defmodule Codrift.CLI.MCP do
   """
 
   alias Codrift.Config.Settings
+  alias Codrift.Integration.HTTP
 
   @server_name "codrift"
   @default_port 43_117
@@ -75,40 +90,42 @@ defmodule Codrift.CLI.MCP do
 
   defp install(args) do
     port = resolve_port(args)
-    sse_url = "http://localhost:#{port}/mcp/sse"
+    url = "http://localhost:#{port}/mcp"
     # State-changing MCP calls must authenticate to the local server (see
     # Codrift.Plugs.LocalGuard); registrations embed the stable local token.
     token = Codrift.AuthToken.fetch()
 
     case profile_selection(args) do
-      :default -> install_default(sse_url, token)
+      :default -> install_default(url, token)
       {:profiles, []} -> IO.puts("No launch profiles configured in settings.json.")
-      {:profiles, names} -> Enum.each(names, &install_for_profile(&1, sse_url, token))
+      {:profiles, names} -> Enum.each(names, &install_for_profile(&1, url, token))
     end
   end
 
-  defp install_default(sse_url, token) do
+  defp install_default(url, token) do
     results = [
-      install_claude(sse_url, token),
-      install_gemini(sse_url, token),
-      install_opencode(sse_url, token),
-      install_cursor(sse_url, token),
-      install_codex(sse_url),
-      install_copilot(sse_url)
+      install_claude(url, token),
+      install_gemini(url, token),
+      install_opencode(url, token),
+      install_cursor(url, token),
+      install_codex(url, token),
+      install_copilot(url)
     ]
 
     if Enum.all?(results, &(&1 == :skip)) do
       IO.puts("""
       No supported AI CLIs found in PATH.
 
-      Point any MCP-compatible client at the SSE endpoint:
+      Point any MCP-compatible client at the streamable HTTP endpoint:
 
-          #{sse_url}
+          #{url}
 
       and send the token from ~/.codrift/auth-token as an `X-Codrift-Token`
       header on requests.
       """)
     end
+
+    verify_endpoint(url, token)
 
     if Settings.profiles() != %{} do
       IO.puts("""
@@ -128,7 +145,7 @@ defmodule Codrift.CLI.MCP do
   # `Codrift.AgentProcess.profile_config_dir/1`). A profile without it shares the
   # default config, so the plain install already covered it — saying so is more
   # useful than re-registering into the same file and calling it a success.
-  defp install_for_profile(name, sse_url, token) do
+  defp install_for_profile(name, url, token) do
     case Settings.profile(name) do
       {:error, :not_found} ->
         IO.puts("Profile #{name}: not found in settings.json - skipping")
@@ -150,7 +167,7 @@ defmodule Codrift.CLI.MCP do
             # been launched it does not exist yet, and the add would fail on a
             # path rather than on anything the user could act on.
             File.mkdir_p!(dir)
-            install_claude(sse_url, token, [{"CLAUDE_CONFIG_DIR", dir}])
+            install_claude(url, token, [{"CLAUDE_CONFIG_DIR", dir}])
         end
     end
   end
@@ -169,6 +186,11 @@ defmodule Codrift.CLI.MCP do
         report_status("default", [])
         Enum.each(names, &report_profile_status/1)
     end
+
+    verify_endpoint(
+      "http://localhost:#{resolve_port(args)}/mcp",
+      Codrift.AuthToken.fetch()
+    )
   end
 
   defp report_profile_status(name) do
@@ -201,10 +223,16 @@ defmodule Codrift.CLI.MCP do
     end
   end
 
+  # Claude's own line, verbatim, rather than "[ok] codrift registered".
+  #
+  # It carries the URL, the transport and — the part that mattered — whether the
+  # client could actually connect. Collapsing it to "registered" is how a server
+  # that every client hung on kept reporting itself as installed and fine.
   defp report_listing(label, {output, 0}) do
-    if registered?(output),
-      do: IO.puts("#{label}: [ok] #{@server_name} registered"),
-      else: IO.puts("#{label}: [missing] run `codrift mcp install#{flag_for(label)}`")
+    case listing_line(output) do
+      nil -> IO.puts("#{label}: [missing] run `codrift mcp install#{flag_for(label)}`")
+      line -> IO.puts("#{label}: #{line}")
+    end
   end
 
   defp report_listing(label, {output, code}) do
@@ -222,8 +250,88 @@ defmodule Codrift.CLI.MCP do
     |> Enum.any?(&String.starts_with?(String.trim_leading(&1), @server_name <> ":"))
   end
 
+  @doc false
+  @spec listing_line(String.t()) :: String.t() | nil
+  def listing_line(output) do
+    output
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.find(&String.starts_with?(&1, @server_name <> ":"))
+  end
+
   defp flag_for("default"), do: ""
   defp flag_for(name), do: " --profile=#{name}"
+
+  # ── Endpoint verification ────────────────────────────────────────────────────
+
+  defp verify_endpoint(url, token) do
+    case verify(url, token) do
+      {:ok, name} ->
+        IO.puts("\nEndpoint #{url}: [ok] handshake succeeded (server: #{name})")
+
+      {:error, reason} ->
+        IO.puts("""
+
+        Endpoint #{url}: [error] #{reason}
+
+          Registration only writes a line to a config file — this is the check
+          that the line points at something that answers. Is Codrift running?
+        """)
+    end
+  end
+
+  @doc """
+  Completes a real MCP `initialize` handshake against `url`.
+
+  Being registered and being reachable are different facts, and they drifted
+  apart once already: every client was pointed at `/mcp/sse` with the HTTP+SSE
+  transport, which this server did not actually implement, and the only symptom
+  was a client that hung until it timed out. Nothing in `install` or `status`
+  could tell the difference, because neither ever spoke MCP — they checked that
+  a name appeared in a config file.
+
+  So both now finish by doing the smallest thing a client does. A handshake that
+  comes back with `serverInfo` is proof the transport works end to end; anything
+  else is a message the user can act on instead of a silent hang.
+  """
+  @spec verify(String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def verify(url, token) do
+    # `codrift mcp` runs through `bin/codrift eval`, which loads the release
+    # without starting its applications — Req's pool has to be asked for.
+    {:ok, _apps} = Application.ensure_all_started(:req)
+
+    request = %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "initialize",
+      "params" => %{
+        "protocolVersion" => "2024-11-05",
+        "capabilities" => %{},
+        "clientInfo" => %{"name" => "codrift-mcp-verify", "version" => "1"}
+      }
+    }
+
+    case HTTP.post(url, request, [{"X-Codrift-Token", token}]) do
+      {:ok, %{"result" => %{"serverInfo" => %{"name" => name}}}} ->
+        {:ok, name}
+
+      {:ok, %{"error" => %{"message" => message}}} ->
+        {:error, "server refused the handshake: #{message}"}
+
+      {:ok, other} ->
+        {:error, "unexpected handshake reply: #{inspect(other)}"}
+
+      {:error, reason} ->
+        {:error, "could not reach the endpoint: #{format_reason(reason)}"}
+    end
+  end
+
+  # Integration.HTTP has already inspected the failure, so what arrives here is a
+  # string — inspecting it again only wraps it in quotes. The one worth
+  # translating is the one this check exists to catch: nothing is listening.
+  defp format_reason(reason) do
+    if String.contains?(reason, "econnrefused"), do: "connection refused", else: reason
+  end
 
   # ── Profile selection ────────────────────────────────────────────────────────
 
@@ -255,7 +363,7 @@ defmodule Codrift.CLI.MCP do
 
   # ── Per-client installers ────────────────────────────────────────────────────
 
-  defp install_claude(sse_url, token, env \\ []) do
+  defp install_claude(url, token, env \\ []) do
     case System.find_executable("claude") do
       nil ->
         :skip
@@ -279,8 +387,8 @@ defmodule Codrift.CLI.MCP do
           "--scope",
           "user",
           "--transport",
-          "sse",
-          sse_url,
+          "http",
+          url,
           "--header",
           "X-Codrift-Token: #{token}"
         ]
@@ -295,7 +403,7 @@ defmodule Codrift.CLI.MCP do
 
             IO.puts(
               "    Manual: claude mcp add #{@server_name} --scope user " <>
-                "--transport sse #{sse_url}"
+                "--transport http #{url}"
             )
 
             :error
@@ -304,8 +412,8 @@ defmodule Codrift.CLI.MCP do
   end
 
   # Gemini infers the transport from the key: `url` is SSE, `httpUrl` is
-  # streamable HTTP. There is no `type` field.
-  defp install_gemini(sse_url, token) do
+  # streamable HTTP. There is no `type` field, so the key is the whole choice.
+  defp install_gemini(url, token) do
     merge_config(
       "gemini",
       "Gemini CLI",
@@ -313,13 +421,13 @@ defmodule Codrift.CLI.MCP do
       &JSON.decode!/1,
       %{},
       "mcpServers",
-      %{"url" => sse_url, "headers" => %{"X-Codrift-Token" => token}}
+      %{"httpUrl" => url, "headers" => %{"X-Codrift-Token" => token}}
     )
   end
 
   # Opencode validates its config against opencode.ai/config.json: `type` is
   # `local` | `remote`, and anything else makes the whole file fail to load.
-  defp install_opencode(sse_url, token) do
+  defp install_opencode(url, token) do
     merge_config(
       "opencode",
       "Opencode",
@@ -329,7 +437,7 @@ defmodule Codrift.CLI.MCP do
       "mcp",
       %{
         "type" => "remote",
-        "url" => sse_url,
+        "url" => url,
         "enabled" => true,
         "headers" => %{"X-Codrift-Token" => token}
       }
@@ -339,7 +447,7 @@ defmodule Codrift.CLI.MCP do
   # Cursor takes a remote server as a bare `url` plus optional `headers`; the
   # transport is inferred from the endpoint, so there is no `type` to set. The
   # global file is `~/.cursor/mcp.json` — shared by the CLI and the editor.
-  defp install_cursor(sse_url, token) do
+  defp install_cursor(url, token) do
     merge_config(
       "cursor-agent",
       "Cursor CLI",
@@ -347,29 +455,46 @@ defmodule Codrift.CLI.MCP do
       &Codrift.JSONC.decode!/1,
       %{},
       "mcpServers",
-      %{"url" => sse_url, "headers" => %{"X-Codrift-Token" => token}}
+      %{"url" => url, "headers" => %{"X-Codrift-Token" => token}}
     )
   end
 
-  defp install_codex(sse_url) do
+  # `codex mcp add --url` speaks streamable HTTP only, which is exactly what
+  # `/mcp` now is — so Codex is registered rather than talked at. Like Claude,
+  # it refuses to overwrite an existing name, so remove first.
+  defp install_codex(url, token) do
     case System.find_executable("codex") do
       nil ->
         :skip
 
       _bin ->
-        IO.puts("""
-        Codex CLI: `codex mcp add --url` only speaks streamable HTTP, and the
-          Codrift server implements the HTTP+SSE transport (MCP 2024-11-05).
-          Not registering a server Codex cannot reach; the endpoint is
+        IO.puts("Codex CLI: registering via `codex mcp add`...")
+        System.cmd("codex", ["mcp", "remove", @server_name], stderr_to_stdout: true)
 
-              #{sse_url}
-        """)
+        args = [
+          "mcp",
+          "add",
+          @server_name,
+          "--url",
+          url,
+          "--header",
+          "X-Codrift-Token: #{token}"
+        ]
 
-        :ok
+        case System.cmd("codex", args, stderr_to_stdout: true) do
+          {output, 0} ->
+            IO.puts("  ✓ #{String.trim(output)}")
+            :ok
+
+          {output, code} ->
+            IO.puts("  ✗ codex mcp add exited #{code}: #{String.trim(output)}")
+            IO.puts("    Manual: codex mcp add #{@server_name} --url #{url}")
+            :error
+        end
     end
   end
 
-  defp install_copilot(sse_url) do
+  defp install_copilot(url) do
     case System.find_executable("gh") do
       nil ->
         :skip
@@ -377,9 +502,9 @@ defmodule Codrift.CLI.MCP do
       _bin ->
         IO.puts("""
         GitHub Copilot (gh): no MCP config file support.
-          Point it at the SSE endpoint manually:
+          Point it at the streamable HTTP endpoint manually:
 
-              #{sse_url}
+              #{url}
         """)
 
         :ok

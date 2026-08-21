@@ -47,11 +47,11 @@ defmodule Codrift.JSONCTest do
       content = """
       {
         // the codrift SSE endpoint
-        "mcp": {"codrift": {"type": "sse", "url": "http://localhost:43117/mcp/sse"}}
+        "mcp": {"codrift": {"type": "sse", "url": "http://localhost:43117/mcp"}}
       }
       """
 
-      assert %{"mcp" => %{"codrift" => %{"url" => "http://localhost:43117/mcp/sse"}}} =
+      assert %{"mcp" => %{"codrift" => %{"url" => "http://localhost:43117/mcp"}}} =
                JSONC.decode!(content)
     end
 

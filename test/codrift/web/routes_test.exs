@@ -111,11 +111,13 @@ defmodule Codrift.Web.RoutesTest do
       assert %{"error" => %{"code" => -32_601}} = body
     end
 
-    test "returns invalid request error for missing id" do
+    # A method with no id is a JSON-RPC *notification*, and answering one is a
+    # protocol violation. This used to assert the opposite, codifying the bug
+    # that had every `notifications/initialized` come back as an error.
+    test "acknowledges a notification instead of answering it" do
       conn = post_json("/mcp", %{"jsonrpc" => "2.0", "method" => "tools/list"})
-      body = Jason.decode!(conn.resp_body)
-      assert %{"error" => %{"code" => code}} = body
-      assert code in [-32_600, -32_601]
+      assert conn.status == 202
+      assert conn.resp_body == ""
     end
 
     test "returns empty body as invalid request when content-type is missing" do
@@ -125,6 +127,19 @@ defmodule Codrift.Web.RoutesTest do
 
       body = Jason.decode!(conn.resp_body)
       assert %{"error" => _} = body
+    end
+
+    test "an unknown sessionId is rejected rather than answered in the body" do
+      conn =
+        conn(
+          :post,
+          "/mcp?sessionId=nope",
+          Jason.encode!(%{"jsonrpc" => "2.0", "method" => "tools/list", "id" => 1})
+        )
+        |> put_req_header("content-type", "application/json")
+        |> Codrift.call(@opts)
+
+      assert conn.status == 404
     end
   end
 

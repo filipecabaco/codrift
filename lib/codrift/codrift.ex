@@ -7,9 +7,13 @@ defmodule Codrift do
 
   ## MCP server
 
-  Exposes a Model Context Protocol server via HTTP+SSE transport:
-    - `POST /mcp`     – JSON-RPC requests from MCP clients
-    - `GET  /mcp/sse` – SSE stream for server-initiated notifications
+  Exposes a Model Context Protocol server over both HTTP transports:
+
+    - `POST /mcp` – Streamable HTTP (MCP 2025-03-26). The JSON-RPC response is
+      the POST body. This is what `codrift mcp install` registers.
+    - `GET /mcp/sse` – HTTP+SSE (MCP 2024-11-05), for clients that only speak
+      the older transport. The stream names a session, and responses to
+      `POST /mcp?sessionId=…` come back down it. See `Codrift.MCP.SSESession`.
 
   Run `mix codrift.mcp.install` to register the server with Claude Code.
 
@@ -26,6 +30,7 @@ defmodule Codrift do
 
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.MCP.Handler
+  alias Codrift.MCP.SSESession
   alias Codrift.OAuth
   alias Codrift.OAuth.Config, as: OAuthConfig
 
@@ -55,6 +60,7 @@ defmodule Codrift do
       {Registry, keys: :unique, name: Codrift.AgentRegistry},
       {Registry, keys: :unique, name: Codrift.ConductorRegistry},
       {Registry, keys: :duplicate, name: Codrift.AgentWatchers},
+      SSESession,
       Codrift.SessionStore,
       Store,
       Codrift.AgentSupervisor,
@@ -463,19 +469,69 @@ defmodule Codrift do
 
   # ── MCP routes ───────────────────────────────────────────────────────────────
 
-  post("/mcp", fn conn ->
-    conn
-    |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(200, Handler.dispatch(conn.body_params))
-  end)
+  post("/mcp", fn conn -> mcp_post(conn) end)
 
+  # Streamable HTTP has no server-initiated stream here and no session to tear
+  # down, and the spec says to say so with 405 rather than to look like a
+  # missing route. A client that probes `GET /mcp` should fall back to plain
+  # request/response, not conclude the server is not there.
+  get("/mcp", fn conn -> mcp_method_not_allowed(conn) end)
+  delete("/mcp", fn conn -> mcp_method_not_allowed(conn) end)
+
+  # HTTP+SSE (MCP 2024-11-05). The `endpoint` event has to name a *session*, not
+  # a bare path: it is the only thing tying the client's later POSTs back to
+  # this stream, and every JSON-RPC response it is waiting for arrives here.
   sse("/mcp/sse", fn
     :join, _socket ->
-      {:reply, %{event: "endpoint", data: "/mcp"}}
+      # Fully qualified: `sse/2` compiles its handler into a generated module,
+      # where this module's aliases are not in scope.
+      # credo:disable-for-next-line Credo.Check.Design.AliasUsage
+      {:reply, %{event: "endpoint", data: "/mcp?sessionId=#{Codrift.MCP.SSESession.open()}"}}
+
+    {:received, {:mcp_message, body}}, _socket ->
+      {:reply, %{event: "message", data: body}}
 
     {:close, _reason}, _socket ->
       :ok
   end)
 
   unmatched(fn _ -> "not found" end)
+
+  # Two transports arrive on this one route, and which is in play is decided by
+  # `sessionId`:
+  #
+  #   * absent  – Streamable HTTP (MCP 2025-03-26), what `codrift mcp install`
+  #     registers. The response is the POST body.
+  #   * present – HTTP+SSE (2024-11-05). The POST is only acknowledged; the
+  #     response belongs on that session's stream. Answering in the body here
+  #     would leave the client blocked on the stream until it timed out.
+  defp mcp_post(conn) do
+    conn = Plug.Conn.fetch_query_params(conn)
+
+    if Handler.notification?(conn.body_params) do
+      # A notification gets no JSON-RPC response on either transport.
+      Plug.Conn.send_resp(conn, 202, "")
+    else
+      mcp_reply(conn, conn.query_params["sessionId"], Handler.dispatch(conn.body_params))
+    end
+  end
+
+  defp mcp_reply(conn, nil, body) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, body)
+  end
+
+  defp mcp_reply(conn, session_id, body) do
+    case SSESession.deliver(session_id, body) do
+      :ok -> Plug.Conn.send_resp(conn, 202, "")
+      {:error, :no_session} -> Plug.Conn.send_resp(conn, 404, "Unknown MCP session")
+    end
+  end
+
+  defp mcp_method_not_allowed(conn) do
+    conn
+    |> Plug.Conn.put_resp_header("allow", "POST")
+    |> Plug.Conn.send_resp(405, "Method not allowed")
+  end
 end

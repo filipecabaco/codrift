@@ -175,23 +175,59 @@
     term?.reset();
     const myGen = ++gen;
 
-    // Replay first; the gen guard stops a late resolution landing in a newer
-    // agent's terminal.
-    fetchReplay(agent).then((chunks) => {
-      if (myGen !== gen) return;
-      chunks.forEach((bytes) => term?.write(bytes));
-      // After the replay, never before: the repaint it triggers has to land on
-      // top of the old bytes, not underneath them.
-      forceRepaint(agent);
-    });
+    /*
+     * Everything below is about one ordering rule: the replay is the *past*, so
+     * nothing newer may already be on the screen when it lands.
+     *
+     * Two things used to break it, and both show up as a scrambled or
+     * near-empty pane after switching to a *busy* agent — the case where live
+     * frames are arriving the whole time, e.g. a coding CLI redrawing its
+     * spinner every few hundred milliseconds.
+     *
+     * 1. `fetchReplay` is an HTTP round trip. Frames that arrived while it was
+     *    in flight were written straight through, and then the older replay was
+     *    painted on top of them.
+     * 2. `write()` is queued, not immediate. Calling `forceRepaint` right after
+     *    the `forEach` only *looked* like "after the replay": the SIGWINCH
+     *    repaint could be parsed before the replay bytes it was meant to land
+     *    on top of, and get erased by them.
+     *
+     * So: subscribe first (no frame is missed), hold live frames in `pending`,
+     * and release them from xterm's own parse callback — the one point where
+     * the replay is not merely written but on the screen.
+     */
+    let pending: (() => void)[] | undefined = [];
+    const afterReplay = (paint: () => void) => (pending ? pending.push(paint) : paint());
 
     unsubscribe = onAgentOutput(agent, {
       output: (bytes) => {
-        if (myGen === gen) term?.write(bytes);
+        if (myGen === gen) afterReplay(() => term?.write(bytes));
       },
       stopped: (code) => {
-        if (myGen === gen) term?.write(`\r\n\x1b[31m[agent stopped, exit ${code}]\x1b[0m\r\n`);
+        if (myGen === gen) {
+          afterReplay(() => term?.write(`\r\n\x1b[31m[agent stopped, exit ${code}]\x1b[0m\r\n`));
+        }
       },
+    });
+
+    fetchReplay(agent).then((chunks) => {
+      const flush = () => {
+        if (myGen !== gen) return;
+        const queued = pending ?? [];
+        pending = undefined;
+        queued.forEach((paint) => paint());
+        forceRepaint(agent);
+      };
+
+      // A gen bump, or a terminal that went away mid-fetch, means no callback is
+      // coming — drop the buffer rather than stranding live output in it.
+      if (myGen !== gen || !term) {
+        pending = undefined;
+        return;
+      }
+
+      if (chunks.length === 0) return flush();
+      chunks.forEach((bytes, i) => term?.write(bytes, i === chunks.length - 1 ? flush : undefined));
     });
 
     // Sent immediately rather than through pushResize: a freshly attached agent
