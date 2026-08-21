@@ -13,7 +13,7 @@ defmodule Codrift.CLI.MCPTest do
 
   alias Codrift.CLI.MCP
 
-  @entry %{"type" => "remote", "url" => "http://localhost:43117/mcp/sse"}
+  @entry %{"type" => "remote", "url" => "http://localhost:43117/mcp"}
 
   setup do
     dir = Path.join(System.tmp_dir!(), "mcp-cli-#{System.unique_integer([:positive])}")
@@ -179,11 +179,36 @@ defmodule Codrift.CLI.MCPTest do
     end
   end
 
+  # The listing line is what `status` now prints verbatim. Collapsing it to
+  # "registered" is what let a server every client hung on keep reporting itself
+  # as installed and fine — the words "Failed to connect" were in hand and
+  # thrown away.
+  describe "listing_line/1" do
+    test "returns the server's own line, health verdict included" do
+      output = """
+      Checking MCP server health...
+
+        other: https://example.com/mcp (HTTP) - connected
+        codrift: http://localhost:43117/mcp (HTTP) - X Failed to connect
+      """
+
+      assert MCP.listing_line(output) =~ "Failed to connect"
+    end
+
+    test "is nil when the server is not in the listing" do
+      refute MCP.listing_line("other: https://example.com/mcp (HTTP) - connected\n")
+    end
+
+    test "does not return a different server that merely mentions the name" do
+      refute MCP.listing_line("codrift-staging: http://localhost:1/mcp - connected\n")
+    end
+  end
+
   describe "registered?/1" do
     test "matches the server on its own listing line" do
       assert MCP.registered?("""
              other: https://example.com/mcp (HTTP) - connected
-             codrift: http://localhost:43117/mcp/sse (SSE) - connected
+             codrift: http://localhost:43117/mcp (HTTP) - connected
              """)
     end
 

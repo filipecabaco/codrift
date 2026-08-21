@@ -60,7 +60,7 @@ By hand, if you prefer — this is all `--profile` does:
 
 ```bash
 CLAUDE_CONFIG_DIR=~/.claude-work claude mcp add codrift \
-  --scope user --transport sse http://localhost:43117/mcp/sse \
+  --scope user --transport http http://localhost:43117/mcp \
   --header "X-Codrift-Token: $(cat ~/.codrift/auth-token)"
 ```
 
@@ -72,16 +72,16 @@ For any client `codrift mcp install` doesn't cover:
 
 | | |
 |---|---|
-| URL | `http://localhost:43117/mcp/sse` |
-| Transport | SSE |
+| URL | `http://localhost:43117/mcp` |
+| Transport | Streamable HTTP. Clients that only speak the older HTTP+SSE transport can use `http://localhost:43117/mcp/sse` instead |
 | Auth header | `X-Codrift-Token: <token>` |
 | Token file | `~/.codrift/auth-token` |
 
 Claude Code, manually:
 
 ```bash
-claude mcp add codrift --scope user --transport sse \
-  http://localhost:43117/mcp/sse \
+claude mcp add codrift --scope user --transport http \
+  http://localhost:43117/mcp \
   --header "X-Codrift-Token: $(cat ~/.codrift/auth-token)"
 ```
 

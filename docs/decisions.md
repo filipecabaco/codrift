@@ -10,7 +10,7 @@
 | Session storage | SQLite via Exqlite (`~/.codrift/codrift.db`) | Structured, reliable upsert; shares DB with future vector memory |
 | Git diffs | Shell to `git diff` | Zero deps, covers all needed formats |
 | JSON codec | Elixir 1.18 built-in `JSON` | No extra dep needed |
-| MCP transport | HTTP+SSE (`POST /mcp` + `GET /mcp/sse`) | Compatible with `claude mcp add --transport sse` |
+| MCP transport | Streamable HTTP (`POST /mcp`); HTTP+SSE (`GET /mcp/sse`) kept for older clients | Registering `--transport sse` against a server that answers in the POST body hung every client forever — the body is ignored on that transport and the reply is awaited on the stream. `/mcp` makes answering in the body the protocol; `Codrift.MCP.SSESession` gives `/mcp/sse` the session correlation it needs to work as well |
 | Test isolation | `:name` opt defaults to `__MODULE__`; `server` param on queries | Avoids conflicts with app-started named processes |
 | Code style | Credo enforced; `@doc`/`@moduledoc` on all public modules | Consistency + discoverability |
 | Desktop shell | Tauri via `ex_tauri`; Elixir `desktop` release runs as a sidecar | Native window + webview per platform; the Svelte UI talks to Francis on `:43117`; no browser or runtime prerequisites for end users |
