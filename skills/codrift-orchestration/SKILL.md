@@ -21,7 +21,7 @@ get_agent_output { agent_id, n: 50 }
 `profile` is optional and names a launch profile from `settings.json` — it runs
 the adapter under a different config folder/account (e.g. a personal vs work
 Claude login). Omit `dir` for a folderless initiative and the agent runs in the
-initiative's scratchpad folder.
+initiative's context folder.
 
 Prefer this when you know exactly what needs to happen where.
 

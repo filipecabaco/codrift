@@ -35,7 +35,54 @@ defmodule Codrift.InitiativeTest do
     end
   end
 
+  describe "scratch_name/2" do
+    test "stamps the local time" do
+      assert Initiative.scratch_name() =~ ~r/^scratch \d{2}:\d{2}$/
+    end
+
+    test "leads with the directory it was opened against" do
+      assert Initiative.scratch_name([], "codrift") =~ ~r/^scratch · codrift \d{2}:\d{2}$/
+    end
+
+    test "a blank label is no label — no dangling separator" do
+      for label <- [nil, ""] do
+        assert Initiative.scratch_name([], label) =~ ~r/^scratch \d{2}:\d{2}$/
+      end
+    end
+
+    test "the same directory twice in a minute still stays distinguishable" do
+      first = Initiative.scratch_name([], "codrift")
+      assert Initiative.scratch_name([first], "codrift") == first <> " (2)"
+    end
+
+    test "two in the same minute stay distinguishable" do
+      first = Initiative.scratch_name()
+      second = Initiative.scratch_name([first])
+      third = Initiative.scratch_name([first, second])
+
+      assert second == first <> " (2)"
+      assert third == first <> " (3)"
+    end
+
+    test "only steps aside for names actually in use" do
+      assert Initiative.scratch_name(["scratch 00:00 (2)"]) =~ ~r/^scratch \d{2}:\d{2}$/
+    end
+  end
+
   describe "to_map/1 and from_map/1" do
+    test "roundtrips the scratch flag" do
+      original = Initiative.new("quick look", [], scratch: true)
+
+      assert {:ok, restored} = original |> Initiative.to_map() |> Initiative.from_map()
+      assert restored.scratch
+    end
+
+    test "an initiative stored before scratchpads existed reads back as not scratch" do
+      map = Initiative.new("old") |> Initiative.to_map() |> Map.delete("scratch")
+
+      assert {:ok, %Initiative{scratch: false}} = Initiative.from_map(map)
+    end
+
     test "roundtrips a plain initiative with no integration" do
       original = Initiative.new("my-project", ["/some/dir"])
       map = Initiative.to_map(original)

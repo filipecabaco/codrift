@@ -12,7 +12,7 @@
     type Agent,
   } from "$lib/api";
   import { workspace as ws } from "$lib/workspace.svelte";
-  import { MemoryIcon, contextFileIcon, dirIcon } from "$lib/icons";
+  import { MemoryIcon, WorktreeIcon, contextFileIcon, dirIcon } from "$lib/icons";
   import MemoryView from "$lib/MemoryView.svelte";
 
   let {
@@ -74,6 +74,21 @@
 
   const dirLabel = (path: string) =>
     path === initiative.context_path ? "scratch" : (path.split("/").pop() ?? path);
+
+  /**
+   * A worktree path is long and only its last two segments carry information —
+   * every one of them lives under the same `<context>/worktrees/` folder, so the
+   * prefix is the same for all of them and spending a row on it just pushes the
+   * sentence off the end. The full paths are one hover away.
+   */
+  const tail = (path: string | undefined) =>
+    path ? path.split("/").filter(Boolean).slice(-2).join("/") : "(being created…)";
+
+  // Both ends spelled out, for the hover: where the agents are, and which
+  // checkout is deliberately being left alone.
+  const worktreeTitle = (dir: Initiative["dirs"][number]) =>
+    `Isolated worktree — agents run here:\n${dir.worktree_path ?? "(being created…)"}` +
+    `\n\nYour checkout, untouched:\n${dir.path}`;
 
   async function addScratch() {
     addingScratch = true;
@@ -246,19 +261,33 @@
     {#if error}<p class="mb-2 text-xs text-red-400">{error}</p>{/if}
     <div class="space-y-0.5">
       {#each initiative.dirs as dir (dir.path)}
-        {@const dirAgents = agents.filter((a) => a.dir === dir.path).length}
+        <!-- Either path counts: an agent in a worktree-backed directory reports
+             the worktree it runs in, not the source the user added. -->
+        {@const dirAgents = agents.filter(
+          (a) => a.dir === dir.path || a.dir === dir.worktree_path,
+        ).length}
         <div class="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface">
           <Icon
-            src={dirIcon(dir.git)}
-            class="size-4 shrink-0 text-muted"
-            title={dir.git ? "Git repository" : "Folder (not a git repository)"}
+            src={dir.worktree_enabled ? WorktreeIcon : dirIcon(dir.git)}
+            class={["size-4 shrink-0", dir.worktree_enabled ? "text-sky-400" : "text-muted"]}
+            title={dir.worktree_enabled
+              ? "Isolated worktree"
+              : dir.git
+                ? "Git repository"
+                : "Folder (not a git repository)"}
           />
-          <span class="min-w-0 flex-1 truncate text-[13px] text-fg" title={dir.path}>
-            {dirLabel(dir.path)}
+          <span class="min-w-0 flex-1 text-[13px] text-fg">
+            <span class="block truncate" title={dir.path}>{dirLabel(dir.path)}</span>
+            <!-- The sidebar has room for a badge and a tooltip; this view has
+                 room for the answer itself. Both ends, spelled out: where the
+                 agents are, and which checkout is being left alone. -->
+            {#if dir.worktree_enabled}
+              <span class="mt-0.5 block truncate text-[11px] text-muted" title={worktreeTitle(dir)}>
+                agents run in <span class="text-sky-400/90">{tail(dir.worktree_path)}</span>
+                · your checkout is untouched
+              </span>
+            {/if}
           </span>
-          {#if dir.worktree_enabled}<span
-              class="rounded border border-border px-1.5 text-[11px] text-muted">worktree</span
-            >{/if}
           {#if dir.git && !dir.worktree_enabled}
             <button
               class={[

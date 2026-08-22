@@ -38,17 +38,57 @@ keymap, so they are fixed.
 | `⌘D` | Split the content area side by side (press again to collapse the split) |
 | `⌘⇧D` | Split the content area stacked top/bottom |
 | `⌘⌃=` | Balance the split back to 50/50 |
+| `⌘W` | Close the focused pane (the other one takes over the whole area) |
 | `Ctrl+B` | Collapse / expand the sidebar |
 
 Drag the divider between the two panes to resize them, and the divider on the
-sidebar's edge to resize the sidebar. When split, each pane shows a `✕` to close
-it (the other pane takes over the whole area).
+sidebar's edge to resize the sidebar. When split, each pane also shows a `✕`.
+
+`⌘W` is the one combo here that insists on the platform's own modifier: on
+macOS `⌃W` stays with the terminal, where it is delete-word-backwards. On Linux
+and Windows it is `Ctrl+W`, and that collision comes with the platform.
+
+Closing a pane is a layout decision — the agent it was showing keeps running and
+stays in the sidebar. Stopping one is `d`, which confirms first.
+
+A freshly split pane asks what should go in it, and that chooser takes the
+keyboard as soon as the split opens: `↑` / `↓` to pick, `Enter` to open, `⌘W` to
+change your mind.
+
+## Sorting the sidebar
+
+The initiative list can be ordered four ways. Click the `⇅` control in the
+sidebar header to cycle them — its label is the current order — or go straight
+to one from the command palette. The choice is remembered in `settings.json`.
+
+| Order | What it does |
+|-------|--------------|
+| `created` | Oldest first. The default, and the list's original order. |
+| `recent` | Newest first. |
+| `name` | A→Z, case-insensitive. |
+| `status` | Active work first: `ongoing → planning → done → archived`. |
+
+`status` is deliberately **not** the lifecycle order that `[` / `]` cycle
+through. Cycling moves one initiative along its life; sorting decides what the
+sidebar puts in front of you, and finished work belongs at the bottom. Within a
+status, ties break by name.
+
+Every ordering here is *stable* — it changes only when you do something, never
+on its own. There is no "needs input first" for that reason: rows would
+rearrange themselves under the cursor each time an agent changed state, and the
+`N waiting` badge already says who is blocked without moving anything. When a
+sort does move a row — cycling a status with `]`, say — the cursor follows the
+initiative it was on rather than staying at that position.
+
+Scratchpads are not affected: they are always newest first, because a scratchpad
+stack is a recency stack rather than a collection you organise.
 
 ## Initiatives & agents
 
 | Key | Action | Action id |
 |-----|--------|-----------|
 | `n` | New initiative | `new_initiative` |
+| `Ctrl+N` | Open a scratchpad — see below | `new_scratchpad` |
 | `a` | Add directory to the current initiative (absolute path) | `add_dir` |
 | `s` | Start a Claude agent in the directory under the cursor | `start_agent` |
 | `t` | Start a raw `$SHELL` terminal in the directory under the cursor | `start_terminal` |
@@ -60,6 +100,34 @@ it (the other pane takes over the whole area).
 To start a specific adapter (Codex, Opencode, Gemini, Copilot, Cursor), use the **Launch**
 dropdown next to a directory in the Context view, or the command palette. `s`
 always launches Claude.
+
+### Scratchpads
+
+`Ctrl+N` opens a **scratchpad**: an initiative with no name and no dialog in the
+way — for the exploring you do before you know whether it is work. It lands on
+the pane chooser with the keyboard already in it, so a scratchpad running an
+agent is `Ctrl+N` then `Enter`.
+
+**It opens where you were looking.** With the sidebar cursor on a directory (or
+on an agent running in one), the scratchpad is opened against that directory and
+its agents start there — exploring is the point, and an empty folder has nothing
+to explore. With the cursor anywhere else it stays folderless and runs in its
+own context folder.
+
+It names itself after both: `scratch · codrift 14:21`, or `scratch 14:21` when
+there is no directory. Scratchpads are filed under their own heading at the
+bottom of the sidebar, newest first, and they keep their paperwork
+(`initiative.md`, `orchestration.md`, memory) off the tree — nobody opens a
+scratchpad to read it.
+
+Structurally it is still an ordinary initiative: its own context folder, memory
+store, agents and pane layout. So when one turns out to matter, **rank it up** —
+the ⇧ button on its sidebar row, or *Rank scratchpad up to an initiative* in the
+palette. That is a rename and a flag; nothing moves, the paperwork comes back,
+and agents running inside it are not interrupted.
+
+`d` discards an idle scratchpad without asking — there is nothing running and
+you never named it. One with agents in it still confirms first.
 
 ## Context view
 
@@ -121,6 +189,7 @@ Create `~/.codrift/keybindings.json` with any subset of the default map. Use the
   "navigate_down": "j",
   "navigate_up": "k",
   "new_initiative": "n",
+  "new_scratchpad": "ctrl+n",
   "add_dir": "a",
   "start_agent": "s",
   "start_terminal": "t",

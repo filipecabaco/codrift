@@ -253,6 +253,70 @@ defmodule Codrift.Core do
     end
   end
 
+  # Opens a scratchpad: an initiative created without a name, a directory, or a
+  # decision about what it is for.
+  #
+  # The point is a session you can start before you know whether the work is
+  # worth filing — exploration, a one-off command, a question. It carries the
+  # full machinery of an initiative (context folder, memory, agents) so that if
+  # it turns out to matter, `promote_initiative` gives it a name and it *becomes*
+  # the initiative, keeping everything it accumulated on the way.
+  def call("create_scratchpad", args) do
+    # A scratchpad opened while the cursor is on a directory belongs *there* —
+    # exploring is what it is for, and an empty folder has nothing to explore.
+    # With no directory it stays folderless and runs in its own context folder.
+    dirs = args |> Map.get("dirs", []) |> Enum.map(&Path.expand/1)
+    taken = Store.list() |> Enum.filter(& &1.scratch) |> Enum.map(& &1.name)
+    label = dirs |> List.first() |> dir_label()
+    name = Map.get(args, "name") || Codrift.Initiative.scratch_name(taken, label)
+
+    with {:ok, agent} <- validate_agent_choice(Map.get(args, "agent")),
+         {:ok, initiative} <- Store.create_scratch(name, dirs) do
+      # Deliberately does NOT touch the global default agent the way
+      # create_initiative does: a throwaway session must not redefine what every
+      # future initiative launches.
+      if agent do
+        {:ok, updated} = Store.set_agent(initiative.id, agent)
+        {:ok, initiative_map(updated)}
+      else
+        {:ok, initiative_map(initiative)}
+      end
+    else
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  # Ranks a scratchpad up into a real initiative under `name`. Nothing moves: the
+  # same context folder, memory store and running agents carry over, so promoting
+  # mid-session never interrupts anything.
+  def call("promote_initiative", %{"initiative_id" => id, "name" => name})
+      when is_binary(name) do
+    case String.trim(name) do
+      "" ->
+        {:error, "name cannot be empty"}
+
+      trimmed ->
+        case Store.promote(id, trimmed) do
+          {:ok, initiative} -> {:ok, initiative_map(initiative)}
+          {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+        end
+    end
+  end
+
+  def call("rename_initiative", %{"initiative_id" => id, "name" => name}) when is_binary(name) do
+    case String.trim(name) do
+      "" ->
+        {:error, "name cannot be empty"}
+
+      trimmed ->
+        case Store.rename(id, trimmed) do
+          {:ok, initiative} -> {:ok, initiative_map(initiative)}
+          {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+        end
+    end
+  end
+
   def call("set_initiative_agent", %{"initiative_id" => id} = args) do
     with {:ok, agent} <- validate_agent_choice(Map.get(args, "agent")) do
       case Store.set_agent(id, agent) do
@@ -687,6 +751,23 @@ defmodule Codrift.Core do
     {:ok, %{"family" => family, "size" => size}}
   end
 
+  def call("get_sidebar_sort", _args) do
+    {:ok, %{"sort" => Settings.sidebar_sort()}}
+  end
+
+  def call("set_sidebar_sort", %{"sort" => sort}) when is_binary(sort) do
+    # Validated here as well as in the UI: settings.json is hand-editable, and an
+    # unknown ordering would leave the sidebar silently falling back while the
+    # control claimed otherwise.
+    if sort in Settings.sidebar_sorts() do
+      Settings.put_sidebar_sort(sort)
+      {:ok, %{"sort" => sort}}
+    else
+      {:error,
+       "invalid sort: #{sort}. Must be one of: #{Enum.join(Settings.sidebar_sorts(), ", ")}"}
+    end
+  end
+
   def call("read_theme", %{"name" => name}) when is_binary(name) do
     case Codrift.Themes.read(name) do
       {:ok, theme} -> {:ok, theme}
@@ -821,6 +902,10 @@ defmodule Codrift.Core do
       {:error, _} -> []
     end
   end
+
+  # The directory a scratchpad was opened against, as its name reads it.
+  defp dir_label(nil), do: nil
+  defp dir_label(path), do: Path.basename(path)
 
   # Stored paths are whatever the caller passed to add_dir, so match the literal
   # string first and fall back to comparing expanded forms — an agent passing
@@ -1049,8 +1134,14 @@ defmodule Codrift.Core do
   # the working dir (same as `add_context_workspace`), registering it so tree,
   # diff and the editor operate there too. Agents no longer need a project
   # directory configured up front.
-  defp resolve_agent_dir(_init_id, dir) when is_binary(dir) and dir != "" do
-    {:ok, Path.expand(dir)}
+  defp resolve_agent_dir(init_id, dir) when is_binary(dir) and dir != "" do
+    # Routed through the initiative's entries rather than expanded blindly: a
+    # directory with a worktree has two paths, and every caller in the UI names
+    # the source one. See `DirEntry.resolve/2`.
+    case Store.get(init_id) do
+      {:ok, initiative} -> {:ok, DirEntry.resolve(dir, initiative.dirs)}
+      {:error, :not_found} -> {:ok, Path.expand(dir)}
+    end
   end
 
   defp resolve_agent_dir(init_id, _blank) do

@@ -26,6 +26,11 @@
         } catch {
           /* DOM renderer */
         }
+        // A fresh renderer starts with an empty canvas: everything already on
+        // the screen lives in xterm's buffer, not in the surface that just went
+        // away. Without this the pane stays blank until something happens to
+        // write to it — which, for an agent waiting on input, is never.
+        t.refresh(0, t.rows - 1);
       });
       t.loadAddon(webgl);
     } catch {
@@ -104,6 +109,22 @@
   let sentRows = 0;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 
+  /**
+   * Fit, unless the box isn't real yet.
+   *
+   * FitAddon divides the parent's measured size by the cell size, and a box that
+   * has not been laid out (a pane one frame old, one mid-teardown) measures
+   * zero — which proposes a 1×1 grid. xterm then reflows the buffer to one
+   * column, and nothing later puts it back: a refit to the true size only
+   * restores the geometry, not the lines that were wrapped away inside it.
+   */
+  function fitSafe() {
+    if (!term || !el) return;
+    const box = el.getBoundingClientRect();
+    if (box.width < 2 || box.height < 2) return;
+    fit?.fit();
+  }
+
   function pushResize(cols: number, rows: number) {
     // A pane mid-teardown, or one that hasn't been laid out yet, measures as a
     // sliver. Forwarding that reflows the agent's UI to a size nobody chose, and
@@ -147,7 +168,7 @@
   }
 
   /**
-   * Make the agent paint its screen again.
+   * Make the agent paint its screen again — but only where that is free.
    *
    * Attaching to a *running* agent is the case that used to leave a blank pane.
    * The replay is a byte log, not a screen: if the tail of it happens to clear
@@ -161,9 +182,20 @@
    * change in both directions — Darwin's TIOCSWINSZ only raises SIGWINCH when
    * the winsize differs, and Codrift.Agent.Process drops same-size resizes
    * before that anyway (see its `last_size` guard).
+   *
+   * The alt-screen guard is the whole subtlety. On the alternate buffer this
+   * costs nothing: there is no scrollback to disturb and the TUI answers by
+   * redrawing every cell. On the NORMAL buffer the same trick is destructive —
+   * losing a row scrolls the scrollback up under the cursor and the shell
+   * redraws its prompt where it now stands, so every re-select of a plain
+   * terminal left another blank line and another prompt behind, and they piled
+   * up for as long as the session lived. And it buys nothing there: a
+   * normal-buffer screen is exactly the bytes that built it, which is what the
+   * replay just wrote.
    */
   function forceRepaint(agent: string) {
     if (!term || term.cols < 2 || term.rows < 3) return;
+    if (term.buffer.active.type !== "alternate") return;
     sendResize(agent, term.cols, term.rows - 1);
     sendResize(agent, term.cols, term.rows);
     sentCols = term.cols;
@@ -173,6 +205,12 @@
   function connect(agent: string, initiative: string) {
     disconnect();
     term?.reset();
+    // The new agent has never been told anything. Carrying the last one's
+    // dimensions over would let pushResize decide a genuinely needed resize was
+    // a duplicate and drop it, leaving the agent drawing to a grid it has the
+    // wrong size for — which is what a scrambled pane is.
+    sentCols = 0;
+    sentRows = 0;
     const myGen = ++gen;
 
     /*
@@ -232,6 +270,13 @@
 
     // Sent immediately rather than through pushResize: a freshly attached agent
     // has no idea how big our grid is, and it needs that before it first paints.
+    //
+    // Cancelling the debounce first is not tidiness. `fit()` runs just before
+    // every connect(), which queues a resize carrying the size measured *then*;
+    // 80ms later that timer fired and re-sized the agent we had already told the
+    // truth to. A grid one size and a PTY another is what a scrambled pane looks
+    // like from the inside.
+    clearTimeout(resizeTimer);
     if (term && term.cols >= 2 && term.rows >= 2) {
       sentCols = term.cols;
       sentRows = term.rows;
@@ -260,7 +305,7 @@
       term.onData((data) => sendKeys(agentId, data));
       term.onResize(({ cols, rows }) => pushResize(cols, rows));
     }
-    fit?.fit();
+    fitSafe();
     connect(a, i);
   });
 
@@ -269,10 +314,39 @@
   // paint a terminal it can't see, so whatever arrived while another tab was up
   // is sitting in the buffer undrawn. `refresh` draws it. This is the difference
   // between switching back to a live pane and switching back to a blank one.
+  //
+  // Twice, once now and once on the next frame. The immediate call is what makes
+  // the switch feel instant; the deferred one is what makes it correct, because
+  // this effect runs inside the same flush that removed the `invisible` class
+  // and a renderer asked to draw before the browser has laid the box out drops
+  // the frame — which is the "blank until you click it" case exactly.
   $effect(() => {
-    if (!visible || !term) return;
-    fit?.fit();
-    term.refresh(0, term.rows - 1);
+    if (!visible) return;
+    const paint = () => {
+      if (!term) return;
+      fitSafe();
+      term.refresh(0, term.rows - 1);
+    };
+    paint();
+    const frame = requestAnimationFrame(paint);
+    return () => cancelAnimationFrame(frame);
+  });
+
+  // WKWebView drops the contents of a GPU surface it decided was off-screen —
+  // hiding the window, switching Spaces, the machine sleeping. Nothing writes to
+  // the terminal afterwards, so an agent waiting on input comes back to a pane
+  // that is blank until it is touched. Redraw from the buffer on the way back
+  // in, which costs one frame and is the only way anything gets on screen.
+  $effect(() => {
+    const repaint = () => {
+      if (visible && term) term.refresh(0, term.rows - 1);
+    };
+    window.addEventListener("focus", repaint);
+    document.addEventListener("visibilitychange", repaint);
+    return () => {
+      window.removeEventListener("focus", repaint);
+      document.removeEventListener("visibilitychange", repaint);
+    };
   });
 
   // Re-skin a live terminal when the theme changes — no reconnect, no reload;
@@ -290,7 +364,7 @@
     if (!term) return;
     term.options.fontFamily = family;
     term.options.fontSize = size;
-    fit?.fit();
+    fitSafe();
   });
 
   // Files dropped from Finder are typed in as absolute paths — the same thing a
@@ -310,16 +384,10 @@
   );
 
   $effect(() => {
-    // Guard the fit: a resize queued just before teardown would otherwise call
-    // fit() on a disposed terminal and throw xterm's `_isDisposed` error. A
-    // collapsed box is skipped too — `visibility:hidden` keeps the size, but a
-    // pane being torn down (or laid out for the first time) reports 0×0, and
-    // fitting to that proposes a one-column grid.
-    const ro = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (!term || !box || box.width < 2 || box.height < 2) return;
-      fit?.fit();
-    });
+    // fitSafe carries both guards this needs: a terminal already disposed (a
+    // resize queued just before teardown would throw xterm's `_isDisposed`) and
+    // a box that measures as nothing.
+    const ro = new ResizeObserver(() => fitSafe());
     ro.observe(el);
     return () => {
       ro.disconnect();
@@ -346,8 +414,19 @@
      fitted a grid to 12px more space than existed in both axes, overflowed the
      clipped pane by 9px, and told the PTY the terminal was a row and a column
      bigger than it is — which is what made full-screen redraws address a phantom
-     row and paint over themselves. -->
-<div class="relative size-full overflow-hidden bg-canvas p-1.5" bind:this={pane}>
+     row and paint over themselves.
+
+     Painted in the terminal's own background rather than the app canvas: a
+     character grid almost never divides the pane exactly, so there is up to a
+     cell of remainder down the right edge and along the bottom, plus this
+     padding. In the canvas colour all of it reads as dead space stuck to the
+     terminal; in the theme's terminal background it is simply where the
+     terminal ends. -->
+<div
+  class="relative size-full overflow-hidden p-1.5"
+  style="background: {themeState.palette.terminal.background}"
+  bind:this={pane}
+>
   <div class="size-full" bind:this={el}></div>
   {#if dropping}
     <!-- pointer-events-none keeps this out of the hit test: the drop has to

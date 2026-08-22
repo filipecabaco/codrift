@@ -27,9 +27,38 @@ the `set_dir_worktree` core op) so new directories inherit a preference.
 ## What changes for agents
 
 Agents spawned on a worktree-enabled directory run inside the **worktree** path,
-not the source path — this is what `DirEntry.effective_path/1` resolves to. The
-initiative keeps the source path as the directory's identity, so it's still shown
-in the tree; edits and diffs, however, happen on the worktree branch.
+not the source path. The initiative keeps the source path as the directory's
+identity, so that is what the tree shows and what every UI control names; edits
+and diffs happen on the worktree branch.
+
+The translation happens in `DirEntry.resolve/2`, which every agent start goes
+through (`Codrift.Core`'s `resolve_agent_dir/2`). It maps a requested directory
+to the one an agent should actually run in:
+
+| Asked for | Runs in |
+|-----------|---------|
+| a worktree-backed entry's source path | its worktree |
+| a worktree path already | itself — resolving is idempotent |
+| an entry with no worktree | itself |
+| a directory that is not an entry | itself, expanded |
+
+Only exact matches are translated. A *subdirectory* of a worktree-backed entry is
+left alone on purpose: rewriting it would assume the same relative path exists
+inside the checkout, and being wrong puts an agent somewhere nobody named.
+
+This is the one rule that makes the isolation real. Without it the worktree is
+created, the diff view reads it — `get_diff` has always used
+`effective_path/1` — and the agent edits your own checkout anyway, which is the
+exact opposite of what enabling a worktree is for.
+
+### How it shows up
+
+An agent started in a worktree reports the *worktree* path as its directory, so
+anything matching agents to directories accepts both paths. The sidebar draws a
+worktree-backed directory with its own glyph (two stacked sheets) rather than the
+folder icon, plus a `wt` chip, and its tooltip names both ends — where agents
+run, and which checkout is being left alone. The initiative overview spells the
+same thing out in a line under the directory.
 
 ## Finding them
 

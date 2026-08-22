@@ -5,6 +5,8 @@ export type ActionId =
   | "navigate_down"
   | "navigate_up"
   | "new_initiative"
+  | "new_scratchpad"
+  | "promote_initiative"
   | "add_dir"
   | "start_agent"
   | "start_terminal"
@@ -21,6 +23,10 @@ export type ActionId =
   | "diff_all_files"
   | "quit"
   | "toggle_sidebar"
+  | "sort_created"
+  | "sort_recent"
+  | "sort_name"
+  | "sort_status"
   | "focus_left"
   | "focus_right"
   | "focus_up"
@@ -36,6 +42,8 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   navigate_down: "Navigate down",
   navigate_up: "Navigate up",
   new_initiative: "New initiative",
+  new_scratchpad: "New scratchpad",
+  promote_initiative: "Rank scratchpad up to an initiative",
   add_dir: "Add directory",
   start_agent: "Start agent",
   start_terminal: "Start terminal",
@@ -52,6 +60,11 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   diff_all_files: "Show all changed files",
   quit: "Quit",
   toggle_sidebar: "Toggle sidebar",
+  // Phrased so every one of them matches a palette search for "sort".
+  sort_created: "Sort initiatives by date created (oldest first)",
+  sort_recent: "Sort initiatives by date created (newest first)",
+  sort_name: "Sort initiatives by name",
+  sort_status: "Sort initiatives by status (active work first)",
   focus_left: "Move focus left (pane → pane → sidebar)",
   focus_right: "Move focus right (sidebar → pane → pane)",
   focus_up: "Move focus up (stacked panes)",
@@ -71,6 +84,8 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "navigate_down",
   "navigate_up",
   "new_initiative",
+  "new_scratchpad",
+  "promote_initiative",
   "add_dir",
   "start_agent",
   "start_terminal",
@@ -86,6 +101,10 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "tree_mode",
   "diff_all_files",
   "toggle_sidebar",
+  "sort_created",
+  "sort_recent",
+  "sort_name",
+  "sort_status",
   "focus_left",
   "focus_right",
   "focus_up",
@@ -105,6 +124,11 @@ export const DEFAULT_KEYMAP: Keymap = {
   navigate_down: "j",
   navigate_up: "k",
   new_initiative: "n",
+  // A scratchpad is the thing you reach for *before* you know it is work, so it
+  // carries a modifier and no cursor requirement — unlike `n`, which starts a
+  // dialog. `promote_initiative` deliberately has no default binding: naming a
+  // scratchpad happens once, and the palette is where once-per-session lives.
+  new_scratchpad: "ctrl+n",
   add_dir: "a",
   start_agent: "s",
   start_terminal: "t",

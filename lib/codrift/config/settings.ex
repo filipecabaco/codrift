@@ -115,6 +115,25 @@ defmodule Codrift.Config.Settings do
     write(Map.put(read(), "font", %{"family" => family, "size" => size}))
   end
 
+  @doc ~S(Valid orderings for the sidebar's initiative list.)
+  def sidebar_sorts, do: ~w(created recent name status)
+
+  @doc """
+  Returns how the sidebar orders initiatives — one of `sidebar_sorts/0`.
+
+  Defaults to `"created"`: oldest first is the order the list has always had,
+  and a chronological spine is the one ordering that never moves under you.
+  """
+  def sidebar_sort do
+    stored = read() |> Map.get("sidebar_sort")
+    if stored in sidebar_sorts(), do: stored, else: "created"
+  end
+
+  @doc "Remembers how the sidebar orders initiatives."
+  def put_sidebar_sort(sort) when is_binary(sort) do
+    write(Map.put(read(), "sidebar_sort", sort))
+  end
+
   @doc "Increments the start count for the given adapter module."
   def increment_adapter_start(adapter) do
     name = Codrift.Agent.adapter_name(adapter)

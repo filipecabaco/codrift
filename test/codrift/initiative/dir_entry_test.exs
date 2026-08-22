@@ -72,4 +72,45 @@ defmodule Codrift.Initiative.DirEntryTest do
                })
     end
   end
+
+  describe "resolve/2" do
+    setup do
+      entries = [
+        DirEntry.new("/repos/api", worktree_enabled: true, worktree_path: "/wt/api"),
+        DirEntry.new("/repos/web")
+      ]
+
+      {:ok, entries: entries}
+    end
+
+    test "a worktree-backed source path lands in the worktree", %{entries: entries} do
+      assert DirEntry.resolve("/repos/api", entries) == "/wt/api"
+    end
+
+    test "is idempotent — resolving the worktree path returns it", %{entries: entries} do
+      assert DirEntry.resolve("/wt/api", entries) == "/wt/api"
+    end
+
+    test "an entry without a worktree is left alone", %{entries: entries} do
+      assert DirEntry.resolve("/repos/web", entries) == "/repos/web"
+    end
+
+    test "a directory that is not an entry passes through", %{entries: entries} do
+      assert DirEntry.resolve("/somewhere/else", entries) == "/somewhere/else"
+    end
+
+    test "a subdirectory of a worktree-backed entry is NOT rewritten", %{entries: entries} do
+      # Rewriting would assume the same relative path exists inside the
+      # checkout; being wrong puts the agent somewhere nobody named.
+      assert DirEntry.resolve("/repos/api/lib", entries) == "/repos/api/lib"
+    end
+
+    test "the path is expanded before matching", %{entries: entries} do
+      assert DirEntry.resolve("/repos/api/../api", entries) == "/wt/api"
+    end
+
+    test "no entries at all is just an expansion" do
+      assert DirEntry.resolve("/repos/api", []) == "/repos/api"
+    end
+  end
 end
