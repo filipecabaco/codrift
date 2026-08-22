@@ -60,7 +60,35 @@ defmodule Codrift.Initiative.Store do
 
   @doc "Creates a new initiative, creates its context folder, and persists it."
   def create(name, dirs \\ [], server \\ __MODULE__) do
-    GenServer.call(server, {:create, name, dirs})
+    GenServer.call(server, {:create, name, dirs, false})
+  end
+
+  @doc """
+  Creates a scratchpad — an initiative flagged `scratch: true`.
+
+  Structurally it is an ordinary initiative (own context folder, memory store,
+  agents, pane layout); the flag only tells the UI to file it away from the real
+  work and offer to promote it. See `promote/3`.
+  """
+  def create_scratch(name, dirs \\ [], server \\ __MODULE__) do
+    GenServer.call(server, {:create, name, dirs, true})
+  end
+
+  @doc """
+  Renames an initiative, rewriting the `initiative.md` header agents read.
+  """
+  def rename(id, name, server \\ __MODULE__) do
+    GenServer.call(server, {:rename, id, name})
+  end
+
+  @doc """
+  Promotes a scratchpad to a real initiative: gives it `name` and clears the
+  scratch flag. Everything it accumulated — agents, memory, context files —
+  stays where it is, which is the point of ranking one up rather than starting
+  over.
+  """
+  def promote(id, name, server \\ __MODULE__) do
+    GenServer.call(server, {:promote, id, name})
   end
 
   @doc "Fetches an initiative by ID. Returns `{:error, :not_found}` if absent."
@@ -217,10 +245,18 @@ defmodule Codrift.Initiative.Store do
   end
 
   @impl true
-  def handle_call({:create, name, dirs}, _from, state) do
-    initiative = Initiative.new(name, dirs)
+  def handle_call({:create, name, dirs, scratch}, _from, state) do
+    initiative = Initiative.new(name, dirs, scratch: scratch)
     new_state = put_initiative(state, initiative, :initiative_created)
     {:reply, {:ok, initiative}, new_state, {:continue, {:setup_context, initiative}}}
+  end
+
+  def handle_call({:rename, id, name}, _from, state) do
+    rename_reply(state, id, &%{&1 | name: name})
+  end
+
+  def handle_call({:promote, id, name}, _from, state) do
+    rename_reply(state, id, &%{&1 | name: name, scratch: false})
   end
 
   def handle_call({:get, id}, _from, state) do
@@ -470,6 +506,12 @@ defmodule Codrift.Initiative.Store do
     {:noreply, state}
   end
 
+  def handle_continue({:rewrite_initiative_md, initiative}, state) do
+    ctx = ctx_path(state.context_dir_base, initiative.id)
+    rename_headings(ctx, initiative)
+    {:noreply, state}
+  end
+
   # The one place every mutation lands — add_dir, remove_dir, set_status,
   # link_integration, the branch and worktree toggles — so broadcasting here
   # cannot be forgotten by whatever mutation is added next. `create` is the only
@@ -499,6 +541,18 @@ defmodule Codrift.Initiative.Store do
     updated = for {id, i} <- new, prev = Map.get(old, id), prev != i, do: {:initiative_updated, i}
     deleted = for {id, _} <- old, not is_map_key(new, id), do: {:initiative_deleted, id}
     created ++ updated ++ deleted
+  end
+
+  # A rename has to reach disk twice: the store's own JSON, and the initiative.md
+  # header every agent reads for the name of the thing it is working on.
+  defp rename_reply(state, id, fun) do
+    case update_initiative(state, id, fun) do
+      {:reply, {:ok, initiative}, new_state} ->
+        {:reply, {:ok, initiative}, new_state, {:continue, {:rewrite_initiative_md, initiative}}}
+
+      unchanged ->
+        unchanged
+    end
   end
 
   defp update_initiative(state, id, fun) do
@@ -790,6 +844,42 @@ defmodule Codrift.Initiative.Store do
       File.ln_s!("initiative.md", claude_md)
     end
   end
+
+  # A rename has to reach the two places the name is written into the context
+  # folder: initiative.md's H1 and `Name:` line, and orchestration.md's H1. Both
+  # sit outside a managed block, because everything else in those files is the
+  # user's to edit — so this rewrites exactly those lines and leaves the rest of
+  # each document alone. A file that isn't there yet is simply created fresh.
+  defp rename_headings(ctx_path, initiative) do
+    name = initiative.name
+
+    edit(Path.join(ctx_path, "initiative.md"), fn content ->
+      content
+      |> String.replace(~r/\A# .*$/m, fn _ -> "# " <> name end, global: false)
+      |> String.replace(~r/^Name: .*$/m, fn _ -> "Name: " <> name end, global: false)
+    end)
+    |> unless_written(fn -> write_initiative_md(ctx_path, initiative) end)
+
+    edit(Path.join(ctx_path, "orchestration.md"), fn content ->
+      String.replace(
+        content,
+        ~r/\A# Orchestration: .*$/m,
+        fn _ -> "# Orchestration: " <> name end,
+        global: false
+      )
+    end)
+    |> unless_written(fn -> write_orchestration_md(ctx_path, initiative) end)
+  end
+
+  defp edit(path, fun) do
+    case File.read(path) do
+      {:ok, content} -> File.write(path, fun.(content))
+      {:error, _} = error -> error
+    end
+  end
+
+  defp unless_written(:ok, _fallback), do: :ok
+  defp unless_written(_error, fallback), do: fallback.()
 
   # Updates only the <!-- codrift:dirs:start/end --> block in an existing file,
   # preserving all user-editable content (Goal, Context, Notes, etc.).

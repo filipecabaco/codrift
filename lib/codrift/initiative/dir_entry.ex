@@ -32,6 +32,35 @@ defmodule Codrift.Initiative.DirEntry do
   def effective_path(%__MODULE__{worktree_path: wp}) when is_binary(wp), do: wp
   def effective_path(%__MODULE__{path: p}), do: p
 
+  @doc """
+  The directory an agent asking for `path` should actually run in.
+
+  A worktree exists precisely so agents do not touch the working copy, so asking
+  for the source path has to land in the worktree — otherwise the isolation is
+  created and then ignored, and the diff view (which already reads the worktree)
+  ends up showing a checkout nothing is writing to while the agent edits the
+  repository the user is sitting in.
+
+  Everything else passes straight through: a path that is *already* the
+  worktree, so re-resolving is idempotent, and any directory that is not one of
+  the initiative's entries, which is how loose agents and MCP callers ask for
+  somewhere specific.
+
+  Only exact matches are mapped. A *subdirectory* of a worktree-backed entry is
+  left alone on purpose: rewriting it would mean assuming the same relative path
+  exists inside the checkout, and being wrong puts an agent somewhere nobody
+  named.
+  """
+  @spec resolve(String.t(), [t()]) :: String.t()
+  def resolve(path, entries) do
+    expanded = Path.expand(path)
+
+    case Enum.find(entries, &(&1.path == expanded)) do
+      nil -> expanded
+      entry -> effective_path(entry)
+    end
+  end
+
   @doc "Serialises to a plain map for JSON encoding."
   def to_map(%__MODULE__{} = e) do
     %{"path" => e.path, "worktree_enabled" => e.worktree_enabled}

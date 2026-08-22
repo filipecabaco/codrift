@@ -84,7 +84,7 @@ defmodule Codrift.CLI.Pane do
   # ── Helpers ──────────────────────────────────────────────────────────────────
 
   # `--name=value`. Absent flags are left out entirely rather than sent as null,
-  # so the server's own defaults (scratchpad dir, no prefill) still apply.
+  # so the server's own defaults (context dir, no prefill) still apply.
   defp put_flag(args, argv, name) do
     prefix = "--#{name}="
 

@@ -2,7 +2,16 @@
   import { onMount, untrack } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
   import { ArrowPath, CommandLine, Identification, Link, Swatch } from "@steeze-ui/heroicons";
-  import { rpc, quitApp, QUIT_REQUESTED, type Agent, type Initiative } from "$lib/api";
+  import {
+    createScratchpad,
+    promoteInitiative,
+    quitApp,
+    rpc,
+    QUIT_REQUESTED,
+    type Agent,
+    type Initiative,
+    type SidebarSort,
+  } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
   import { onPaneRequest, type PaneRequest } from "$lib/stream";
   import { workspace as ws, type Row } from "$lib/workspace.svelte";
@@ -147,9 +156,14 @@
       // A terminal is named by where it is, an agent by what it is: two shells
       // in one initiative are told apart by their directory, two Claudes by
       // nothing else the chip has room for.
-      return agent.adapter === "terminal"
-        ? { label: base(agent.dir), kind: "terminal" }
-        : { label: agent.adapter, kind: "agent" };
+      if (agent.adapter !== "terminal") return { label: agent.adapter, kind: "agent" };
+      // A folderless initiative's directory *is* its context folder, whose
+      // basename is the 16-character id — a hex blob in the pane strip, where
+      // the whole job of the label is to say which pane holds what. The sidebar
+      // already calls that directory "scratch"; so does this.
+      const init = ws.initiatives.find((i) => i.id === p.initiativeId);
+      const label = agent.dir === init?.context_path ? "scratch" : base(agent.dir);
+      return { label, kind: "terminal" };
     }
     if (p.chooser) return { label: "Empty", kind: "view" };
     return {
@@ -206,6 +220,14 @@
   }
   // Null means the view has nothing focusable, so ⇥ stays on the sidebar.
   function mainFocusTarget(): HTMLElement | null {
+    // A fresh split shows the chooser, and the chooser is the one thing in a new
+    // pane you are certain to want next — so it takes the keyboard. Read
+    // directly off `panes` rather than through activeView(), which answers the
+    // chooser as a side effect of being read.
+    const view = panes[activePane];
+    if (view?.chooser && !view.agentId) {
+      return document.querySelector(`#pane-${activePane} [data-chooser-option]`);
+    }
     if (active.tab === "tree") {
       return document.querySelector(`#pane-${activePane} [data-tree-pane]`);
     }
@@ -214,9 +236,28 @@
     // decides that, not the query.
     return active.tab === "context" && active.agentId ? termTextarea() : null;
   }
+  /**
+   * Which panes can hold the keyboard, answered from the view rather than the
+   * DOM.
+   *
+   * Every caller decides this *before* Svelte has re-rendered — a pane that was
+   * just split off, or the survivor of a pane that was just closed — so asking
+   * the document what `#pane-N` contains answers for whatever was there a
+   * moment ago. The view is already correct; `mainFocusTarget` then has
+   * `focusMain`'s retry loop to wait for the element to catch up.
+   */
+  function paneHasFocusable(v: PaneView | undefined): boolean {
+    if (!v) return false;
+    if (v.chooser && !v.agentId) return true;
+    if (v.tab === "tree") return true;
+    return v.tab === "context" && !!v.agentId;
+  }
+
   // Retried across a few frames: the target can be one frame short of existing
   // when the pane was just created. Giving up silently is what left focus on
-  // <body>, where the terminal's keystrokes ran as global shortcuts instead.
+  // <body>, where the terminal's keystrokes ran as global shortcuts instead — so
+  // exhausting the retries hands the keyboard back to the sidebar, which is
+  // always there.
   function focusMain() {
     paneFocus = "main";
     let tries = 5;
@@ -224,6 +265,7 @@
       const target = mainFocusTarget();
       if (target) target.focus();
       else if (--tries > 0) requestAnimationFrame(attempt);
+      else focusSidebar();
     };
     requestAnimationFrame(attempt);
   }
@@ -243,7 +285,7 @@
    */
   function enterPane(idx: number) {
     activePane = idx;
-    if (mainFocusTarget()) focusMain();
+    if (paneHasFocusable(panes[idx])) focusMain();
     else focusSidebar();
   }
 
@@ -326,8 +368,10 @@
     await ws.load();
     // Only expand on the *first* selection: re-expanding on every refresh would
     // undo a collapse the user just made (r, status cycling, starting an agent…).
-    if (!activeView().initiativeId && ws.initiatives.length > 0) {
-      const first = ws.initiatives[0].id;
+    // `ordered`, not `initiatives`: opening onto whatever happens to be oldest
+    // would land on a scratchpad from last Tuesday as readily as on real work.
+    if (!activeView().initiativeId && ws.ordered.length > 0) {
+      const first = ws.ordered[0].id;
       viewFor(first);
       ws.expand(first);
     }
@@ -488,7 +532,14 @@
     // Otherwise fall back to the first project directory; with no directory at
     // all, omit `dir` and the backend runs in the initiative's context folder.
     const row = ws.rows[ws.cursor];
-    const atInitRoot = row?.kind === "init" || row?.kind === "file";
+    // "Cursor on the initiative row → run at its root" exists so an agent can
+    // edit initiative-wide files. A scratchpad has none worth editing — its
+    // paperwork is hidden and nobody adds to it — so when one was opened
+    // against a directory, that directory wins even from the scratchpad's own
+    // row. Otherwise seeding the directory would achieve nothing: every agent
+    // would still start in the empty context folder.
+    const atInitRoot =
+      !selectedInitiative.scratch && (row?.kind === "init" || row?.kind === "file");
     const rootDir = selectedInitiative.context_path ?? null;
     const dir =
       ws.cursorDir ?? (atInitRoot ? rootDir : null) ?? selectedInitiative.dirs[0]?.path ?? null;
@@ -499,7 +550,11 @@
         ...(dir ? { dir } : {}),
       });
       const where =
-        dir && dir === rootDir ? "at initiative root" : dir ? `in ${base(dir)}` : "in scratchpad";
+        dir && dir === rootDir
+          ? "at initiative root"
+          : dir
+            ? `in ${base(dir)}`
+            : "in the initiative folder";
       toast(`Started ${agent} ${where}`);
       await load();
       return started;
@@ -528,7 +583,7 @@
         // else default_agent, else claude) rather than a generic "Start an
         // agent" — a profile like claude-work reads here too.
         title: `Start ${ws.agentChoiceFor(init)}`,
-        detail: `This initiative's agent, in ${init.dirs[0] ? base(init.dirs[0].path) : "its scratchpad"}`,
+        detail: `This initiative's agent, in ${init.dirs[0] ? base(init.dirs[0].path) : "its own folder"}`,
       },
       {
         kind: "terminal",
@@ -546,6 +601,26 @@
   // True when the active pane is still asking what goes in it, so the number keys
   // should answer that question rather than switch a view mode.
   const choosing = $derived(active.chooser && !active.agentId && !!selectedInitiative);
+
+  // ↑/↓ inside the chooser, kept off the window handlers that would otherwise
+  // read them as sidebar navigation. Complements the number keys rather than
+  // replacing them: the digits are the fast path once you know the list, the
+  // arrows are what you reach for the first time. Enter and Space need no help
+  // — these are buttons, and the browser already activates them.
+  function chooserKeys(e: KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const options = [
+      ...document.querySelectorAll<HTMLElement>(`#pane-${activePane} [data-chooser-option]`),
+    ];
+    if (options.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const at = options.indexOf(document.activeElement as HTMLElement);
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    // Clamped rather than wrapped: three options are few enough that a wrap
+    // reads as "nothing happened" when you are already at the end.
+    options[Math.min(options.length - 1, Math.max(0, at + step))]?.focus();
+  }
 
   // Answers the chooser a fresh split put in pane `idx`.
   async function choosePaneContent(idx: number, kind: ChooserKind) {
@@ -711,6 +786,66 @@
     }
   }
 
+  /**
+   * Open a scratchpad and land in it, ready to work.
+   *
+   * The whole value is that it costs one keystroke and no decisions — no name,
+   * no directory, no dialog — so this deliberately does not stop to ask
+   * anything. The pane it lands on is the chooser, and the chooser already has
+   * the keyboard — so "scratchpad running an agent" is the shortcut and ⏎.
+   */
+  async function newScratchpad() {
+    try {
+      // Read the cursor's directory BEFORE anything moves: creating the
+      // scratchpad reloads the workspace and selecting it moves the cursor into
+      // it, so by the time the response lands there is no "where I was" left to
+      // ask about.
+      const created = await createScratchpad(ws.cursorDir ?? undefined);
+      await load();
+      selectInitiative(created.id);
+      // Set on `panes` directly: every select* helper routes through
+      // activeView(), which answers the chooser as a side effect of reading it.
+      const v = panes[activePane];
+      v.agentId = null;
+      v.wantFile = null;
+      v.tab = "context";
+      v.chooser = true;
+      focusMain();
+      toast(`Opened ${created.name}`);
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+
+  /**
+   * Rank a scratchpad up into a real initiative.
+   *
+   * A rename and a flag, nothing more: the context folder, the memory store and
+   * every running agent stay exactly where they are. That is the point — you
+   * find out a scratch session was real work halfway through it, and the
+   * promotion must not be a reason to start over.
+   */
+  function promoteScratchpad(id?: string) {
+    const init = id ? ws.initiatives.find((i) => i.id === id) : selectedInitiative;
+    if (!init) return toast("Select a scratchpad first.");
+    if (!init.scratch) return toast(`"${init.name}" is already an initiative.`);
+    openPrompt(
+      "Name this initiative",
+      async (name) => {
+        modal = null;
+        try {
+          await promoteInitiative(init.id, name);
+          await load();
+          selectInitiative(init.id);
+          toast(`Ranked up to "${name}"`);
+        } catch (e) {
+          toast((e as Error).message);
+        }
+      },
+      "e.g. Parser rewrite",
+    );
+  }
+
   async function createInitiative(name: string, agent: string) {
     try {
       const created = await rpc<{ id: string }>("create_initiative", { name, agent });
@@ -747,6 +882,15 @@
         break;
       case "toggle_sidebar":
         sidebarCollapsed = !sidebarCollapsed;
+        break;
+      case "sort_created":
+      case "sort_recent":
+      case "sort_name":
+      case "sort_status":
+        // The action id carries the ordering, so there is no table to keep in
+        // step with the ids — `sort_name` can only ever mean "name".
+        await ws.setSort(id.slice("sort_".length) as SidebarSort);
+        toast(`Initiatives sorted by ${id.slice("sort_".length)}`);
         break;
       case "focus_left":
         moveFocus("left");
@@ -793,6 +937,12 @@
         break;
       case "new_initiative":
         modal = { kind: "new_initiative" };
+        break;
+      case "new_scratchpad":
+        await newScratchpad();
+        break;
+      case "promote_initiative":
+        promoteScratchpad();
         break;
       case "branch_initiative":
         await branchInitiative();
@@ -845,23 +995,39 @@
       };
     } else if (selectedInitiative) {
       const init = selectedInitiative;
+      const agents = ws.agentsFor(init.id).length;
       // Remember the neighbour now: after the delete it is what the pane should
       // land on, rather than an empty "Select an initiative" screen.
-      const others = ws.initiatives.filter((i) => i.id !== init.id);
-      const at = ws.initiatives.findIndex((i) => i.id === init.id);
+      const others = ws.ordered.filter((i) => i.id !== init.id);
+      const at = ws.ordered.findIndex((i) => i.id === init.id);
       const next = others[Math.min(at, others.length - 1)] ?? null;
+
+      const drop = async () => {
+        await rpc("delete_initiative", { initiative_id: init.id });
+        active.initiativeId = null;
+        active.agentId = null;
+        await load();
+        modal = null;
+        if (next) selectInitiative(next.id);
+      };
+
+      // An idle scratchpad goes without asking. The dialog exists to protect
+      // work, and there is none here: nothing running, and a name the user
+      // never chose. Being asked "Delete initiative "scratch 22:35"?" about
+      // something opened by accident is the wrong noun and the wrong ceremony.
+      // A scratchpad with agents in it is not idle, and still asks.
+      if (init.scratch && agents === 0) {
+        drop().catch((e) => toast((e as Error).message));
+        return;
+      }
+
       modal = {
         kind: "confirm",
-        message: `Delete initiative "${init.name}"?`,
-        confirmLabel: "Delete",
-        onConfirm: async () => {
-          await rpc("delete_initiative", { initiative_id: init.id });
-          active.initiativeId = null;
-          active.agentId = null;
-          await load();
-          modal = null;
-          if (next) selectInitiative(next.id);
-        },
+        message: init.scratch
+          ? `Discard scratchpad "${init.name}"? ${agents} agent${agents === 1 ? "" : "s"} still running.`
+          : `Delete initiative "${init.name}"?`,
+        confirmLabel: init.scratch ? "Discard" : "Delete",
+        onConfirm: drop,
       };
     } else {
       // Nothing selected: say so rather than swallowing the keypress, which read
@@ -894,20 +1060,43 @@
     const source = panes[activePane];
     panes = [source, { ...newView(), initiativeId: source.initiativeId, chooser: true }];
     activePane = 1;
-    paneFocus = "main";
     split = { dir, fraction: 0.5 };
+    // Not just `paneFocus = "main"`: that flipped the label without moving the
+    // caret, so the keyboard stayed on <body> and the chooser — the whole
+    // content of the pane that was just opened — could only be answered with the
+    // mouse. focusMain() retries across frames, which is what this needs: the
+    // pane does not exist in the DOM yet.
+    focusMain();
   }
 
   function balanceSplit() {
     if (split) split = { ...split, fraction: 0.5 };
   }
 
-  // Close one pane and keep the other; the survivor becomes the single view.
+  /**
+   * Close one pane and keep the other; the survivor becomes the single view.
+   *
+   * The agent in the closed pane is left running — closing a pane is a layout
+   * decision, and the sidebar still lists the agent for whenever it is wanted
+   * back. Stopping one is `delete`, and it asks first.
+   */
   function closePane(idx: number) {
     if (!split) return;
     panes = [panes[idx === 0 ? 1 : 0]];
     activePane = 0;
     split = null;
+    // The keyboard was in the pane that just went away, so put it somewhere
+    // visible rather than leaving it on <body>, where bare keys run as global
+    // shortcuts with nothing on screen saying so.
+    enterPane(0);
+  }
+
+  // ⌘W on the focused pane. With nothing split there is no pane to close, and
+  // silently closing the window instead — the other thing ⌘W means — would be a
+  // destructive answer to a layout keystroke.
+  function closeActivePane() {
+    if (!split) return toast(`Only one pane — ${PRIMARY_MOD}D splits it.`);
+    closePane(activePane);
   }
 
   // Shared drag handler for both dividers: the sidebar's (width in px) and the
@@ -947,6 +1136,12 @@
     if (e.metaKey && e.ctrlKey && (key === "=" || key === "+")) return balanceSplit;
     if (key === "d" && !(e.metaKey && e.ctrlKey))
       return () => toggleSplit(e.shiftKey ? "horizontal" : "vertical");
+    // The one combo here that insists on the *platform's* modifier rather than
+    // either. ⌃W is delete-word-backwards in every readline and half the TUIs an
+    // agent runs; on a Mac there is no reason to take it, since ⌘W is what the
+    // hand reaches for anyway. Elsewhere ⌃W is the only close-this there is, and
+    // the collision comes with the platform.
+    if (key === "w" && (IS_MAC ? e.metaKey : e.ctrlKey)) return closeActivePane;
     // ⌘1…⌘9 jump straight to a pane, the way every tiling terminal numbers its
     // panes. The bare digits are the tab bindings (1 Context, 2 Diff, 3 Tree),
     // so a digit only means "pane" with the modifier down. Out-of-range digits
@@ -984,7 +1179,8 @@
   // eventToSpec folds ⌘ into ctrl, so the app's combos answer to either — but
   // only one of them is what someone on this platform reaches for, and a hint
   // naming the other one is just noise to read past.
-  const PRIMARY_MOD = /Mac/i.test(navigator.userAgent) ? "⌘" : "⌃";
+  const IS_MAC = /Mac/i.test(navigator.userAgent);
+  const PRIMARY_MOD = IS_MAC ? "⌘" : "⌃";
 
   // A real text field, as opposed to xterm's hidden textarea — which is a text
   // surface for key routing only: it holds no caret the user can move, so the
@@ -1042,7 +1238,7 @@
       e.preventDefault();
       e.stopPropagation();
       if (paneFocus === "main") focusSidebar();
-      else if (mainFocusTarget()) focusMain();
+      else if (paneHasFocusable(panes[activePane])) focusMain();
       return;
     }
 
@@ -1089,11 +1285,12 @@
     else if (active.agentId && active.tab === "context") hints.push({ spec: "⇥", label: "Terminal" });
     if (ws.initiatives.length === 0) hints.push({ spec: k("new_initiative"), label: "New initiative" });
     else hints.push({ spec: k("start_agent"), label: "Start agent" }, { spec: k("add_dir"), label: "Add dir" });
+    hints.push({ spec: k("new_scratchpad"), label: "Scratchpad" });
     if (selectedInitiative?.dirs.some((d) => d.git && !d.branch)) {
       hints.push({ spec: k("branch_initiative"), label: "Branch" });
     }
-    if (selectedInitiative) hints.push({ spec: "⌘D", label: "Split" });
-    if (split) hints.push({ spec: "⌘⌃=", label: "Balance" });
+    if (selectedInitiative) hints.push({ spec: `${PRIMARY_MOD}D`, label: "Split" });
+    if (split) hints.push({ spec: `${PRIMARY_MOD}W`, label: "Close pane" }, { spec: "⌘⌃=", label: "Balance" });
     hints.push(palette);
     return hints;
   });
@@ -1307,8 +1504,10 @@
         onSelectPane={selectPane}
         width={sidebarWidth}
         newInitiativeKey={formatSpec(keymap.new_initiative)}
+        newScratchpadKey={formatSpec(keymap.new_scratchpad)}
         collapseKey={formatSpec(keymap.toggle_sidebar)}
         onSelectInitiative={selectInitiative}
+        onPromote={promoteScratchpad}
         onSelectDir={selectDir}
         onSelectAgent={selectAgent}
         onOpenContextFile={openContextFile}
@@ -1405,6 +1604,11 @@
                 <kbd class="rounded border border-border bg-surface px-1.5 py-px text-[11px] text-fg/80">{formatSpec(keymap.start_agent)}</kbd>
                 <span>to launch an agent.</span>
               </p>
+              <p class="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-2 text-[13px] text-fg/70">
+                <span>Not sure yet?</span>
+                <kbd class="rounded border border-border bg-surface px-1.5 py-px text-[11px] text-fg/80">{formatSpec(keymap.new_scratchpad)}</kbd>
+                <span>opens a scratchpad — no name, no directory. Rank it up if it turns into work.</span>
+              </p>
             </div>
           </div>
         {:else}
@@ -1415,7 +1619,12 @@
              agent used to put one PTY behind two terminals; an empty pane was
              correct but inert. -->
         <div class="flex h-full items-center justify-center p-8">
-          <div class="w-full max-w-sm">
+          <!-- The options are real focusable buttons and the first one is given
+               the keyboard as soon as the split opens, so a new pane can be
+               answered without reaching for the mouse. ↑/↓ walk the list and
+               stop there: letting them through would move the sidebar cursor,
+               which answers the chooser with whatever it lands on. -->
+          <div class="w-full max-w-sm" role="group" aria-label="What goes in this pane?">
             <h2 class="text-base font-semibold text-fg">What goes in this pane?</h2>
             <p class="mt-1 text-[13px] text-fg/70">{init.name}</p>
             <!-- Rendered from chooserOptions so the badge on a row is the same
@@ -1425,7 +1634,9 @@
             <div class="mt-5 flex flex-col gap-2">
               {#each chooserOptions(init) as option, n (option.kind)}
                 <button
-                  class="flex items-start gap-3 rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent"
+                  data-chooser-option
+                  onkeydown={chooserKeys}
+                  class="flex items-start gap-3 rounded-lg border border-border bg-surface px-4 py-3 text-left text-[13px] text-fg hover:border-accent focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
                   onclick={() => choosePaneContent(idx, option.kind)}
                 >
                   <kbd
@@ -1440,7 +1651,8 @@
               {/each}
             </div>
             <p class="mt-4 text-[12px] text-fg/50">
-              Press a number, or pick anything in the sidebar.
+              Press a number, or ↑↓ and ⏎. {PRIMARY_MOD}W closes this pane — or pick anything in
+              the sidebar.
             </p>
           </div>
         </div>
@@ -1508,9 +1720,11 @@
   {/snippet}
 
   <!-- Always-on contextual cheat row: keyboard-first discoverability without ceremony. -->
-  <footer class="flex items-center gap-4 border-t border-border bg-surface px-4 py-1 text-[11px] text-fg/70">
+  <!-- Scrolls rather than wraps: a second row would change the footer's height,
+       and everything above it is a terminal that gets resized when that happens. -->
+  <footer class="flex shrink-0 items-center gap-4 overflow-x-auto border-t border-border bg-surface px-4 py-1 text-[11px] text-fg/70">
     {#each keyHints as h (h.label)}
-      <span class="flex items-center gap-1.5">
+      <span class="flex shrink-0 items-center gap-1.5">
         <kbd class="rounded border border-border bg-canvas px-1.5 py-px text-[10px] text-fg/80">{h.spec}</kbd>
         {h.label}
       </span>

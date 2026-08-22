@@ -24,6 +24,7 @@ defmodule Codrift.Config.Keybindings do
   | `navigate_down` | `j` | Move sidebar cursor down |
   | `navigate_up` | `k` | Move sidebar cursor up |
   | `new_initiative` | `n` | Create a new initiative |
+  | `new_scratchpad` | `ctrl+n` | Open a scratchpad — an unnamed initiative for quick exploration |
   | `add_dir` | `a` | Add a directory to the current initiative |
   | `start_agent` | `s` | Start a Claude agent |
   | `start_terminal` | `t` | Open a terminal in the current directory |
@@ -48,9 +49,10 @@ defmodule Codrift.Config.Keybindings do
   | `focus_up` | `ctrl+up` | Move focus up, between stacked panes |
   | `focus_down` | `ctrl+down` | Move focus down, between stacked panes |
 
-  The desktop app also jumps straight to a pane with the primary modifier and a
-  digit (`⌘1`, `⌘2`, …). That is positional rather than an action, so it is not
-  rebindable here.
+  The desktop app also owns a few positional window-management combos, which are
+  not actions and so are not rebindable here: the primary modifier with a digit
+  (`⌘1`, `⌘2`, …) jumps straight to a pane, `⌘D` / `⌘⇧D` splits, `⌘⌃=` balances
+  the split, and `⌘W` closes the focused pane.
 
   ## Key spec format
 
@@ -72,6 +74,7 @@ defmodule Codrift.Config.Keybindings do
     navigate_down: "j",
     navigate_up: "k",
     new_initiative: "n",
+    new_scratchpad: "ctrl+n",
     add_dir: "a",
     start_agent: "s",
     start_terminal: "t",
@@ -101,6 +104,7 @@ defmodule Codrift.Config.Keybindings do
           :navigate_down
           | :navigate_up
           | :new_initiative
+          | :new_scratchpad
           | :add_dir
           | :start_agent
           | :start_terminal
@@ -161,6 +165,7 @@ defmodule Codrift.Config.Keybindings do
   defp string_to_action("navigate_down"), do: :navigate_down
   defp string_to_action("navigate_up"), do: :navigate_up
   defp string_to_action("new_initiative"), do: :new_initiative
+  defp string_to_action("new_scratchpad"), do: :new_scratchpad
   defp string_to_action("add_dir"), do: :add_dir
   defp string_to_action("start_agent"), do: :start_agent
   defp string_to_action("start_terminal"), do: :start_terminal

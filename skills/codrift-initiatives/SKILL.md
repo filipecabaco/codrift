@@ -19,9 +19,14 @@ delete_initiative { initiative_id }
 ```
 
 An initiative can be **folderless** — no directories at all. It then has only
-its scratchpad (context) folder at `~/.codrift/initiatives/{id}/`, which is
-where `start_agent` runs when you omit `dir`. That is the right shape for
-planning and research work that is not yet anchored to a repo.
+its context folder at `~/.codrift/initiatives/{id}/`, which is where
+`start_agent` runs when you omit `dir`. That is the right shape for planning and
+research work that is not yet anchored to a repo.
+
+(Not to be confused with a **scratchpad**, which the user opens from the desktop
+UI: a folderless initiative flagged `scratch: true`, listed separately, and
+renamed into a real one when it turns out to matter. It is an ordinary
+initiative to every tool here — the flag is a UI concern.)
 
 ## Lifecycle
 

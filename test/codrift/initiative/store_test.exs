@@ -18,6 +18,10 @@ defmodule Codrift.Initiative.StoreTest do
     start_supervised!({Store, path: path, name: nil, context_dir_base: ctx})
   end
 
+  # Context folders are written from a handle_continue, so the reply lands before
+  # the files do. Any call flushes it.
+  defp sync(store), do: Store.list(store)
+
   defp store_opts(tmp_dir) do
     ctx = Path.join(tmp_dir, "ctx")
     File.mkdir_p!(ctx)
@@ -125,6 +129,89 @@ defmodule Codrift.Initiative.StoreTest do
 
       assert {:ok, %Initiative{dirs: [%DirEntry{path: "/home/user/project"}]}} =
                Store.create("With Dirs", ["/home/user/project"], store)
+    end
+  end
+
+  describe "create_scratch/3 and promote/3" do
+    test "a scratchpad is an ordinary initiative carrying the flag", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+
+      assert {:ok, %Initiative{id: id, scratch: true, status: :ongoing}} =
+               Store.create_scratch("scratch 09:41", [], store)
+
+      # It gets the same context folder as any other initiative — that is what
+      # makes promoting one a rename rather than a migration.
+      sync(store)
+      assert File.dir?(Path.join([tmp_dir, "ctx", id]))
+    end
+
+    test "a scratchpad can carry the directory it was opened against",
+         %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+
+      assert {:ok, %Initiative{scratch: true, dirs: [%DirEntry{path: "/home/user/api"}]}} =
+               Store.create_scratch("scratch · api 09:41", ["/home/user/api"], store)
+    end
+
+    test "create/3 does not set the flag", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      assert {:ok, %Initiative{scratch: false}} = Store.create("Real work", [], store)
+    end
+
+    test "promote/3 renames, clears the flag and keeps the id", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %Initiative{id: id}} = Store.create_scratch("scratch 09:41", [], store)
+
+      assert {:ok, %Initiative{id: ^id, name: "Ship the parser", scratch: false}} =
+               Store.promote(id, "Ship the parser", store)
+
+      assert {:ok, %Initiative{name: "Ship the parser", scratch: false}} = Store.get(id, store)
+    end
+
+    test "the new name reaches initiative.md, leaving the rest of it alone",
+         %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %Initiative{id: id}} = Store.create_scratch("scratch 09:41", [], store)
+      sync(store)
+
+      md = Path.join([tmp_dir, "ctx", id, "initiative.md"])
+      File.write!(md, File.read!(md) <> "\n## Notes\n\nsomething the user wrote\n")
+
+      {:ok, _} = Store.promote(id, "Ship the parser", store)
+      sync(store)
+
+      content = File.read!(md)
+      assert content =~ "# Ship the parser"
+      assert content =~ "Name: Ship the parser"
+      refute content =~ "scratch 09:41"
+      # The whole file is the user's except the two name lines.
+      assert content =~ "something the user wrote"
+      assert content =~ "ID: #{id}"
+    end
+
+    test "rename/3 leaves a real initiative real", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %Initiative{id: id}} = Store.create("Old name", [], store)
+
+      assert {:ok, %Initiative{name: "New name", scratch: false}} =
+               Store.rename(id, "New name", store)
+    end
+
+    test "renaming something that is not there is an error, not a crash",
+         %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      assert {:error, :not_found} = Store.promote("nope", "Anything", store)
+      assert {:error, :not_found} = Store.rename("nope", "Anything", store)
+    end
+
+    test "the flag survives a restart", %{tmp_dir: tmp_dir} do
+      opts = store_opts(tmp_dir)
+      store = start_supervised!({Store, opts}, id: :first)
+      {:ok, %Initiative{id: id}} = Store.create_scratch("scratch 09:41", [], store)
+      stop_supervised!(:first)
+
+      reopened = start_supervised!({Store, opts}, id: :second)
+      assert {:ok, %Initiative{scratch: true}} = Store.get(id, reopened)
     end
   end
 

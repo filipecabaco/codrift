@@ -165,6 +165,9 @@ Installs into Claude Code, Codex, Cursor, Gemini CLI, Copilot and Opencode.
 | `r` | Refresh initiatives & agents |
 | `Ctrl+P` | Command palette |
 | `Ctrl+B` | Collapse / expand sidebar |
+| `⇅` in the sidebar header | Order initiatives by created / recent / name / status |
+| `⌘D` / `⌘⇧D` | Split the content area side by side / stacked |
+| `⌘W` | Close the focused pane |
 | `Ctrl+Q` | Quit |
 
 ### Initiatives & agents
@@ -172,6 +175,7 @@ Installs into Claude Code, Codex, Cursor, Gemini CLI, Copilot and Opencode.
 | Key | Action |
 |-----|--------|
 | `n` | New initiative |
+| `Ctrl+N` | Open a scratchpad in the directory under the cursor — unnamed, rankable up later |
 | `a` | Add directory to initiative |
 | `s` | Start a Claude agent in the directory under the cursor |
 | `t` | Start a raw `$SHELL` terminal in the directory under the cursor |

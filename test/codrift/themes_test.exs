@@ -96,5 +96,23 @@ defmodule Codrift.ThemesTest do
       assert {:ok, %{"size" => 10}} =
                Codrift.Core.call("set_font", %{"family" => "Hack", "size" => 2})
     end
+
+    test "round-trips the sidebar sort and refuses one it does not know" do
+      # Oldest-first is the order the list has always had, so an install that
+      # never chose reads back as `created` rather than as nothing.
+      assert {:ok, %{"sort" => "created"}} = Codrift.Core.call("get_sidebar_sort", %{})
+
+      for sort <- ~w(recent name status created) do
+        assert {:ok, %{"sort" => ^sort}} =
+                 Codrift.Core.call("set_sidebar_sort", %{"sort" => sort})
+
+        assert {:ok, %{"sort" => ^sort}} = Codrift.Core.call("get_sidebar_sort", %{})
+      end
+
+      assert {:error, msg} = Codrift.Core.call("set_sidebar_sort", %{"sort" => "by-vibes"})
+      assert msg =~ "invalid sort"
+      # The rejected value must not have been written on the way out.
+      assert {:ok, %{"sort" => "created"}} = Codrift.Core.call("get_sidebar_sort", %{})
+    end
   end
 end

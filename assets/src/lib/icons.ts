@@ -7,17 +7,36 @@ import {
   CircleStack,
   CommandLine,
   CpuChip,
+  ArrowUpCircle,
   Document,
   DocumentText,
+  PencilSquare,
   Folder,
   FolderOpen,
   RectangleStack,
   Share,
+  Square2Stack,
 } from "@steeze-ui/heroicons";
 import type { IconSource } from "@steeze-ui/svelte-icon";
 
 /** An initiative: the stack of work a set of directories belongs to. */
 export const InitiativeIcon: IconSource = RectangleStack;
+
+/**
+ * A scratchpad: one loose sheet rather than the whole stack — the same shape of
+ * thing as an initiative, only not yet filed as one.
+ */
+export const ScratchpadIcon: IconSource = PencilSquare;
+
+/** Ranking a scratchpad up into a real initiative. */
+export const PromoteIcon: IconSource = ArrowUpCircle;
+
+/**
+ * A directory running in an isolated git worktree: two stacked sheets, because
+ * that is exactly what it is — a second checkout of the same repository, which
+ * agents write to instead of the one the user has open.
+ */
+export const WorktreeIcon: IconSource = Square2Stack;
 
 /** The memory store. */
 export const MemoryIcon: IconSource = CircleStack;

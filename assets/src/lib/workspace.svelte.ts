@@ -5,10 +5,13 @@ import {
   ADAPTERS,
   rpc,
   getDefaultAgent,
+  getSidebarSort,
   listAgentProfiles,
+  setSidebarSort,
   type Agent,
   type AgentProfile,
   type Initiative,
+  type SidebarSort,
 } from "$lib/api";
 import {
   connect,
@@ -44,6 +47,19 @@ export function rowKey(r: Row): string {
     case "agent":
       return `a:${r.agentId}`;
   }
+}
+
+/**
+ * Every path a directory entry answers to.
+ *
+ * A worktree-backed directory has two: the source repository the user added,
+ * and the isolated checkout agents actually run in. An agent started there
+ * reports the *worktree* path, so anything matching agents to directories has
+ * to accept both — otherwise enabling a worktree silently unparents every agent
+ * under it, and they all reappear at the bottom of the tree as loose ones.
+ */
+function dirPaths(entry: Initiative["dirs"][number]): string[] {
+  return entry.worktree_path ? [entry.path, entry.worktree_path] : [entry.path];
 }
 
 /** A file or folder inside an initiative's context folder. */
@@ -108,6 +124,39 @@ function sortNodes(nodes: ContextNode[]): ContextNode[] {
   return nodes;
 }
 
+/**
+ * Where each status sits when sorting by it.
+ *
+ * Active work first, finished work sinking — deliberately NOT the lifecycle
+ * order that `[` / `]` cycle through (`planning → ongoing → done → archived`).
+ * Cycling is about moving one initiative along its life; sorting is about what
+ * the sidebar should put in front of you, and nobody opens Codrift to look at
+ * what is archived.
+ */
+const STATUS_RANK: Record<string, number> = { ongoing: 0, planning: 1, done: 2, archived: 3 };
+
+// Sorted lists must be *total*: two initiatives that tie on the chosen key have
+// to keep a stable order between renders, or rows swap places for no reason the
+// user can see. Every comparator below therefore ends on a unique-ish key.
+const byName = (a: Initiative, b: Initiative) =>
+  a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+// created_at is ISO-8601, so lexicographic order is chronological order.
+const byCreated = (a: Initiative, b: Initiative) => a.created_at.localeCompare(b.created_at);
+const rank = (i: Initiative) => STATUS_RANK[i.status] ?? 99;
+
+function compareBy(sort: SidebarSort, a: Initiative, b: Initiative): number {
+  switch (sort) {
+    case "name":
+      return byName(a, b) || byCreated(a, b);
+    case "recent":
+      return byCreated(b, a);
+    case "status":
+      return rank(a) - rank(b) || byName(a, b) || byCreated(a, b);
+    default:
+      return byCreated(a, b);
+  }
+}
+
 class Workspace {
   initiatives = $state<Initiative[]>([]);
   agentsByInit = $state<Record<string, Agent[]>>({});
@@ -139,12 +188,14 @@ class Workspace {
   }
 
   agentsForDir(initId: string, path: string): Agent[] {
-    return this.agentsFor(initId).filter((a) => a.dir === path);
+    const entry = this.initiatives.find((i) => i.id === initId)?.dirs.find((d) => d.path === path);
+    const paths = entry ? dirPaths(entry) : [path];
+    return this.agentsFor(initId).filter((a) => paths.includes(a.dir));
   }
 
   /** Agents whose dir isn't one of the initiative's project dirs (e.g. scratch). */
   looseAgents(init: Initiative): Agent[] {
-    const dirs = new Set(init.dirs.map((d) => d.path));
+    const dirs = new Set(init.dirs.flatMap(dirPaths));
     return this.agentsFor(init.id).filter((a) => !dirs.has(a.dir));
   }
 
@@ -210,22 +261,62 @@ class Workspace {
     this.expandedFolders = next;
   }
 
+  /**
+   * Real initiatives, then scratchpads — the order the sidebar draws them in,
+   * and therefore the order `rows` has to walk.
+   *
+   * Scratchpads sit at the bottom because they are the noisy end of the list:
+   * one gets opened for every stray question, most are never named, and none of
+   * them should push the work you actually filed off the top of the sidebar.
+   */
+  /**
+   * How the initiative list is ordered. Persisted, so it survives a restart.
+   *
+   * Every ordering offered here is *stable* — it changes only when the user does
+   * something (creates, renames, promotes, cycles a status), never on its own.
+   * Sorting by "needs input" was the obvious candidate and is the one to avoid:
+   * rows would rearrange themselves under the cursor every time an agent
+   * changed state. The "N waiting" badge already says who is blocked without
+   * moving anything.
+   */
+  sort = $state<SidebarSort>("created");
+
+  projects = $derived(
+    // filter() already copied, so sorting in place is not mutating `initiatives`.
+    this.initiatives.filter((i) => !i.scratch).sort((a, b) => compareBy(this.sort, a, b)),
+  );
+  // Newest first, against the oldest-first order the store returns, and NOT
+  // subject to `sort`. That order is right for filed work — long-lived things
+  // should sit still — and exactly wrong here: the scratchpad you opened a
+  // second ago would land at the bottom while last Tuesday's dead ones held the
+  // top. A scratchpad stack is a recency stack, the way shell history is; that
+  // is what the thing *is*, not a preference about it.
+  scratchpads = $derived(this.initiatives.filter((i) => i.scratch).reverse());
+  ordered = $derived([...this.projects, ...this.scratchpads]);
+
   // Mirrors the rendered tree exactly, so j/k moves through what's on screen.
   rows = $derived.by<Row[]>(() => {
     const out: Row[] = [];
-    for (const i of this.initiatives) {
+    for (const i of this.ordered) {
       out.push({ kind: "init", initId: i.id });
       if (!this.expanded.has(i.id)) continue;
-      for (const { node } of this.contextRows(i.id)) {
-        out.push(
-          node.isFile
-            ? { kind: "file", initId: i.id, name: node.path }
-            : { kind: "folder", initId: i.id, path: node.path },
-        );
+      // A scratchpad hides its paperwork. It has an initiative.md, an
+      // orchestration.md and a memory store like anything else — but nobody
+      // opens a scratchpad to read them, and three rows of ceremony under every
+      // throwaway session turns the sidebar into filing. They are still on
+      // disk, and ranking one up brings them straight back.
+      if (!i.scratch) {
+        for (const { node } of this.contextRows(i.id)) {
+          out.push(
+            node.isFile
+              ? { kind: "file", initId: i.id, name: node.path }
+              : { kind: "folder", initId: i.id, path: node.path },
+          );
+        }
+        // Memory is context too — reachable from the tree, not only from a tab
+        // buried in the overview.
+        out.push({ kind: "memory", initId: i.id });
       }
-      // Memory is context too — reachable from the tree, not only from a tab
-      // buried in the overview.
-      out.push({ kind: "memory", initId: i.id });
       for (const d of i.dirs) {
         out.push({ kind: "dir", initId: i.id, path: d.path });
         for (const a of this.agentsForDir(i.id, d.path))
@@ -390,6 +481,7 @@ class Workspace {
       );
       this.agentsByInit = Object.fromEntries(entries);
       await this.refreshProfiles();
+      await this.refreshSort();
     } catch (e) {
       this.error = (e as Error).message;
     } finally {
@@ -412,6 +504,24 @@ class Workspace {
       this.defaultAgent = "claude";
     }
     if (!this.knownAgent(this.defaultAgent)) this.defaultAgent = "claude";
+  }
+
+  async refreshSort() {
+    try {
+      this.sort = await getSidebarSort();
+    } catch {
+      /* an unsorted-as-stored list still beats failing the whole load */
+    }
+  }
+
+  /** Reorders now, remembers after — the list must not wait on a round trip. */
+  async setSort(next: SidebarSort) {
+    this.sort = next;
+    try {
+      await setSidebarSort(next);
+    } catch {
+      /* a re-sorted sidebar that cannot persist still beats an error toast */
+    }
   }
 
   knownAgent(choice: string | null | undefined): boolean {

@@ -27,7 +27,8 @@ defmodule Codrift.Initiative do
     :status,
     integration: nil,
     worktree_default: false,
-    agent: nil
+    agent: nil,
+    scratch: false
   ]
 
   @type integration ::
@@ -42,7 +43,8 @@ defmodule Codrift.Initiative do
           status: status(),
           integration: integration(),
           worktree_default: boolean(),
-          agent: String.t() | nil
+          agent: String.t() | nil,
+          scratch: boolean()
         }
 
   @doc """
@@ -75,14 +77,44 @@ defmodule Codrift.Initiative do
   end
 
   @doc "Creates a new initiative with a random ID and the current UTC timestamp."
-  def new(name, dirs \\ []) do
+  def new(name, dirs \\ [], opts \\ []) do
     %__MODULE__{
       id: Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
       name: name,
       dirs: Enum.map(dirs, &DirEntry.from_value/1),
       created_at: DateTime.utc_now(),
-      status: :ongoing
+      status: :ongoing,
+      scratch: Keyword.get(opts, :scratch, false)
     }
+  end
+
+  @doc """
+  A name for a fresh scratchpad: where it was opened, and when.
+
+  Scratchpads are opened without being named — that is the whole point — so the
+  name has to be something the list can still be read by two days later. A bare
+  clock reading is not: `scratch 09:03` and `scratch 14:21` say nothing about
+  which was which. So when the scratchpad was opened against a directory, that
+  directory's name leads, and the time only tells two of them apart.
+
+  `label` is that directory name (nil when the scratchpad is folderless), and
+  `taken` — the names already in use — decides the `(2)` suffix so two opened in
+  the same minute in the same place stay distinguishable.
+  """
+  @spec scratch_name([String.t()], String.t() | nil) :: String.t()
+  def scratch_name(taken \\ [], label \\ nil) do
+    # Local wall-clock, not UTC: this name is read by a human two hours later,
+    # and `NaiveDateTime.local_now/0` gets it from the system without needing a
+    # tz database to be installed.
+    at = Calendar.strftime(NaiveDateTime.local_now(), "%H:%M")
+    # The separator earns its place only when there are two things to separate.
+    base = if label in [nil, ""], do: "scratch #{at}", else: "scratch · #{label} #{at}"
+    if base in taken, do: unique(base, taken, 2), else: base
+  end
+
+  defp unique(base, taken, n) do
+    candidate = "#{base} (#{n})"
+    if candidate in taken, do: unique(base, taken, n + 1), else: candidate
   end
 
   @doc "Returns the next status in the cycle (wraps around)."
@@ -106,7 +138,8 @@ defmodule Codrift.Initiative do
       "created_at" => DateTime.to_iso8601(i.created_at),
       "status" => Atom.to_string(i.status || :ongoing),
       "worktree_default" => i.worktree_default || false,
-      "agent" => i.agent
+      "agent" => i.agent,
+      "scratch" => i.scratch || false
     }
 
     case i.integration do
@@ -151,7 +184,8 @@ defmodule Codrift.Initiative do
            status: status,
            integration: integration,
            worktree_default: Map.get(data, "worktree_default", false),
-           agent: Map.get(data, "agent")
+           agent: Map.get(data, "agent"),
+           scratch: Map.get(data, "scratch", false)
          }}
 
       error ->

@@ -230,7 +230,7 @@ defmodule Codrift.MCP.Handler do
         "name" => "start_agent",
         "description" =>
           "Start an AI coding agent in a directory. Omit `dir` for a folderless " <>
-            "initiative — the agent runs in the initiative's own scratchpad (context) " <>
+            "initiative — the agent runs in the initiative's own context " <>
             "folder. For a shell the *user* is meant to drive, use `open_terminal` " <>
             "instead — it opens a pane and moves their keyboard into it.",
         "inputSchema" => %{
@@ -240,7 +240,7 @@ defmodule Codrift.MCP.Handler do
             "dir" => %{
               "type" => "string",
               "description" =>
-                "Working directory. Optional — defaults to the initiative's scratchpad folder."
+                "Working directory. Optional — defaults to the initiative's context folder."
             },
             "adapter" => %{
               "type" => "string",
@@ -277,7 +277,7 @@ defmodule Codrift.MCP.Handler do
               "type" => "string",
               "description" =>
                 "Working directory for the shell. Optional — defaults to the " <>
-                  "initiative's scratchpad folder."
+                  "initiative's context folder."
             },
             "command" => %{
               "type" => "string",

@@ -47,6 +47,12 @@ export type Initiative = {
   integration?: { service: string; item_id: string; url: string | null };
   /** Launch choice for this initiative — a base adapter or a profile name. */
   agent?: string | null;
+  /**
+   * A scratchpad: an initiative opened before there was anything to name. Same
+   * machinery as any other (context folder, memory, agents) — the flag only
+   * decides where the sidebar files it, and that it can be ranked up.
+   */
+  scratch?: boolean;
 };
 
 export type Agent = {
@@ -121,6 +127,51 @@ export async function getDefaultAgent(): Promise<string> {
 
 export function setDefaultAgent(agent: string): Promise<unknown> {
   return rpc("set_default_agent", { agent });
+}
+
+/**
+ * How the sidebar orders initiatives. Mirrors `Codrift.Config.Settings`.
+ *
+ * `created` oldest first (the default), `recent` newest first, `name` A→Z,
+ * `status` active work first.
+ */
+export type SidebarSort = "created" | "recent" | "name" | "status";
+
+/** The cycle order of the sidebar's sort control, and the palette's listing. */
+export const SIDEBAR_SORTS: { id: SidebarSort; label: string }[] = [
+  { id: "created", label: "created" },
+  { id: "recent", label: "recent" },
+  { id: "name", label: "name" },
+  { id: "status", label: "status" },
+];
+
+export async function getSidebarSort(): Promise<SidebarSort> {
+  const res = await rpc<{ sort: SidebarSort }>("get_sidebar_sort");
+  return res.sort;
+}
+
+export function setSidebarSort(sort: SidebarSort): Promise<unknown> {
+  return rpc("set_sidebar_sort", { sort });
+}
+
+/**
+ * Opens an unnamed scratchpad, optionally against `dir`.
+ *
+ * The backend names it — where it was opened, and when — so the caller never
+ * has to invent one. Pass the directory the user was looking at and the
+ * scratchpad has something to explore; omit it and it runs folderless in its
+ * own context folder.
+ */
+export function createScratchpad(dir?: string): Promise<Initiative> {
+  return rpc<Initiative>("create_scratchpad", dir ? { dirs: [dir] } : {});
+}
+
+/**
+ * Ranks a scratchpad up into a real initiative. Nothing moves — the same
+ * context folder, memory store and running agents carry over.
+ */
+export function promoteInitiative(initiativeId: string, name: string): Promise<Initiative> {
+  return rpc<Initiative>("promote_initiative", { initiative_id: initiativeId, name });
 }
 
 export function setInitiativeAgent(initiativeId: string, agent: string): Promise<Initiative> {
