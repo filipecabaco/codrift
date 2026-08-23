@@ -65,5 +65,82 @@ defmodule Codrift.OAuthTest do
     assert OAuth.list_tokens() == %{}
     assert OAuth.get_token("github") == {:error, :not_found}
     refute OAuth.connected?("github")
+    assert OAuth.access_token("github") == {:error, :not_found}
+    assert OAuth.status("github") == %{connected: false, needs_reauth: false}
+  end
+
+  describe "token lifetime" do
+    # Linear hands out 24-hour access tokens and offers no way to ask for longer,
+    # so "is this token still good, and can I renew it without the user" is a
+    # question `access_token/1` has to answer on every single call. The refresh
+    # *request* needs a live provider and is not exercised here; what is pinned is
+    # the decision made before it — which is what used to be missing entirely, and
+    # what turned a working Linear connection into a 401 the next morning.
+    #
+
+    defp write_token(service, token) do
+      path = token_file()
+      path |> Path.dirname() |> File.mkdir_p!()
+
+      existing =
+        case File.read(path) do
+          {:ok, content} -> JSON.decode!(content)
+          _ -> %{}
+        end
+
+      File.write!(path, JSON.encode!(Map.put(existing, service, token)))
+    end
+
+    defp in_seconds(offset), do: System.os_time(:second) + offset
+
+    test "a token with time left is handed back untouched" do
+      write_token("linear", %{"access_token" => "still-good", "expires_at" => in_seconds(3600)})
+
+      assert OAuth.access_token("linear") == {:ok, "still-good"}
+      assert %{connected: true, needs_reauth: false} = OAuth.status("linear")
+    end
+
+    test "a token with no expiry recorded never goes stale" do
+      # GitHub's device-flow tokens genuinely do not expire, and tokens written
+      # before `expires_at` existed have no deadline to compare against —
+      # treating either as spent would sign the user out for nothing.
+      write_token("github", %{"access_token" => "eternal"})
+
+      assert OAuth.access_token("github") == {:ok, "eternal"}
+      assert %{connected: true, needs_reauth: false} = OAuth.status("github")
+    end
+
+    test "an expired token with nothing to renew it asks for a reconnect" do
+      write_token("linear", %{"access_token" => "stale", "expires_at" => in_seconds(-60)})
+
+      assert OAuth.access_token("linear") == {:error, :reauth_required}
+      assert %{connected: true, needs_reauth: true} = OAuth.status("linear")
+    end
+
+    test "an expired but refreshable token is not reported as needing a reconnect" do
+      # It is about to renew itself on the next call; telling the user to go and
+      # re-authorise would be advice to do work the app is already doing.
+      write_token("linear", %{
+        "access_token" => "stale",
+        "refresh_token" => "renewable",
+        "expires_at" => in_seconds(-60)
+      })
+
+      assert %{connected: true, needs_reauth: false} = OAuth.status("linear")
+    end
+
+    test "a token inside the refresh skew is treated as already expired" do
+      # Expiring in 30s would survive the freshness check but not necessarily the
+      # request that follows it, so the skew window has to renew early.
+      write_token("linear", %{"access_token" => "expiring", "expires_at" => in_seconds(30)})
+
+      assert OAuth.access_token("linear") == {:error, :reauth_required}
+    end
+
+    test "refresh/1 on a service that was never connected says so" do
+      File.rm(token_file())
+
+      assert OAuth.refresh("linear") == {:error, :not_found}
+    end
   end
 end

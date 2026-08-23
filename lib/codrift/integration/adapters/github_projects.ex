@@ -13,6 +13,7 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
 
   @behaviour Codrift.Integration
 
+  alias Codrift.Integration.Error
   alias Codrift.Integration.HTTP
   alias Codrift.Integration.Item
 
@@ -264,9 +265,7 @@ defmodule Codrift.Integration.Adapters.GitHubProjects do
     end
   end
 
-  defp format_gql_errors(errors) do
-    Enum.map_join(errors, "; ", & &1["message"])
-  end
+  defp format_gql_errors(errors), do: Error.from_graphql(errors, name())
 
   defp format_list([]), do: "none"
   defp format_list(items), do: Enum.join(items, ", ")

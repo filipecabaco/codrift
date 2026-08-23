@@ -326,11 +326,13 @@ defmodule Codrift.CLI.MCP do
     end
   end
 
-  # Integration.HTTP has already inspected the failure, so what arrives here is a
-  # string — inspecting it again only wraps it in quotes. The one worth
-  # translating is the one this check exists to catch: nothing is listening.
+  # Integration.HTTP returns a `%Codrift.Integration.Error{}`, whose message is
+  # already the readable sentence — `to_string/1` unwraps it, and `inspect/1`
+  # would only wrap it back up. The one worth translating is the one this check
+  # exists to catch: nothing is listening on the port.
   defp format_reason(reason) do
-    if String.contains?(reason, "econnrefused"), do: "connection refused", else: reason
+    message = to_string(reason)
+    if String.contains?(message, "econnrefused"), do: "connection refused", else: message
   end
 
   # ── Profile selection ────────────────────────────────────────────────────────

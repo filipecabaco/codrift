@@ -1,3 +1,19 @@
+<script lang="ts" module>
+  /**
+   * What a right-click in the sidebar landed on.
+   *
+   * The sidebar reports the target and stops there — App.svelte owns every
+   * command a menu could offer, so building the menu here would mean either
+   * duplicating those handlers or threading a dozen more callbacks through.
+   */
+  export type SidebarTarget =
+    | { kind: "initiative"; initId: string }
+    | { kind: "dir"; initId: string; path: string }
+    | { kind: "agent"; initId: string; agentId: string }
+    | { kind: "file"; initId: string; path: string; isFile: boolean }
+    | { kind: "memory"; initId: string };
+</script>
+
 <script lang="ts">
   // The initiative tree. Rows come from `workspace.rows`, so what renders and
   // what j/k walks are the same list.
@@ -33,6 +49,7 @@
     onOpenContextFile,
     onOpenMemory,
     onToggleContextFolder,
+    onContextMenu,
     onCollapse,
   }: {
     focused: boolean;
@@ -54,6 +71,7 @@
     onOpenContextFile: (initId: string, name: string) => void;
     onOpenMemory: (initId: string) => void;
     onToggleContextFolder: (initId: string, path: string) => void;
+    onContextMenu: (event: MouseEvent, target: SidebarTarget) => void;
     onCollapse: () => void;
   } = $props();
 
@@ -182,6 +200,7 @@
                 selected(`i:${init.id}`) ? "bg-accent/20 text-white" : "hover:bg-surface",
               ]}
               onclick={() => onSelectInitiative(init.id)}
+              oncontextmenu={(e) => onContextMenu(e, { kind: "initiative", initId: init.id })}
             >
               <Icon
                 src={init.scratch ? ScratchpadIcon : InitiativeIcon}
@@ -273,6 +292,13 @@
                       node.isFile
                         ? onOpenContextFile(init.id, node.path)
                         : onToggleContextFolder(init.id, node.path)}
+                    oncontextmenu={(e) =>
+                      onContextMenu(e, {
+                        kind: "file",
+                        initId: init.id,
+                        path: node.path,
+                        isFile: node.isFile,
+                      })}
                   >
                     <Icon
                       src={node.isFile
@@ -297,6 +323,7 @@
                     selected(`m:${init.id}`) ? "bg-accent/20 text-white" : "text-fg/70 hover:bg-surface",
                   ]}
                   onclick={() => onOpenMemory(init.id)}
+                  oncontextmenu={(e) => onContextMenu(e, { kind: "memory", initId: init.id })}
                 >
                   <Icon src={MemoryIcon} class="size-3.5 shrink-0 text-muted" />
                   <span class="truncate">memory</span>
@@ -315,6 +342,8 @@
                       selected(`d:${init.id}:${dir.path}`) ? "bg-accent/20 text-white" : "text-fg/80 hover:bg-surface",
                     ]}
                     onclick={() => onSelectDir(init.id, dir.path)}
+                    oncontextmenu={(e) =>
+                      onContextMenu(e, { kind: "dir", initId: init.id, path: dir.path })}
                     title={dir.worktree_enabled ? worktreeTitle(dir) : dir.path}
                   >
                     <!-- A repo, a plain folder and an isolated worktree are
@@ -368,6 +397,8 @@
         selected(key) ? "bg-accent/20 text-white" : "text-fg/70 hover:bg-surface",
       ]}
       onclick={() => onSelectAgent(init.id, agent.id)}
+      oncontextmenu={(e) =>
+        onContextMenu(e, { kind: "agent", initId: init.id, agentId: agent.id })}
     >
       <Icon
         src={agent.adapter === "terminal" ? TerminalAgentIcon : AgentIcon}
