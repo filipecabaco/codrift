@@ -101,6 +101,10 @@ To start a specific adapter (Codex, Opencode, Gemini, Copilot, Cursor), use the 
 dropdown next to a directory in the Context view, or the command palette. `s`
 always launches Claude.
 
+Adding a git repository with `a` asks one extra question: work in an isolated
+[worktree](worktrees.md) or in the directory itself. Plain folders skip it —
+there is nothing to isolate.
+
 ### Scratchpads
 
 `Ctrl+N` opens a **scratchpad**: an initiative with no name and no dialog in the
@@ -128,6 +132,20 @@ and agents running inside it are not interrupted.
 
 `d` discards an idle scratchpad without asking — there is nothing running and
 you never named it. One with agents in it still confirms first.
+
+## Dialogs
+
+Every dialog that asks you to choose is answered from the number row: each
+option shows its key, and pressing it picks that option. `Esc` always cancels.
+
+| Key | Action |
+|-----|--------|
+| `1`–`9` | Pick the option with that badge |
+| `↑` / `↓` | Move the highlight |
+| `Enter` | Take the highlighted option (confirms, in a yes/no dialog) |
+| `Esc` | Cancel |
+
+In a confirmation dialog the two options are fixed: `1` confirms, `2` cancels.
 
 ## Context view
 

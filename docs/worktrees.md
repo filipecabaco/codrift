@@ -16,10 +16,20 @@ Branch name: `codrift/{initiative_id_prefix}/{dir-slug}`
 
 ## Enabling worktrees
 
-Worktrees are managed from the CLI (see below). Enabling one for a directory
-creates the worktree checkout and its branch; disabling it removes them. A
-directory's worktree state is stored on its `DirEntry` and persists across
-restarts.
+**When adding a directory.** Press `a`, pick the path, and if it is a git
+repository Codrift asks how to work in it — `1` for a worktree, `2` for the
+directory as it stands. A plain folder has nothing to isolate, so it is added
+without the question. Over the API this is `add_dir` with `worktree: true`
+(also exposed on the MCP `add_dir` tool).
+
+If the worktree cannot be created — a bare repo, a branch git refuses — the
+directory is still added, without isolation, and the UI says so rather than
+letting you assume you got a worktree.
+
+**Afterwards**, worktrees are managed from the CLI (see below). Enabling one for
+a directory creates the worktree checkout and its branch; disabling it removes
+them. A directory's worktree state is stored on its `DirEntry` and persists
+across restarts.
 
 An initiative can also carry a `worktree_default` flag (`set_worktree_default` /
 the `set_dir_worktree` core op) so new directories inherit a preference.
@@ -105,6 +115,10 @@ suite has leaked them into real repositories, which is what prompted the command
 
 Over MCP the same operation is `prune_worktrees`, with the same `force` default
 of `false`.
+
+The sidebar's directory preview follows the same rule: selecting a
+worktree-backed directory previews the worktree's README (or file tree), because
+that is the checkout agents actually see.
 
 ## CLI commands
 

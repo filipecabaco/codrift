@@ -347,12 +347,33 @@ defmodule Codrift.Core do
     {:ok, Codrift.Files.list_subdirs(path)}
   end
 
-  def call("add_dir", %{"initiative_id" => id, "dir" => dir}) do
-    expanded = Path.expand(dir)
+  # Answers the question the "add directory" flow has to ask before it commits:
+  # is this a repo the user could work on in an isolated worktree, or a plain
+  # folder to add as-is? Read-only, like `list_dirs` next to it.
+  def call("inspect_dir", %{"path" => path}) do
+    {:ok, Codrift.Files.inspect_path(path)}
+  end
 
-    case Store.add_dir(id, expanded) do
+  def call("add_dir", %{"initiative_id" => id, "dir" => dir} = args) do
+    expanded = Path.expand(dir)
+    opts = if truthy?(Map.get(args, "worktree")), do: [worktree_enabled: true], else: []
+
+    case Store.add_dir(id, expanded, opts) do
       {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
       {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+    end
+  end
+
+  # The sidebar's directory preview: the repo's README if it has one, otherwise
+  # a shallow tree. Scoped to directories the initiative actually holds, and
+  # read through the entry's effective path so a worktree previews the worktree.
+  def call("dir_preview", %{"initiative_id" => id, "path" => path}) do
+    with {:ok, initiative} <- Store.get(id),
+         %DirEntry{} = entry <- Enum.find(initiative.dirs, &(&1.path == path)) do
+      {:ok, Codrift.Files.preview(DirEntry.effective_path(entry))}
+    else
+      {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+      nil -> {:error, "directory is not part of this initiative: #{path}"}
     end
   end
 
@@ -936,6 +957,12 @@ defmodule Codrift.Core do
     |> Map.update!("dirs", fn dirs -> Enum.map(dirs, &tag_git/1) end)
   end
 
+  # MCP clients send booleans as booleans, but a hand-written CLI call or a
+  # loosely-typed client may send the string. Both mean the same thing here.
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(_), do: false
+
   # Derived at the API boundary, never persisted: whether a directory is under
   # version control decides how the UI draws it (a repo you can diff vs a plain
   # folder), and that can change on disk between two calls.
@@ -944,12 +971,16 @@ defmodule Codrift.Core do
   # Everything the user keeps in the initiative folder, as paths relative to it:
   # `initiative.md`, but also `scripts/deploy.sh` and `docs/runbook.md`. Skips
   # Codrift's own bookkeeping — dot-prefixed entries (agent logs), the generated
-  # CLAUDE.md, and the memory database.
+  # CLAUDE.md, the memory database, and `worktrees/`, which holds git checkouts
+  # the sidebar already lists as directories in their own right. Without that
+  # last one, enabling a worktree added a phantom `worktrees/<slug>/` row that
+  # errored on click, because it names a directory and not a file.
   defp context_files(dir) do
     dir
     |> Codrift.Files.list_relative()
     |> Enum.reject(fn rel ->
       rel == "CLAUDE.md" or String.ends_with?(rel, ".db") or
+        hd(Path.split(rel)) == "worktrees" or
         Enum.any?(Path.split(rel), &String.starts_with?(&1, "."))
     end)
     |> Enum.sort()
