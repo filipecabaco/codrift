@@ -93,6 +93,142 @@ defmodule Codrift.Files do
   defp expand_home(other), do: other
 
   @doc """
+  A cheap "what is in here?" summary of `base`, for the sidebar's directory
+  preview.
+
+  A README is what a person reads first, so it wins: the first `README*` at the
+  root is returned rendered-ready. Only when there is none does the caller get
+  a shallow file tree instead — enough to recognise the project without paying
+  for a full recursive listing, and explicitly a *fallback*, not the Tree pane.
+
+  Returns one of:
+
+    * `%{"kind" => "readme", "name" => _, "content" => _}`
+    * `%{"kind" => "tree", "entries" => [_], "truncated" => boolean()}`
+    * `%{"kind" => "empty"}`
+
+  Every shape also carries `"dir"` — the directory that was actually read,
+  which for a worktree-backed entry is the worktree, not the source repo.
+  """
+  @spec preview(String.t()) :: map()
+  def preview(base) do
+    Map.put(do_preview(base), "dir", base)
+  end
+
+  defp do_preview(base) do
+    case readme(base) do
+      {name, content} -> %{"kind" => "readme", "name" => name, "content" => content}
+      nil -> tree_preview(base)
+    end
+  end
+
+  # The first root-level README, whatever its extension or casing. Sorted so the
+  # choice is deterministic when a repo ships both README.md and README.txt.
+  defp readme(base) do
+    base
+    |> File.ls()
+    |> case do
+      {:ok, names} -> names
+      {:error, _} -> []
+    end
+    |> Enum.filter(&readme_name?/1)
+    |> Enum.sort()
+    |> Enum.find_value(fn name ->
+      case read_regular(Path.join(base, name)) do
+        {:ok, content} -> {name, content}
+        {:error, _} -> nil
+      end
+    end)
+  end
+
+  defp readme_name?(name) do
+    down = String.downcase(name)
+    down == "readme" or String.starts_with?(down, "readme.")
+  end
+
+  # How many rows the preview is allowed to show before it says "and more".
+  @preview_tree_limit 60
+  # Root plus one level of children: deep enough to show `lib/`'s shape, shallow
+  # enough that a monorepo does not flood the pane.
+  @preview_tree_depth 2
+
+  defp tree_preview(base) do
+    entries =
+      base
+      |> list_relative()
+      |> shallow_nodes()
+
+    %{
+      "kind" => if(entries == [], do: "empty", else: "tree"),
+      "entries" => Enum.take(entries, @preview_tree_limit),
+      "truncated" => length(entries) > @preview_tree_limit
+    }
+  end
+
+  # Turns a flat list of relative file paths into the directory-first, depth-
+  # limited node list the preview renders. A path deeper than the limit still
+  # contributes its ancestor directories, so `lib/codrift/web/router.ex` shows
+  # up as `lib/` → `codrift/` rather than vanishing.
+  defp shallow_nodes(rel_paths) do
+    rel_paths
+    |> Enum.flat_map(&nodes_for(&1))
+    |> Enum.uniq_by(& &1["path"])
+    |> Enum.sort_by(&sort_key/1)
+  end
+
+  # Renders as a tree, so a node has to sit directly above its own children
+  # rather than after every other node at its depth. Term ordering does that for
+  # free once the key is the path segment-by-segment: a parent's key is a prefix
+  # of its children's, and the leading 0/1 puts directories before files at each
+  # level. `lib/` → `lib/codrift/` → `lib/agent.ex` → `mix.exs`.
+  defp sort_key(%{"path" => path, "dir" => dir?}) do
+    segments = Path.split(path)
+    last = length(segments) - 1
+
+    segments
+    |> Enum.with_index()
+    |> Enum.map(fn {name, i} -> {if(i == last and not dir?, do: 1, else: 0), name} end)
+  end
+
+  defp nodes_for(rel) do
+    segments = Path.split(rel)
+    last = length(segments) - 1
+
+    segments
+    |> Enum.take(@preview_tree_depth)
+    |> Enum.with_index()
+    |> Enum.map(fn {name, i} ->
+      %{
+        "name" => name,
+        "path" => segments |> Enum.take(i + 1) |> Path.join(),
+        "dir" => i < last,
+        "depth" => i
+      }
+    end)
+  end
+
+  @doc """
+  Describes a host path for the "add directory" flow, so the UI can ask the
+  right question before adding it.
+
+  `git` mirrors how the sidebar tags a directory — true anywhere inside a
+  working tree. `git_root` is the stricter one the worktree offer depends on:
+  `Codrift.Worktree.ensure/3` needs a `.git` in the directory itself.
+  """
+  @spec inspect_path(String.t()) :: map()
+  def inspect_path(input) do
+    path = input |> String.trim() |> Path.expand()
+
+    %{
+      "path" => path,
+      "exists" => File.exists?(path),
+      "dir" => File.dir?(path),
+      "git" => git_repo?(path),
+      "git_root" => File.exists?(Path.join(path, ".git"))
+    }
+  end
+
+  @doc """
   Reads `path` only if it resolves inside one of `allowed_dirs`.
 
   Symlinks are fully resolved before the containment check (see `realpath/1`),

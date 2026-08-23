@@ -10,7 +10,9 @@
     rpc,
     MENU_EVENT,
     QUIT_REQUESTED,
+    REDRAW_TERMINALS,
     type Agent,
+    type DirInfo,
     type Initiative,
     type SidebarSort,
   } from "$lib/api";
@@ -37,6 +39,8 @@
   import Prompt from "$lib/Prompt.svelte";
   import DirPicker from "$lib/DirPicker.svelte";
   import Confirm from "$lib/Confirm.svelte";
+  import Choice, { type ChoiceOption } from "$lib/Choice.svelte";
+  import DirPreview from "$lib/DirPreview.svelte";
   import Editor from "$lib/Editor.svelte";
   import Integrations from "$lib/Integrations.svelte";
   import NewInitiative from "$lib/NewInitiative.svelte";
@@ -58,6 +62,12 @@
     wantPanel: "file" | "memory";
     treeSelectedPath: string | null;
     /**
+     * The project directory the sidebar cursor is on, previewed in place of the
+     * initiative overview. Set by walking onto a dir row and cleared by landing
+     * on anything else, so it always describes the current selection.
+     */
+    dirPath: string | null;
+    /**
      * A freshly split pane asks what it should hold rather than guessing. Any
      * selection — from the chooser or the sidebar — clears it.
      */
@@ -70,6 +80,7 @@
     wantFile: null,
     wantPanel: "file",
     treeSelectedPath: null,
+    dirPath: null,
     chooser: false,
   });
   let panes = $state<PaneView[]>([newView()]);
@@ -342,6 +353,7 @@
     | { kind: "prompt"; title: string; placeholder?: string; submit: (v: string) => void }
     | { kind: "dirpicker"; submit: (v: string) => void }
     | { kind: "confirm"; message: string; confirmLabel?: string; onConfirm: () => void }
+    | { kind: "choice"; title: string; description?: string; options: ChoiceOption[] }
     | { kind: "integrations" }
     | { kind: "new_initiative" }
     | { kind: "appearance" }
@@ -406,6 +418,7 @@
 
   function applyRow(row: Row) {
     const v = viewFor(row.initId);
+    v.dirPath = row.kind === "dir" ? row.path : null;
     switch (row.kind) {
       case "init":
       case "dir":
@@ -448,6 +461,7 @@
     const v = viewFor(id);
     v.agentId = null;
     v.wantFile = null;
+    v.dirPath = null;
     paneFocus = "sidebar";
     ws.expand(id);
     ws.syncCursor((r) => r.kind === "init" && r.initId === id);
@@ -456,6 +470,7 @@
   function openContextFile(initId: string, name: string) {
     const v = viewFor(initId);
     v.agentId = null;
+    v.dirPath = null;
     v.wantFile = name;
     v.wantPanel = "file";
     v.tab = "context";
@@ -467,6 +482,7 @@
   function openMemory(initId: string) {
     const v = viewFor(initId);
     v.agentId = null;
+    v.dirPath = null;
     v.wantPanel = "memory";
     v.tab = "context";
     paneFocus = "sidebar";
@@ -477,6 +493,7 @@
   function toggleContextFolder(initId: string, path: string) {
     const v = viewFor(initId);
     v.agentId = null;
+    v.dirPath = null;
     paneFocus = "sidebar";
     ws.toggleFolder(initId, path);
     ws.syncCursor((r) => r.kind === "folder" && r.initId === initId && r.path === path);
@@ -486,6 +503,7 @@
     const v = viewFor(initId);
     claimAgent(activePane, agentId);
     v.wantFile = null;
+    v.dirPath = null;
     v.tab = "context";
     ws.syncCursor((r) => r.kind === "agent" && r.agentId === agentId);
     focusMain(); // explicit click on an agent → interact with its terminal
@@ -495,8 +513,33 @@
     const v = viewFor(initId);
     v.agentId = null;
     v.wantFile = null;
+    v.dirPath = path;
     paneFocus = "sidebar";
     ws.syncCursor((r) => r.kind === "dir" && r.initId === initId && r.path === path);
+  }
+
+  // Adds the directory and reports what actually happened. `add_dir` degrades
+  // to a plain entry when the worktree cannot be created (a bare repo, a branch
+  // git refuses), and a silent degrade is exactly the case where the user needs
+  // telling — they asked for isolation and did not get it.
+  async function addDir(initId: string, dir: string, worktree: boolean) {
+    const res = await rpc<Initiative>("add_dir", { initiative_id: initId, dir, worktree });
+    await load();
+    const entry = res.dirs.find((d) => d.path === dir);
+    if (worktree && entry && !entry.worktree_enabled) {
+      toast("Added, but the worktree could not be created — using the directory itself.");
+    } else {
+      toast(worktree ? "Added as a worktree." : "Directory added.");
+    }
+  }
+
+  // Refresh is the "make what I'm looking at correct again" action, so it has to
+  // cover the terminals too. They can hold a stale surface that no amount of
+  // reloading initiatives will repaint — see AgentTerminal.redraw.
+  async function refreshAll() {
+    window.dispatchEvent(new CustomEvent(REDRAW_TERMINALS));
+    await load();
+    toast("Refreshed");
   }
 
   function promptAddDir() {
@@ -506,12 +549,50 @@
       kind: "dirpicker",
       submit: async (dir) => {
         modal = null;
+        let info: DirInfo;
         try {
-          await rpc("add_dir", { initiative_id: init.id, dir });
-          await load();
+          info = await rpc<DirInfo>("inspect_dir", { path: dir });
         } catch (e) {
           toast((e as Error).message);
+          return;
         }
+
+        // A plain folder has nothing to isolate, so there is nothing to ask.
+        // Only a repo root gets the question — `Worktree.ensure` needs a `.git`
+        // in the directory itself, so offering it deeper down would just fail.
+        if (!info.git_root) {
+          try {
+            await addDir(init.id, info.path, false);
+          } catch (e) {
+            toast((e as Error).message);
+          }
+          return;
+        }
+
+        modal = {
+          kind: "choice",
+          title: `${base(info.path)} is a git repository`,
+          description:
+            "A worktree gives this initiative its own checkout on its own branch, so agents working here can't disturb whatever else you have going on in that repo.",
+          options: [
+            {
+              label: "Add as a worktree",
+              hint: "Separate checkout on a codrift/… branch. Your existing working tree is untouched.",
+              run: async () => {
+                await addDir(init.id, info.path, true);
+                modal = null;
+              },
+            },
+            {
+              label: "Add the directory itself",
+              hint: "Agents work in the repo as it stands, on whatever branch it is on.",
+              run: async () => {
+                await addDir(init.id, info.path, false);
+                modal = null;
+              },
+            },
+          ],
+        };
       },
     };
   }
@@ -880,8 +961,7 @@
         moveCursor(-1);
         break;
       case "refresh":
-        await load();
-        toast("Refreshed");
+        await refreshAll();
         break;
       case "toggle_sidebar":
         sidebarCollapsed = !sidebarCollapsed;
@@ -1768,7 +1848,8 @@
       </button>
       <button
         class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
-        onclick={load}
+        onclick={refreshAll}
+        title="Refresh — reload initiatives and repaint the terminals ({formatSpec(keymap.refresh)})"
         aria-label="Refresh"
       >
         <Icon src={ArrowPath} class="size-4" />
@@ -1958,14 +2039,27 @@
       {:else if view.tab === "context"}
         <!-- The agent case is handled by the persistent terminal layer below. -->
         {#if !view.agentId}
-          <ContextOverview
-            initiative={init}
-            agents={ws.agentsFor(init.id)}
-            wantFile={view.wantFile}
-            wantPanel={view.wantPanel}
-            onChanged={load}
-            onManageProfiles={() => (modal = { kind: "profiles" })}
-          />
+          {#if view.dirPath && init.dirs.some((d) => d.path === view.dirPath)}
+            <!-- Cursor is on a project directory: preview it in place of the
+                 overview. Keyed on the path so moving between two dirs remounts
+                 rather than showing the previous README while the next loads. -->
+            {#key view.dirPath}
+              <DirPreview
+                initiativeId={init.id}
+                dir={init.dirs.find((d) => d.path === view.dirPath)!}
+                onOpenTree={() => setTab("tree")}
+              />
+            {/key}
+          {:else}
+            <ContextOverview
+              initiative={init}
+              agents={ws.agentsFor(init.id)}
+              wantFile={view.wantFile}
+              wantPanel={view.wantPanel}
+              onChanged={load}
+              onManageProfiles={() => (modal = { kind: "profiles" })}
+            />
+          {/if}
         {/if}
       {:else if view.tab === "diff"}
         {#key init.id}
@@ -2073,6 +2167,13 @@
     message={modal.message}
     confirmLabel={modal.confirmLabel ?? "Confirm"}
     onConfirm={modal.onConfirm}
+    onClose={() => (modal = null)}
+  />
+{:else if modal?.kind === "choice"}
+  <Choice
+    title={modal.title}
+    description={modal.description}
+    options={modal.options}
     onClose={() => (modal = null)}
   />
 {/if}

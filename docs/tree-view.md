@@ -15,6 +15,21 @@ directories are listed before files, both sorted alphabetically.
 The file list comes from the `list_tree` RPC, which walks each directory in the
 initiative (respecting `.gitignore` via `git ls-files`, with a naive fallback).
 
+## Directory preview (Mode 1)
+
+You do not have to come here just to see what a directory *is*. Moving the
+sidebar cursor onto a project directory replaces the Context pane with a preview
+of it: the directory's `README` rendered as markdown, or — only when there is no
+README — the top two levels of its file tree.
+
+This is a preview, not a browser: nothing in it expands, and it never switches
+the pane to Tree mode on its own. Its **Browse in Tree** button does, when you
+want the real thing. For a worktree-backed directory the preview reads the
+worktree, since that is the checkout agents work in.
+
+It comes from the `dir_preview` RPC, which only accepts directories the
+initiative actually holds, and resolves them through `DirEntry.effective_path/1`.
+
 ## Navigation
 
 | Key / action | Effect |

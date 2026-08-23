@@ -157,7 +157,12 @@ defmodule Codrift.MCP.Handler do
           "type" => "object",
           "properties" => %{
             "initiative_id" => %{"type" => "string"},
-            "dir" => %{"type" => "string"}
+            "dir" => %{"type" => "string"},
+            "worktree" => %{
+              "type" => "boolean",
+              "description" =>
+                "Work in an isolated git worktree on its own branch instead of the directory itself. Ignored when the directory is not a git repository."
+            }
           },
           "required" => ["initiative_id", "dir"]
         }

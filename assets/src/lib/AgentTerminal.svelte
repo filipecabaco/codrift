@@ -5,7 +5,7 @@
   import { CanvasAddon } from "@xterm/addon-canvas";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
-  import { openUrl } from "$lib/api";
+  import { openUrl, REDRAW_TERMINALS } from "$lib/api";
   import { fetchReplay, onAgentOutput, sendKeys, sendResize } from "$lib/stream";
   import { pathsToInput, registerDropZone, textToInput } from "$lib/dnd";
   import { themeState } from "$lib/theme.svelte";
@@ -201,6 +201,35 @@
     sentCols = term.cols;
     sentRows = term.rows;
   }
+
+  /**
+   * The manual "put this pane right again", behind the refresh action.
+   *
+   * Everything above that repaints does so on a trigger we can observe — coming
+   * back into view, regaining focus, losing the GPU context. WKWebView also
+   * drops a surface for reasons that raise no event at all, and then the only
+   * thing that brings the pane back is dragging the window edge. This is that
+   * drag, on demand, in the three steps a real resize performs:
+   *
+   *   1. re-measure the box, in case the grid is genuinely wrong;
+   *   2. redraw every row from xterm's buffer — always safe, and enough on its
+   *      own whenever the bytes are there and only the surface went away;
+   *   3. nudge the agent with SIGWINCH so a TUI re-emits its screen, for when
+   *      the buffer is the thing that is wrong. `forceRepaint` decides whether
+   *      that is safe; on the normal buffer it declines.
+   */
+  export function redraw() {
+    if (!term || !visible) return;
+    fitSafe();
+    term.refresh(0, term.rows - 1);
+    forceRepaint(agentId);
+  }
+
+  $effect(() => {
+    const onRedraw = () => redraw();
+    window.addEventListener(REDRAW_TERMINALS, onRedraw);
+    return () => window.removeEventListener(REDRAW_TERMINALS, onRedraw);
+  });
 
   function connect(agent: string, initiative: string) {
     disconnect();

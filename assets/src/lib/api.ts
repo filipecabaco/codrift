@@ -55,6 +55,28 @@ export type Initiative = {
   scratch?: boolean;
 };
 
+/** `inspect_dir`: what the "add directory" flow needs to know before committing. */
+export type DirInfo = {
+  path: string;
+  exists: boolean;
+  dir: boolean;
+  /** True anywhere inside a working tree — matches how the sidebar tags a dir. */
+  git: boolean;
+  /** True only when `.git` sits in this directory: what a worktree needs. */
+  git_root: boolean;
+};
+
+/** `dir_preview`: a README when the directory has one, otherwise a shallow tree. */
+export type DirPreview =
+  | { kind: "readme"; dir: string; name: string; content: string }
+  | {
+      kind: "tree";
+      dir: string;
+      entries: { name: string; path: string; dir: boolean; depth: number }[];
+      truncated: boolean;
+    }
+  | { kind: "empty"; dir: string };
+
 export type Agent = {
   id: string;
   adapter: string;
@@ -263,6 +285,15 @@ export const QUIT_REQUESTED = "codrift:quit-requested";
  * to run them. See `runMenuCommand` in App.svelte.
  */
 export const MENU_EVENT = "codrift:menu";
+
+/**
+ * Asks every mounted agent terminal to repaint itself.
+ *
+ * A window event rather than a prop or an imperative handle: the terminals are
+ * rendered per pane inside a snippet, and a split has two of them. Broadcasting
+ * reaches whichever exist without App.svelte having to hold a reference to each.
+ */
+export const REDRAW_TERMINALS = "codrift:redraw-terminals";
 
 export type AssignedItem = {
   service: string;
