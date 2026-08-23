@@ -510,11 +510,9 @@ defmodule Codrift.Core do
         flow = with {:ok, config} <- OAuthConfig.get(service), do: config.flow
 
         {service,
-         %{
-           connected: Codrift.OAuth.connected?(service),
-           oauth_supported: true,
-           flow: to_string(flow)
-         }}
+         service
+         |> Codrift.OAuth.status()
+         |> Map.merge(%{oauth_supported: true, flow: to_string(flow)})}
       end)
 
     {:ok, %{services: status}}
@@ -595,6 +593,8 @@ defmodule Codrift.Core do
   def call("list_assigned_items", args) do
     opts = if filter = args["filter"], do: [filter: filter], else: []
     %{items: items, errors: errors} = Codrift.Integration.list_assigned(opts)
+
+    errors = Enum.map(errors, &Map.update!(&1, :kind, fn kind -> to_string(kind) end))
 
     {:ok, %{items: Enum.map(items, &assigned_item_to_map/1), errors: errors}}
   end

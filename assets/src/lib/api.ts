@@ -193,6 +193,14 @@ export type OAuthService = {
   connected: boolean;
   oauth_supported: boolean;
   flow: OAuthFlow;
+  /** Unix seconds the access token dies at. Absent for tokens that never expire. */
+  expires_at?: number | null;
+  /**
+   * Connected, but the grant is spent and no refresh token can renew it — the
+   * user has to run the flow again. Distinct from `!connected`: the row still
+   * shows as a configured service, it just can't be used until reconnected.
+   */
+  needs_reauth?: boolean;
 };
 
 export type OAuthStatus = { services: Record<string, OAuthService> };
@@ -247,6 +255,15 @@ export async function quitApp(): Promise<void> {
 /** The native menu's Quit item asks the page first — see src-tauri/src/main.rs. */
 export const QUIT_REQUESTED = "codrift:quit-requested";
 
+/**
+ * Every other native menu item arrives here, with the command id in `detail`.
+ *
+ * The shell implements none of them: it names the commands, gives them
+ * accelerators, and hands them straight back to the page that already knows how
+ * to run them. See `runMenuCommand` in App.svelte.
+ */
+export const MENU_EVENT = "codrift:menu";
+
 export type AssignedItem = {
   service: string;
   id: string;
@@ -261,9 +278,25 @@ export type AssignedItem = {
   initiative_id: string | null;
 };
 
+/** Mirrors `Codrift.Integration.Error.kind/0`. */
+export type IntegrationErrorKind =
+  | "auth"
+  | "forbidden"
+  | "not_found"
+  | "rate_limited"
+  | "http"
+  | "network";
+
+export type IntegrationError = {
+  service: string;
+  reason: string;
+  /** `"auth"` is the only kind the user can fix — it earns a Reconnect button. */
+  kind: IntegrationErrorKind;
+};
+
 export type AssignedWork = {
   items: AssignedItem[];
-  errors: { service: string; reason: string }[];
+  errors: IntegrationError[];
 };
 
 export function listAssignedItems(): Promise<AssignedWork> {

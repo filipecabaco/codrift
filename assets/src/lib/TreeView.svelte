@@ -8,12 +8,15 @@
     initiativeId,
     selectedPath = $bindable<string | null>(null),
     onEdit,
+    onContextMenu,
     onLeave,
     revision = 0,
   }: {
     initiativeId: string;
     selectedPath?: string | null;
     onEdit: (path: string) => void;
+    /** Right-click on a row. `isFile` decides which commands make sense. */
+    onContextMenu?: (event: MouseEvent, path: string, isFile: boolean) => void;
     /** Called on Escape with no active filter. */
     onLeave?: () => void;
     /** Bumped by the editor on save; re-reads the previewed file when it changes. */
@@ -392,6 +395,11 @@
             onclick={() => {
               cursor = i;
               activate(row);
+            }}
+            oncontextmenu={(e) => {
+              cursor = i;
+              activate(row);
+              onContextMenu?.(e, row.node.fullPath, row.node.isFile);
             }}
           >
             {#if row.label}

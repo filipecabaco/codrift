@@ -14,6 +14,7 @@ defmodule Codrift.Integration.Adapters.GitLab do
 
   @behaviour Codrift.Integration
 
+  alias Codrift.Integration.Error
   alias Codrift.Integration.HTTP
   alias Codrift.Integration.Item
 
@@ -134,16 +135,29 @@ defmodule Codrift.Integration.Adapters.GitLab do
     end
   end
 
+  # `access_token/1` rather than `get_token/1`: the stored token is only 24 hours
+  # old at best, and this is the call that renews it. See `Codrift.OAuth`.
   defp auth do
-    case Codrift.OAuth.get_token(name()) do
-      {:ok, %{"access_token" => t}} ->
-        {:ok, [{"authorization", "Bearer #{t}"}]}
+    case Codrift.OAuth.access_token(name()) do
+      {:ok, token} ->
+        {:ok, [{"authorization", "Bearer #{token}"}]}
 
-      _ ->
-        case System.get_env("GITLAB_TOKEN") do
-          nil -> {:error, "GITLAB_TOKEN env var is required"}
-          token -> {:ok, [{"private-token", token}]}
-        end
+      # The grant is spent and cannot be refreshed. An env-var key, if the user
+      # has one, is still perfectly good — only fall through to "reconnect" when
+      # there is nothing else to try.
+      {:error, :reauth_required} ->
+        env_auth() || {:error, Error.reauth(name())}
+
+      {:error, :not_found} ->
+        env_auth() ||
+          {:error, Error.new(:auth, "GITLAB_TOKEN env var is required", service: name())}
+    end
+  end
+
+  defp env_auth do
+    case System.get_env("GITLAB_TOKEN") do
+      nil -> nil
+      token -> {:ok, [{"private-token", token}]}
     end
   end
 

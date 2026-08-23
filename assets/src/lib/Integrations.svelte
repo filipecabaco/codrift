@@ -66,7 +66,12 @@
     pollDeadline = Date.now() + 3 * 60 * 1000;
     poll = setInterval(async () => {
       await refresh();
-      if (services[service]?.connected) {
+      // `connected` alone would end a *re*connect immediately: the spent token
+      // is still on disk until the new one lands, so the service reads as
+      // connected for the whole flow. Waiting for `needs_reauth` to clear is
+      // what actually tracks the new token arriving.
+      const svc = services[service];
+      if (svc?.connected && !svc.needs_reauth) {
         stopPolling();
         waiting = null;
         busy = null;
@@ -169,19 +174,39 @@
           <div class="rounded-md px-2 py-2 hover:bg-canvas/60">
             <div class="flex items-center gap-2.5">
               <span
-                class={["size-2 rounded-full", s.connected ? "bg-green-500" : "border border-muted"]}
+                class={[
+                  "size-2 rounded-full",
+                  s.needs_reauth
+                    ? "bg-yellow-500"
+                    : s.connected
+                      ? "bg-green-500"
+                      : "border border-muted",
+                ]}
               ></span>
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   <span class="truncate text-xs font-semibold text-fg">{label(svc)}</span>
-                  {#if s.connected}
+                  {#if s.needs_reauth}
+                    <!-- A connected-but-spent grant looked exactly like a healthy
+                         one here, so the only sign anything was wrong was every
+                         import failing. -->
+                    <span class="text-[10px] text-yellow-500">session expired</span>
+                  {:else if s.connected}
                     <span class="text-[10px] text-green-400">connected</span>
                   {/if}
                 </div>
                 {#if blurb(svc)}<p class="truncate text-[11px] text-muted">{blurb(svc)}</p>{/if}
               </div>
 
-              {#if s.connected}
+              {#if s.needs_reauth}
+                <button
+                  class="rounded-md bg-accent/20 px-2.5 py-1 text-[11px] text-accent hover:bg-accent/30 disabled:opacity-50"
+                  disabled={busy === svc || !!waiting}
+                  onclick={() => connect(svc)}
+                >
+                  {busy === svc ? "Starting…" : "Reconnect"}
+                </button>
+              {:else if s.connected}
                 <button
                   class="rounded-md border border-border px-2.5 py-1 text-[11px] text-muted hover:text-fg"
                   onclick={() => disconnect(svc)}

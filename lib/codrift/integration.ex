@@ -108,6 +108,7 @@ defmodule Codrift.Integration do
   ]
 
   alias Codrift.Initiative.Store
+  alias Codrift.Integration.Error
 
   @doc "Returns all registered integration adapter modules."
   @spec adapters() :: [module()]
@@ -202,7 +203,7 @@ defmodule Codrift.Integration do
   """
   @spec list_assigned(keyword()) :: %{
           items: [assigned()],
-          errors: [%{service: String.t(), reason: String.t()}]
+          errors: [%{service: String.t(), reason: String.t(), kind: Error.kind()}]
         }
   def list_assigned(opts \\ []) do
     {initiatives, opts} = Keyword.pop_lazy(opts, :initiatives, fn -> Store.list() end)
@@ -237,13 +238,25 @@ defmodule Codrift.Integration do
     |> Enum.sort_by(&if(&1.relation == @default_relation, do: 0, else: 1))
   end
 
+  # Each failure keeps its `:kind` so the UI can tell the two cases apart that
+  # look identical as prose: a service that is down (wait) and a session that has
+  # expired (reconnect, and here is the button).
   defp collect_failures(results) do
     Enum.flat_map(results, fn
-      {:ok, {_service, {:error, :not_configured}}} -> []
-      {:ok, {service, {:error, reason}}} -> [%{service: service, reason: to_string(reason)}]
-      {:exit, {mod, :timeout}} -> [%{service: mod.name(), reason: "timed out"}]
-      {:exit, {mod, reason}} -> [%{service: mod.name(), reason: inspect(reason)}]
-      _ -> []
+      {:ok, {_service, {:error, :not_configured}}} ->
+        []
+
+      {:ok, {service, {:error, reason}}} ->
+        [Error.to_map(reason, service)]
+
+      {:exit, {mod, :timeout}} ->
+        [%{service: mod.name(), reason: "timed out", kind: :network}]
+
+      {:exit, {mod, reason}} ->
+        [%{service: mod.name(), reason: inspect(reason), kind: :http}]
+
+      _ ->
+        []
     end)
   end
 

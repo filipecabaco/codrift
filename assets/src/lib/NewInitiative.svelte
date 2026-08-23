@@ -8,7 +8,9 @@
     ADAPTERS,
     SERVICE_META,
     type AssignedItem,
+    type IntegrationError,
   } from "$lib/api";
+  import { authorize } from "$lib/oauth";
 
   let {
     onCreate,
@@ -29,7 +31,10 @@
   let listEl = $state<HTMLElement | null>(null);
   let loading = $state(true);
   let items = $state<AssignedItem[]>([]);
-  let errors = $state<{ service: string; reason: string }[]>([]);
+  let errors = $state<IntegrationError[]>([]);
+  // Service whose Reconnect button is mid-flow, and the message if it failed.
+  let reconnecting = $state<string | null>(null);
+  let reconnectError = $state<string | null>(null);
   let busy = $state<string | null>(null);
   let failure = $state<string | null>(null);
   let input: HTMLInputElement;
@@ -84,7 +89,8 @@
     listEl?.querySelector<HTMLElement>(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
   });
 
-  (async () => {
+  async function loadWork() {
+    loading = true;
     try {
       const res = await listAssignedItems();
       items = res.items;
@@ -94,7 +100,24 @@
     } finally {
       loading = false;
     }
-  })();
+  }
+  void loadWork();
+
+  // A 24-hour Linear token means an expired session is the ordinary case, not an
+  // exceptional one — so the fix lives here, next to the work it is blocking,
+  // rather than behind a trip to the Integrations panel.
+  async function reconnect(service: string) {
+    reconnectError = null;
+    reconnecting = service;
+    try {
+      await authorize(service);
+      await loadWork();
+    } catch (e) {
+      reconnectError = (e as Error).message;
+    } finally {
+      reconnecting = null;
+    }
+  }
 
   async function choose(row: number) {
     if (row === 0) {
@@ -273,10 +296,35 @@
     {/each}
 
     {#each errors as err (err.service)}
-      <li class="px-3 py-1.5 text-[11px] text-yellow-500/80">
-        {label(err.service)} unavailable — {err.reason}
+      <li
+        class={[
+          "flex items-center gap-2 px-3 py-1.5 text-[11px]",
+          err.kind === "auth" ? "text-fg/70" : "text-yellow-500/80",
+        ]}
+      >
+        <span class="min-w-0 flex-1 truncate" title={err.reason}>
+          {#if err.kind === "auth"}
+            <span class="text-fg/90">{label(err.service)} needs reconnecting</span>
+            <span class="text-muted">— your session expired</span>
+          {:else}
+            {label(err.service)} unavailable — {err.reason}
+          {/if}
+        </span>
+        {#if err.kind === "auth"}
+          <button
+            class="shrink-0 rounded border border-accent/40 px-1.5 py-px text-accent hover:bg-accent/15 disabled:opacity-50"
+            disabled={reconnecting !== null}
+            onclick={() => reconnect(err.service)}
+          >
+            {reconnecting === err.service ? "waiting for browser…" : "Reconnect"}
+          </button>
+        {/if}
       </li>
     {/each}
+
+    {#if reconnectError}
+      <li class="px-3 py-1.5 text-[11px] text-red-300">{reconnectError}</li>
+    {/if}
   </ul>
 
   <p class="border-t border-border px-3 py-2 text-[11px] text-muted">

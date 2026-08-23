@@ -4,9 +4,11 @@
   import { ArrowPath, CommandLine, Identification, Link, Swatch } from "@steeze-ui/heroicons";
   import {
     createScratchpad,
+    openUrl,
     promoteInitiative,
     quitApp,
     rpc,
+    MENU_EVENT,
     QUIT_REQUESTED,
     type Agent,
     type Initiative,
@@ -14,7 +16,7 @@
   } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
   import { onPaneRequest, type PaneRequest } from "$lib/stream";
-  import { workspace as ws, type Row } from "$lib/workspace.svelte";
+  import { workspace as ws, needsInput, type Row } from "$lib/workspace.svelte";
   import {
     ACTION_LABELS,
     DEFAULT_KEYMAP,
@@ -29,7 +31,8 @@
   import DiffView from "$lib/DiffView.svelte";
   import ContextOverview from "$lib/ContextOverview.svelte";
   import TreeView from "$lib/TreeView.svelte";
-  import Sidebar from "$lib/Sidebar.svelte";
+  import Sidebar, { type SidebarTarget } from "$lib/Sidebar.svelte";
+  import ContextMenu, { type MenuEntry, type MenuRequest } from "$lib/ContextMenu.svelte";
   import CommandPalette from "$lib/CommandPalette.svelte";
   import Prompt from "$lib/Prompt.svelte";
   import DirPicker from "$lib/DirPicker.svelte";
@@ -970,6 +973,286 @@
     }
   }
 
+  // ── Right-click menus ──────────────────────────────────────────────────────
+
+  let contextMenu = $state<MenuRequest | null>(null);
+
+  const separator = { kind: "separator" } as const;
+
+  // Right-click *selects* first. Every command below reads the selection (which
+  // directory an agent starts in, which initiative gets the status change), so a
+  // menu that left the cursor where it was would quietly act on the wrong row.
+  function openSidebarMenu(event: MouseEvent, target: SidebarTarget) {
+    event.preventDefault();
+    selectForMenu(target);
+
+    const entries = menuFor(target);
+    if (!entries.length) return;
+
+    contextMenu = { x: event.clientX, y: event.clientY, label: menuLabel(target), entries };
+  }
+
+  function selectForMenu(target: SidebarTarget) {
+    switch (target.kind) {
+      case "initiative":
+        selectInitiative(target.initId);
+        break;
+      case "dir":
+        selectDir(target.initId, target.path);
+        break;
+      case "agent":
+        selectAgent(target.initId, target.agentId);
+        break;
+      case "file":
+        if (target.isFile) openContextFile(target.initId, target.path);
+        else selectInitiative(target.initId);
+        break;
+      case "memory":
+        openMemory(target.initId);
+        break;
+    }
+  }
+
+  function menuLabel(target: SidebarTarget): string {
+    switch (target.kind) {
+      case "initiative":
+        return "Initiative actions";
+      case "dir":
+        return "Directory actions";
+      case "agent":
+        return "Agent actions";
+      case "file":
+        return "File actions";
+      case "memory":
+        return "Memory actions";
+    }
+  }
+
+  function menuFor(target: SidebarTarget): MenuEntry[] {
+    switch (target.kind) {
+      case "initiative":
+        return initiativeMenu(target.initId);
+      case "dir":
+        return dirMenu(target.initId, target.path);
+      case "agent":
+        return agentMenu(target.agentId);
+      case "file":
+        return fileMenu(target.path, target.isFile);
+      case "memory":
+        return [{ label: "Open Memory", run: () => openMemory(target.initId) }];
+    }
+  }
+
+  const k = (action: ActionId) => formatSpec(keymap[action]);
+
+  function initiativeMenu(initId: string): MenuEntry[] {
+    // `ws.ordered` spans both lists; `ws.initiatives` alone would return nothing
+    // for a scratchpad row, which renders through the same snippet.
+    const init = ws.ordered.find((i) => i.id === initId);
+    if (!init) return [];
+
+    const imported = !!init.integration;
+    const nextStatus = STATUS_ORDER[(STATUS_ORDER.indexOf(init.status) + 1) % STATUS_ORDER.length];
+
+    return [
+      { label: "Start Agent", hint: k("start_agent"), run: () => void startAgent() },
+      { label: "Open Terminal", hint: k("start_terminal"), run: () => void startAgent("terminal") },
+      {
+        label: "Start Orchestration…",
+        hint: k("start_orchestration"),
+        run: () => void runAction("start_orchestration"),
+      },
+      separator,
+      { label: "Add Directory…", hint: k("add_dir"), run: promptAddDir },
+      {
+        label: "Branch Git Directories",
+        hint: k("branch_initiative"),
+        disabled: !init.dirs.length,
+        run: () => void branchInitiative(),
+      },
+      {
+        // Only imports have a remote to re-read; offering it on a hand-made
+        // initiative would be a button whose only outcome is an error toast.
+        label: "Sync Imported Context",
+        disabled: !imported,
+        run: () => void syncImportedContext(),
+      },
+      separator,
+      { label: `Mark as ${nextStatus}`, hint: k("status_next"), run: () => void cycleStatus(1) },
+      { label: "Roll Back Status", hint: k("status_prev"), run: () => void cycleStatus(-1) },
+      separator,
+      // A scratchpad is the one row where the destructive command is not a
+      // deletion of anything the user named, so it is worded — and paired —
+      // differently: promoting is the other way out of a scratchpad.
+      ...(init.scratch
+        ? [
+            {
+              label: "Promote to Initiative…",
+              hint: k("promote_initiative"),
+              run: () => promoteScratchpad(init.id),
+            },
+            separator,
+          ]
+        : []),
+      {
+        label: init.scratch ? "Discard Scratchpad…" : "Delete Initiative…",
+        danger: true,
+        run: () => confirmDeleteInitiative(init),
+      },
+    ];
+  }
+
+  function dirMenu(initId: string, path: string): MenuEntry[] {
+    const dir = ws.ordered.find((i) => i.id === initId)?.dirs.find((d) => d.path === path);
+    if (!dir) return [];
+
+    return [
+      { label: "Start Agent Here", hint: k("start_agent"), run: () => void startAgent() },
+      {
+        label: "Open Terminal Here",
+        hint: k("start_terminal"),
+        run: () => void startAgent("terminal"),
+      },
+      separator,
+      {
+        // A worktree only makes sense for a repo, and the label has to say which
+        // way the toggle goes — "Worktree" alone reads as a state, not a command.
+        label: dir.worktree_enabled ? "Stop Using Worktree" : "Work in a Git Worktree",
+        disabled: !dir.git,
+        hint: dir.git ? undefined : "not a repo",
+        run: () => void toggleWorktree(initId, path),
+      },
+      separator,
+      { label: "Copy Path", run: () => void copyText(path) },
+    ];
+  }
+
+  function agentMenu(agentId: string): MenuEntry[] {
+    const agent = ws.agent(agentId);
+    if (!agent) return [];
+    const isTerminal = agent.adapter === "terminal";
+
+    return [
+      {
+        label: "Open in Pane",
+        run: () => void rpc("focus_agent", { agent_id: agentId }).catch(() => {}),
+      },
+      separator,
+      { label: "Copy Working Directory", disabled: !agent.dir, run: () => void copyText(agent.dir) },
+      separator,
+      {
+        label: isTerminal ? "Close Terminal…" : "Stop Agent…",
+        danger: true,
+        run: () => confirmStopAgent(agentId),
+      },
+    ];
+  }
+
+  function fileMenu(path: string, isFile: boolean): MenuEntry[] {
+    if (!isFile) return [{ label: "Copy Path", run: () => void copyText(path) }];
+
+    return [
+      { label: "Edit", hint: k("edit_context"), run: () => (editing = { path }) },
+      separator,
+      { label: "Copy Path", run: () => void copyText(path) },
+    ];
+  }
+
+  function openTreeMenu(event: MouseEvent, path: string, isFile: boolean) {
+    event.preventDefault();
+    contextMenu = {
+      x: event.clientX,
+      y: event.clientY,
+      label: isFile ? "File actions" : "Folder actions",
+      entries: fileMenu(path, isFile),
+    };
+  }
+
+  async function toggleWorktree(initId: string, dir: string) {
+    try {
+      await rpc("toggle_dir_branch", { initiative_id: initId, dir });
+      await load();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+
+  // The Tauri webview only grants clipboard writes from a user gesture, which a
+  // menu click is — but it can still be refused, and a Copy that silently does
+  // nothing is worse than one that says it failed.
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Copied");
+    } catch {
+      toast("Couldn't copy to the clipboard.");
+    }
+  }
+
+  // ── Native menu ────────────────────────────────────────────────────────────
+
+  const DOCS_URL = "https://codrift.app";
+  const ISSUES_URL = "https://github.com/filipecabaco/codrift/issues/new";
+
+  // Commands the menu offers that are not keymap actions: window management and
+  // the two panels that have never had a binding. Keeping them out of ActionId
+  // is deliberate — that type mirrors `Codrift.Config.Keybindings`, and inventing
+  // ids there would put the desktop menu and the TUI's keymap out of sync.
+  const MENU_ONLY: Record<string, () => void | Promise<void>> = {
+    integrations: () => void (modal = { kind: "integrations" }),
+    sync_context: () => syncImportedContext(),
+    focus_next_waiting: () => focusNextWaiting(),
+    split_vertical: () => toggleSplit("vertical"),
+    split_horizontal: () => toggleSplit("horizontal"),
+    balance_split: () => balanceSplit(),
+    close_pane: () => closePane(activePane),
+    help_docs: () => void openUrl(DOCS_URL),
+    help_keys: () => void (modal = { kind: "palette" }),
+    help_issue: () => void openUrl(ISSUES_URL),
+  };
+
+  function runMenuCommand(id: string) {
+    const menuOnly = MENU_ONLY[id];
+    // Anything not listed above is a keymap action of the same name, so the menu
+    // item and the key binding run literally the same code.
+    if (menuOnly) void menuOnly();
+    else void runAction(id as ActionId);
+  }
+
+  // Re-pulls the initiative's imported issue/PR body from the service it came
+  // from. Only initiatives created by an import have anything to sync, and the
+  // backend says so rather than failing silently.
+  async function syncImportedContext() {
+    if (!selectedInitiative) return toast("Select an initiative first.");
+    try {
+      const res = await rpc<{ service: string }>("sync_initiative_context", {
+        initiative_id: selectedInitiative.id,
+      });
+      toast(`Synced from ${res.service}`);
+      await load();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+
+  // Jump to the next agent that is blocked on a human, wrapping around from the
+  // one in view. With several initiatives running, finding the one that stopped
+  // to ask a question is otherwise a manual scan of the whole sidebar.
+  function focusNextWaiting() {
+    const waiting = ws.initiatives.flatMap((init) =>
+      ws.agentsFor(init.id).filter((a) => needsInput(a.status)).map((a) => ({ init, agent: a })),
+    );
+
+    if (!waiting.length) return toast("No agent is waiting on you.");
+
+    const current = waiting.findIndex(({ agent }) => agent.id === active.agentId);
+    const next = waiting[(current + 1) % waiting.length];
+
+    ws.expanded.add(next.init.id);
+    selectInitiative(next.init.id);
+    selectAgent(next.init.id, next.agent.id);
+  }
+
   function deleteSelection() {
     // Native confirm() is a no-op in Tauri's WebKit webview, so use an in-app
     // confirm modal instead.
@@ -977,63 +1260,67 @@
     // These handlers deliberately do NOT catch: Confirm keeps itself open and
     // shows the error. Closing the dialog is the *success* path, so a failed
     // delete can never look like it silently worked.
-    if (active.agentId) {
-      const id = active.agentId;
-      // The terminal adapter is a raw shell, not an agent — calling it one in
-      // the one dialog that closes it reads as if it were killing a coding run.
-      const isTerminal = ws.agent(id)?.adapter === "terminal";
-      modal = {
-        kind: "confirm",
-        message: isTerminal ? "Close this terminal?" : "Stop this agent?",
-        confirmLabel: isTerminal ? "Close terminal" : "Stop agent",
-        onConfirm: async () => {
-          await rpc("stop_agent", { agent_id: id });
-          active.agentId = null;
-          await load();
-          modal = null;
-        },
-      };
-    } else if (selectedInitiative) {
-      const init = selectedInitiative;
-      const agents = ws.agentsFor(init.id).length;
-      // Remember the neighbour now: after the delete it is what the pane should
-      // land on, rather than an empty "Select an initiative" screen.
-      const others = ws.ordered.filter((i) => i.id !== init.id);
-      const at = ws.ordered.findIndex((i) => i.id === init.id);
-      const next = others[Math.min(at, others.length - 1)] ?? null;
+    if (active.agentId) confirmStopAgent(active.agentId);
+    else if (selectedInitiative) confirmDeleteInitiative(selectedInitiative);
+    // Nothing selected: say so rather than swallowing the keypress, which read
+    // as "delete is broken".
+    else toast("Select an initiative or agent first.");
+  }
 
-      const drop = async () => {
-        await rpc("delete_initiative", { initiative_id: init.id });
-        active.initiativeId = null;
-        active.agentId = null;
+  function confirmStopAgent(id: string) {
+    // The terminal adapter is a raw shell, not an agent — calling it one in
+    // the one dialog that closes it reads as if it were killing a coding run.
+    const isTerminal = ws.agent(id)?.adapter === "terminal";
+    modal = {
+      kind: "confirm",
+      message: isTerminal ? "Close this terminal?" : "Stop this agent?",
+      confirmLabel: isTerminal ? "Close terminal" : "Stop agent",
+      onConfirm: async () => {
+        await rpc("stop_agent", { agent_id: id });
+        // Guarded because the menu can stop an agent that is not the one in the
+        // pane, and clearing the pane then would blank an unrelated terminal.
+        if (active.agentId === id) active.agentId = null;
         await load();
         modal = null;
-        if (next) selectInitiative(next.id);
-      };
+      },
+    };
+  }
 
-      // An idle scratchpad goes without asking. The dialog exists to protect
-      // work, and there is none here: nothing running, and a name the user
-      // never chose. Being asked "Delete initiative "scratch 22:35"?" about
-      // something opened by accident is the wrong noun and the wrong ceremony.
-      // A scratchpad with agents in it is not idle, and still asks.
-      if (init.scratch && agents === 0) {
-        drop().catch((e) => toast((e as Error).message));
-        return;
-      }
+  function confirmDeleteInitiative(init: Initiative) {
+    const agents = ws.agentsFor(init.id).length;
+    // Remember the neighbour now: after the delete it is what the pane should
+    // land on, rather than an empty "Select an initiative" screen.
+    const others = ws.ordered.filter((i) => i.id !== init.id);
+    const at = ws.ordered.findIndex((i) => i.id === init.id);
+    const next = others[Math.min(at, others.length - 1)] ?? null;
 
-      modal = {
-        kind: "confirm",
-        message: init.scratch
-          ? `Discard scratchpad "${init.name}"? ${agents} agent${agents === 1 ? "" : "s"} still running.`
-          : `Delete initiative "${init.name}"?`,
-        confirmLabel: init.scratch ? "Discard" : "Delete",
-        onConfirm: drop,
-      };
-    } else {
-      // Nothing selected: say so rather than swallowing the keypress, which read
-      // as "delete is broken".
-      toast("Select an initiative or agent first.");
+    const drop = async () => {
+      await rpc("delete_initiative", { initiative_id: init.id });
+      active.initiativeId = null;
+      active.agentId = null;
+      await load();
+      modal = null;
+      if (next) selectInitiative(next.id);
+    };
+
+    // An idle scratchpad goes without asking. The dialog exists to protect
+    // work, and there is none here: nothing running, and a name the user
+    // never chose. Being asked "Delete initiative "scratch 22:35"?" about
+    // something opened by accident is the wrong noun and the wrong ceremony.
+    // A scratchpad with agents in it is not idle, and still asks.
+    if (init.scratch && agents === 0) {
+      drop().catch((e) => toast((e as Error).message));
+      return;
     }
+
+    modal = {
+      kind: "confirm",
+      message: init.scratch
+        ? `Discard scratchpad "${init.name}"? ${agents} agent${agents === 1 ? "" : "s"} still running.`
+        : `Delete initiative "${init.name}"?`,
+      confirmLabel: init.scratch ? "Discard" : "Delete",
+      onConfirm: drop,
+    };
   }
 
   // ── Panes: split / balance / collapse ─────────────────────────────────────────
@@ -1373,6 +1660,17 @@
     return () => window.removeEventListener(QUIT_REQUESTED, confirmQuit);
   });
 
+  // The native menu bar is a thin shell over these same handlers — see
+  // `build_menu` in src-tauri/src/main.rs for why none of it lives in Rust.
+  $effect(() => {
+    const onMenu = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (typeof id === "string") runMenuCommand(id);
+    };
+    window.addEventListener(MENU_EVENT, onMenu);
+    return () => window.removeEventListener(MENU_EVENT, onMenu);
+  });
+
   // Agents asking for a human. The frame arrives after the `agent_started` that
   // created the terminal, so `ws` already knows the agent by the time we look.
   $effect(() => onPaneRequest((req) => openAgentPane(req)));
@@ -1513,6 +1811,7 @@
         onOpenContextFile={openContextFile}
         onOpenMemory={openMemory}
         onToggleContextFolder={toggleContextFolder}
+    onContextMenu={openSidebarMenu}
         onCollapse={() => (sidebarCollapsed = true)}
       />
       <!-- Drag to resize the sidebar. -->
@@ -1683,6 +1982,10 @@
               activePane = idx;
               editing = { path: p };
             }}
+            onContextMenu={(e, path, isFile) => {
+              activePane = idx;
+              openTreeMenu(e, path, isFile);
+            }}
           />
         {/key}
       {/if}
@@ -1772,4 +2075,8 @@
     onConfirm={modal.onConfirm}
     onClose={() => (modal = null)}
   />
+{/if}
+
+{#if contextMenu}
+  <ContextMenu request={contextMenu} onClose={() => (contextMenu = null)} />
 {/if}

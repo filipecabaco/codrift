@@ -3,7 +3,7 @@
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tauri::Manager;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -108,30 +108,7 @@ fn main() {
         .manage(AppState {
             sidecar_child: Mutex::new(None),
         })
-        // Tauri v2 installs no default macOS menu, so Cmd+Q is unbound. The
-        // default menu's *predefined* Quit terminates natively and bypasses
-        // on_menu_event, leaving the sidecar orphaned — so use a CUSTOM Quit item
-        // (id "quit", Cmd+Q) that routes through on_menu_event -> kill_sidecar.
-        // Keep an Edit submenu so copy/paste/select-all work in the webview.
-        .menu(|handle| {
-            let quit = MenuItem::with_id(handle, "quit", "Quit Codrift", true, Some("CmdOrCtrl+Q"))?;
-            let app_menu = Submenu::with_items(handle, "Codrift", true, &[&quit])?;
-            let edit_menu = Submenu::with_items(
-                handle,
-                "Edit",
-                true,
-                &[
-                    &PredefinedMenuItem::undo(handle, None)?,
-                    &PredefinedMenuItem::redo(handle, None)?,
-                    &PredefinedMenuItem::separator(handle)?,
-                    &PredefinedMenuItem::cut(handle, None)?,
-                    &PredefinedMenuItem::copy(handle, None)?,
-                    &PredefinedMenuItem::paste(handle, None)?,
-                    &PredefinedMenuItem::select_all(handle, None)?,
-                ],
-            )?;
-            Menu::with_items(handle, &[&app_menu, &edit_menu])
-        })
+        .menu(build_menu)
         .setup(|app| {
             // Size the window to 60% of the current monitor and center it.
             if let Some(window) = app.get_webview_window("main") {
@@ -161,25 +138,27 @@ fn main() {
         })
         // Intercept menu events (especially CMD+Q on macOS)
         .on_menu_event(|app, event| {
-            println!("Menu event received: {:?}", event.id());
-            if event.id().as_ref() == "quit" || event.id().as_ref().contains("quit") {
+            let id = event.id().as_ref().to_string();
+            println!("Menu event received: {:?}", id);
+
+            if id == "quit" {
                 // Ask the page first so its "N agents still running" confirm gets a
                 // say. The page answers by invoking `quit_app`. If the webview is
                 // gone (or eval fails) there is nobody to ask — quit immediately,
                 // so a dead page can never make Quit a no-op.
-                let asked = app
-                    .get_webview_window("main")
-                    .map(|w| {
-                        w.eval("window.dispatchEvent(new CustomEvent('codrift:quit-requested'))")
-                            .is_ok()
-                    })
-                    .unwrap_or(false);
-
-                if !asked {
+                if !dispatch_to_page(app, QUIT_REQUESTED_EVENT, None) {
                     println!("No webview to confirm with — quitting directly");
                     kill_sidecar(app);
                     std::process::exit(0);
                 }
+                return;
+            }
+
+            // Everything else is the page's to run. A menu item that cannot be
+            // delivered is a dead menu item, so say so in the log rather than
+            // letting the click vanish.
+            if !dispatch_to_page(app, MENU_EVENT, Some(&id)) {
+                eprintln!("Menu command {:?} had no webview to run in", id);
             }
         })
         .on_window_event(|window, event| {
@@ -203,6 +182,218 @@ fn main() {
                 });
             }
         });
+}
+
+// ── Menu ─────────────────────────────────────────────────────────────────────
+
+/// Asks the page whether it is willing to quit, rather than quitting outright.
+const QUIT_REQUESTED_EVENT: &str = "codrift:quit-requested";
+
+/// Carries a menu command id to the page, which runs it. See `build_menu`.
+const MENU_EVENT: &str = "codrift:menu";
+
+/// Fires a CustomEvent on the page's `window`, returning whether there was a
+/// page to fire it at.
+fn dispatch_to_page(app: &tauri::AppHandle, event: &str, detail: Option<&str>) -> bool {
+    let detail = match detail {
+        Some(value) => serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
+        None => "null".to_string(),
+    };
+
+    app.get_webview_window("main")
+        .map(|window| {
+            window
+                .eval(&format!(
+                    "window.dispatchEvent(new CustomEvent({}, {{detail: {}}}))",
+                    serde_json::to_string(event).unwrap_or_else(|_| "\"\"".to_string()),
+                    detail
+                ))
+                .is_ok()
+        })
+        .unwrap_or(false)
+}
+
+/// One menu item that is nothing but a named command for the page to run.
+///
+/// The shell deliberately implements none of these. `App.svelte` already routes
+/// every one of them through `runAction`, and a second implementation in Rust
+/// would only give the menu and the keyboard something to disagree about — so
+/// the id here *is* the command name the page dispatches on.
+fn command<R: tauri::Runtime>(
+    handle: &tauri::AppHandle<R>,
+    id: &str,
+    label: &str,
+    accelerator: Option<&str>,
+) -> tauri::Result<MenuItem<R>> {
+    MenuItem::with_id(handle, id, label, true, accelerator)
+}
+
+/// How the sidebar orders initiatives — a nested submenu because these four are
+/// one choice, not four independent commands.
+fn sort_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    Submenu::with_items(
+        handle,
+        "Sort Initiatives By",
+        true,
+        &[
+            &command(handle, "sort_recent", "Recently Active", None)?,
+            &command(handle, "sort_created", "Date Created", None)?,
+            &command(handle, "sort_name", "Name", None)?,
+            &command(handle, "sort_status", "Status", None)?,
+        ],
+    )
+}
+
+/// The application menu.
+///
+/// Tauri v2 installs no default menu at all, which is why this used to be one
+/// Quit item and an Edit submenu — a menu bar that told a first-time user
+/// nothing about what the app could do, and left every command discoverable only
+/// by already knowing the keymap.
+///
+/// Two rules shape what is here:
+///
+/// 1. **Quit stays a custom item.** The *predefined* Quit terminates natively
+///    and bypasses `on_menu_event`, orphaning the sidecar. The custom one (id
+///    `quit`) routes through the handler, which asks the page first and then
+///    kills the backend.
+///
+/// 2. **Accelerators must not shadow the in-page keymap.** A menu accelerator is
+///    swallowed by the menu and never reaches the webview, so anything bound
+///    here is taken away from the page. The bare-letter bindings (`n`, `s`, `r`,
+///    `1`/`2`/`3` …) are untouched because they carry no modifier; `⌘D`, `⇧⌘D`
+///    and `⌘⌃=` appear here on purpose, forwarding to the same handlers the page
+///    would have run, so the split commands finally have a visible name. `⌘1`…`⌘9`
+///    are deliberately *absent*: the page uses them to jump between panes.
+fn build_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let sep = || PredefinedMenuItem::separator(handle);
+
+    let app_menu = Submenu::with_items(
+        handle,
+        "Codrift",
+        true,
+        &[
+            &PredefinedMenuItem::about(handle, Some("About Codrift"), Some(AboutMetadata::default()))?,
+            &sep()?,
+            &command(handle, "appearance", "Appearance…", Some("CmdOrCtrl+,"))?,
+            &command(handle, "agent_profiles", "Launch Profiles…", Some("Shift+CmdOrCtrl+P"))?,
+            &command(handle, "integrations", "Integrations…", Some("Shift+CmdOrCtrl+I"))?,
+            &command(handle, "setup", "Run Setup…", None)?,
+            &sep()?,
+            &command(handle, "quit", "Quit Codrift", Some("CmdOrCtrl+Q"))?,
+        ],
+    )?;
+
+    let initiative_menu = Submenu::with_items(
+        handle,
+        "Initiative",
+        true,
+        &[
+            &command(handle, "new_initiative", "New Initiative…", Some("CmdOrCtrl+N"))?,
+            &command(handle, "new_scratchpad", "New Scratchpad", Some("Shift+CmdOrCtrl+N"))?,
+            &command(handle, "promote_initiative", "Promote Scratchpad…", None)?,
+            &sep()?,
+            &command(handle, "add_dir", "Add Directory…", Some("Shift+CmdOrCtrl+A"))?,
+            &sep()?,
+            &command(handle, "branch_initiative", "Branch Git Directories", Some("Shift+CmdOrCtrl+B"))?,
+            &command(handle, "sync_context", "Sync Imported Context", None)?,
+            &sep()?,
+            &command(handle, "status_next", "Advance Status", Some("CmdOrCtrl+]"))?,
+            &command(handle, "status_prev", "Roll Back Status", Some("CmdOrCtrl+["))?,
+            &sep()?,
+            // Deliberately vague: this acts on whatever the cursor is on, which
+            // may be an initiative, a directory or a running agent.
+            &command(handle, "delete", "Delete or Stop Selection", Some("CmdOrCtrl+Backspace"))?,
+        ],
+    )?;
+
+    let agent_menu = Submenu::with_items(
+        handle,
+        "Agent",
+        true,
+        &[
+            &command(handle, "start_agent", "Start Agent", Some("CmdOrCtrl+Return"))?,
+            &command(handle, "start_terminal", "Open Terminal", Some("CmdOrCtrl+T"))?,
+            &sep()?,
+            &command(handle, "start_orchestration", "Start Orchestration…", Some("Shift+CmdOrCtrl+O"))?,
+            &sep()?,
+            &command(handle, "focus_next_waiting", "Go to Next Waiting Agent", Some("CmdOrCtrl+G"))?,
+        ],
+    )?;
+
+    let view_menu = Submenu::with_items(
+        handle,
+        "View",
+        true,
+        &[
+            &command(handle, "context_mode", "Context", None)?,
+            &command(handle, "diff_mode", "Diff", None)?,
+            &command(handle, "tree_mode", "Files", None)?,
+            &sep()?,
+            &command(handle, "toggle_sidebar", "Toggle Sidebar", Some("CmdOrCtrl+B"))?,
+            &sort_menu(handle)?,
+            &command(handle, "refresh", "Refresh", Some("CmdOrCtrl+R"))?,
+            &sep()?,
+            &command(handle, "split_vertical", "Split Right", Some("CmdOrCtrl+D"))?,
+            &command(handle, "split_horizontal", "Split Down", Some("Shift+CmdOrCtrl+D"))?,
+            &command(handle, "balance_split", "Balance Panes", Some("CmdOrCtrl+Control+="))?,
+            &command(handle, "close_pane", "Close Pane", Some("Shift+CmdOrCtrl+W"))?,
+            &sep()?,
+            &command(handle, "palette", "Command Palette", Some("CmdOrCtrl+K"))?,
+        ],
+    )?;
+
+    let edit_menu = Submenu::with_items(
+        handle,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(handle, None)?,
+            &PredefinedMenuItem::redo(handle, None)?,
+            &sep()?,
+            &PredefinedMenuItem::cut(handle, None)?,
+            &PredefinedMenuItem::copy(handle, None)?,
+            &PredefinedMenuItem::paste(handle, None)?,
+            &PredefinedMenuItem::select_all(handle, None)?,
+        ],
+    )?;
+
+    let window_menu = Submenu::with_items(
+        handle,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(handle, None)?,
+            &PredefinedMenuItem::maximize(handle, None)?,
+            &sep()?,
+            &PredefinedMenuItem::close_window(handle, None)?,
+        ],
+    )?;
+
+    let help_menu = Submenu::with_items(
+        handle,
+        "Help",
+        true,
+        &[
+            &command(handle, "help_docs", "Codrift Documentation", None)?,
+            &command(handle, "help_keys", "Keyboard Shortcuts", None)?,
+            &sep()?,
+            &command(handle, "help_issue", "Report an Issue", None)?,
+        ],
+    )?;
+
+    Menu::with_items(
+        handle,
+        &[
+            &app_menu,
+            &initiative_menu,
+            &agent_menu,
+            &view_menu,
+            &edit_menu,
+            &window_menu,
+            &help_menu,
+        ],
+    )
 }
 
 fn start_server(app: &tauri::AppHandle, token: &str, died: Arc<AtomicBool>) {
