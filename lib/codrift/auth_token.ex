@@ -16,15 +16,20 @@ defmodule Codrift.AuthToken do
   @min_token_chars 32
 
   @doc "Returns the local API token, generating and persisting it on first use."
+  # The cache is keyed on the path it was read from. `data_dir/0` is fixed in
+  # production, but the test suite repoints it per module, and a token cached
+  # under one root is not the token stored under the next one.
   @spec fetch() :: String.t()
   def fetch do
+    path = path()
+
     case :persistent_term.get(__MODULE__, nil) do
-      nil ->
-        token = load_or_create()
-        :persistent_term.put(__MODULE__, token)
+      {^path, token} ->
         token
 
-      token ->
+      _ ->
+        token = load_or_create(path)
+        :persistent_term.put(__MODULE__, {path, token})
         token
     end
   end
@@ -33,22 +38,21 @@ defmodule Codrift.AuthToken do
   @spec path() :: String.t()
   def path, do: Path.join(Codrift.Paths.data_dir(), "auth-token")
 
-  defp load_or_create do
-    case File.read(path()) do
+  defp load_or_create(path) do
+    case File.read(path) do
       {:ok, content} ->
         token = String.trim(content)
-        if String.length(token) >= @min_token_chars, do: token, else: create()
+        if String.length(token) >= @min_token_chars, do: token, else: create(path)
 
       {:error, _} ->
-        create()
+        create(path)
     end
   end
 
   # The temp file is chmod'ed 0600 while still empty, so the token content is
   # never on disk with wider permissions; the rename makes it atomic.
-  defp create do
+  defp create(p) do
     token = @token_bytes |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
-    p = path()
     File.mkdir_p!(Path.dirname(p))
     tmp = p <> ".tmp"
     fd = File.open!(tmp, [:write])

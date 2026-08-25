@@ -36,7 +36,17 @@ defmodule Codrift.Test.GitRepo do
   # whose `~/.gitignore_global` covers `.claude` hides a file CI reports — which
   # is exactly how a bug in worktree dirty-detection passed locally and failed
   # in CI.
-  defp isolate!(dir), do: git(dir, ["config", "core.excludesFile", "/dev/null"])
+  #
+  # The identity is written into the repo as well as passed per-command, because
+  # production code under test (`git_commit` and friends) runs git itself, with
+  # no `-c` overrides of ours. A developer machine has a global identity and
+  # hides that; a CI runner has none and `git commit` refuses to run.
+  defp isolate!(dir) do
+    git(dir, ["config", "core.excludesFile", "/dev/null"])
+    git(dir, ["config", "user.email", "test@test.com"])
+    git(dir, ["config", "user.name", "Test"])
+    git(dir, ["config", "commit.gpgsign", "false"])
+  end
 
   @doc "Stages everything in `dir` and commits it."
   def commit!(dir, message, opts \\ []) do

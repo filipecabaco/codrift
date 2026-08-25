@@ -24,6 +24,7 @@ defmodule Codrift.CLI.MCPStatusTest do
   import ExUnit.CaptureIO
 
   alias Codrift.CLI.MCP
+  alias Codrift.Config.Settings
 
   @moduletag :tmp_dir
 
@@ -140,7 +141,7 @@ defmodule Codrift.CLI.MCPStatusTest do
       # really reached the subprocess, not merely that a line was printed.
       fake_claude!(bin, ~s(echo "  codrift: dir=$CLAUDE_CONFIG_DIR"\n))
 
-      Codrift.Config.Settings.put_profile("work", %{
+      Settings.put_profile("work", %{
         adapter: "claude",
         env: %{"CLAUDE_CONFIG_DIR" => "~/.claude-work"}
       })
@@ -153,7 +154,7 @@ defmodule Codrift.CLI.MCPStatusTest do
     test "a profile with no config dir of its own says it shares the default", %{bin: bin} do
       fake_claude!(bin, ~s(echo "  codrift: http://localhost:1/mcp"\n))
 
-      Codrift.Config.Settings.put_profile("plain", %{adapter: "claude", env: %{}})
+      Settings.put_profile("plain", %{adapter: "claude", env: %{}})
 
       assert status(["--profile=plain"]) =~ "plain: shares the default config"
     end
