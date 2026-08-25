@@ -38,4 +38,24 @@ defmodule Codrift.Config.SettingsTest do
     File.rm_rf(path)
     assert Settings.profiles() == %{}
   end
+
+  describe "workspace_dir" do
+    test "is nil until one is set" do
+      assert Settings.workspace_dir() == nil
+    end
+
+    test "round-trips verbatim, so a ~-relative folder stays portable" do
+      Settings.put_workspace_dir("~/Documents/workspace")
+      assert Settings.workspace_dir() == "~/Documents/workspace"
+    end
+
+    test "clearing goes back to no preference, leaving the rest of the file alone" do
+      Settings.put_default_agent("claude-work")
+      Settings.put_workspace_dir("~/code")
+      Settings.clear_workspace_dir()
+
+      assert Settings.workspace_dir() == nil
+      assert Settings.default_agent() == "claude-work"
+    end
+  end
 end

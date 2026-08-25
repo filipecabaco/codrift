@@ -28,6 +28,8 @@ defmodule Codrift.CLI.Pane do
   to reach for on the steps an agent is not permitted to take.
   """
 
+  import Codrift.CLI.Output
+
   @default_port 43_117
 
   @doc "Dispatches pane CLI subcommands from argv."
@@ -131,13 +133,5 @@ defmodule Codrift.CLI.Pane do
       port when is_integer(port) and port > 0 -> port
       _ -> @default_port
     end
-  end
-
-  defp print_json(data), do: IO.puts(JSON.encode!(data))
-
-  @spec fail(term()) :: no_return()
-  defp fail(reason) do
-    IO.puts(:stderr, JSON.encode!(%{error: to_string(reason)}))
-    System.halt(1)
   end
 end

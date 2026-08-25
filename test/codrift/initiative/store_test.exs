@@ -300,6 +300,75 @@ defmodule Codrift.Initiative.StoreTest do
     end
   end
 
+  describe "initiative.md directory block" do
+    # The regression that emptied every worktree: agents read this block to learn
+    # where to work, so naming the source path here sent them into the working
+    # copy the worktree was created to protect — leaving the checkout untouched
+    # and the diff view (which reads it) blank.
+    test "names the worktree, not the source, when one is active", %{tmp_dir: tmp_dir} do
+      repo = Path.join(tmp_dir, "repo")
+      File.mkdir_p!(repo)
+      init_git_repo(repo)
+
+      store = start_store(tmp_dir)
+      {:ok, %{id: id}} = Store.create("Worktree Docs", [], store)
+      {:ok, %Initiative{dirs: [entry]}} = Store.add_dir(id, repo, [worktree_enabled: true], store)
+      sync(store)
+
+      md = File.read!(Path.join([tmp_dir, "ctx", id, "initiative.md"]))
+      block = Regex.run(~r/<!-- codrift:dirs:start -->.*?<!-- codrift:dirs:end -->/s, md) |> hd()
+
+      assert block =~ Codrift.Paths.compact(entry.worktree_path)
+      assert block =~ "work here"
+      # The source is still named, but only as the thing being isolated.
+      assert block =~ "must be left untouched"
+    end
+
+    test "a stale block is re-rendered on boot, so existing initiatives migrate",
+         %{tmp_dir: tmp_dir} do
+      repo = Path.join(tmp_dir, "repo")
+      File.mkdir_p!(repo)
+      init_git_repo(repo)
+
+      store = start_store(tmp_dir)
+      {:ok, %{id: id}} = Store.create("Legacy", [], store)
+      {:ok, %Initiative{dirs: [entry]}} = Store.add_dir(id, repo, [worktree_enabled: true], store)
+      sync(store)
+
+      md = Path.join([tmp_dir, "ctx", id, "initiative.md"])
+
+      # Simulate an initiative written by the version that named the source path.
+      stale =
+        Regex.replace(
+          ~r/<!-- codrift:dirs:start -->.*?<!-- codrift:dirs:end -->/s,
+          File.read!(md),
+          "<!-- codrift:dirs:start -->\n## Directories\n\n- #{entry.path}\n<!-- codrift:dirs:end -->"
+        )
+
+      File.write!(md, stale)
+      refute File.read!(md) =~ "work here"
+
+      # Restarting the store must heal it without any user action.
+      start_supervised!({Store, store_opts(tmp_dir)}, id: :rebooted)
+
+      assert File.read!(md) =~ Codrift.Paths.compact(entry.worktree_path)
+      assert File.read!(md) =~ "work here"
+    end
+
+    test "names the source path when there is no worktree", %{tmp_dir: tmp_dir} do
+      store = start_store(tmp_dir)
+      {:ok, %{id: id}} = Store.create("Plain Docs", [], store)
+      {:ok, _} = Store.add_dir(id, "/home/user/project", store)
+      sync(store)
+
+      md = File.read!(Path.join([tmp_dir, "ctx", id, "initiative.md"]))
+      block = Regex.run(~r/<!-- codrift:dirs:start -->.*?<!-- codrift:dirs:end -->/s, md) |> hd()
+
+      assert block =~ "/home/user/project"
+      refute block =~ "work here"
+    end
+  end
+
   describe "remove_dir/3" do
     test "removes a directory from an initiative", %{tmp_dir: tmp_dir} do
       store = start_store(tmp_dir)

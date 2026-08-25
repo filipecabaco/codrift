@@ -133,6 +133,14 @@ defmodule Codrift.OAuth.Config do
 
       {:ok, "#{config.auth_url}?#{params}"}
     else
+      # A device-flow service has no redirect URI to send anyone to. Without
+      # this clause the `with` fell through with nothing matching and raised
+      # WithClauseError, contradicting the contract above — and crashing the
+      # request instead of reporting a service that simply asks to be started a
+      # different way.
+      {:ok, %{flow: flow}} ->
+        {:error, "#{service} authenticates by #{flow}, not a browser redirect"}
+
       {:error, _} = err ->
         err
     end

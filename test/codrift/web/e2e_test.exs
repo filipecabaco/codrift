@@ -78,6 +78,81 @@ defmodule Codrift.Web.E2ETest do
       refute id in (ok!("list_initiatives") |> Enum.map(& &1["id"]))
     end
 
+    @tag :tmp_dir
+    test "remove_dir un-links a directory and leaves it on disk", %{tmp_dir: tmp_dir} do
+      {id, _} = create_initiative!()
+      dir = Path.join(tmp_dir, "project")
+      File.mkdir_p!(dir)
+
+      ok!("add_dir", %{"initiative_id" => id, "dir" => dir})
+
+      without = ok!("remove_dir", %{"initiative_id" => id, "dir" => dir})
+      refute Enum.any?(without["dirs"], &(&1["path"] == dir))
+      assert File.dir?(dir), "removing a dir must not touch the user's folder"
+
+      # Idempotent: removing what is no longer there is not an error.
+      assert %{"dirs" => []} = ok!("remove_dir", %{"initiative_id" => id, "dir" => dir})
+    end
+
+    @tag :tmp_dir
+    test "git actions act on the worktree, never the source repo", %{tmp_dir: tmp_dir} do
+      repo = GitRepo.init_with!(Path.join(tmp_dir, "repo"), %{"file.txt" => "one\n"})
+      GitRepo.git(repo, ["config", "user.email", "test@test.com"])
+      GitRepo.git(repo, ["config", "user.name", "Test"])
+
+      {id, _} = create_initiative!()
+      with_dir = ok!("add_dir", %{"initiative_id" => id, "dir" => repo, "worktree" => true})
+      [entry] = with_dir["dirs"]
+      wt = entry["worktree_path"]
+      assert is_binary(wt), "expected a worktree to be created"
+
+      # An agent edits inside the worktree, which is where it is started.
+      File.write!(Path.join(wt, "file.txt"), "changed by the agent\n")
+
+      # The UI only ever names the SOURCE path. Committing must still land in the
+      # worktree — the whole reason DirEntry.resolve/2 sits in front of these.
+      assert %{"sha" => sha, "dir" => ^wt} =
+               ok!("git_commit", %{
+                 "initiative_id" => id,
+                 "dir" => repo,
+                 "message" => "from the worktree"
+               })
+
+      assert is_binary(sha)
+
+      # The commit is in the worktree's branch...
+      {log, 0} = GitRepo.git(wt, ["log", "-1", "--format=%s"])
+      assert String.trim(log) == "from the worktree"
+
+      # ...and the user's own checkout was never touched.
+      assert {"", 0} = GitRepo.git(repo, ["status", "--porcelain"])
+      {source_log, 0} = GitRepo.git(repo, ["log", "-1", "--format=%s"])
+      refute String.trim(source_log) == "from the worktree"
+    end
+
+    test "git_commit refuses an empty message" do
+      {id, _} = create_initiative!()
+
+      assert {422, %{"error" => msg}} =
+               rpc("git_commit", %{"initiative_id" => id, "dir" => "/tmp", "message" => "  "})
+
+      assert msg =~ "message is required"
+    end
+
+    test "a git action on an initiative with no repository says so" do
+      {id, _} = create_initiative!()
+
+      assert {422, %{"error" => msg}} = rpc("git_fetch", %{"initiative_id" => id})
+      assert msg =~ "no git repository"
+    end
+
+    test "remove_dir on an unknown initiative returns a not-found error" do
+      assert {422, %{"error" => msg}} =
+               rpc("remove_dir", %{"initiative_id" => "does-not-exist", "dir" => "/tmp"})
+
+      assert msg =~ "not found"
+    end
+
     test "set_initiative_status rejects an invalid status" do
       {id, _} = create_initiative!()
 

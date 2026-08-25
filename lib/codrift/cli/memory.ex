@@ -20,6 +20,8 @@ defmodule Codrift.CLI.Memory do
   Valid types: decision, summary, snippet, file_context, note
   """
 
+  import Codrift.CLI.Output
+
   alias Codrift.Memory
 
   # ── Dispatch ─────────────────────────────────────────────────────────────────
@@ -123,13 +125,5 @@ defmodule Codrift.CLI.Memory do
       {n, ""} when n > 0 -> n
       _ -> default
     end
-  end
-
-  defp print_json(data), do: IO.puts(JSON.encode!(data))
-
-  @spec fail(String.t()) :: no_return()
-  defp fail(msg) do
-    IO.puts(:stderr, JSON.encode!(%{error: msg}))
-    System.halt(1)
   end
 end

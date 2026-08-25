@@ -176,6 +176,18 @@ defmodule Codrift.Integration do
     Enum.map(items, &%{&1 | metadata: Map.put(&1.metadata, :relation, relation)})
   end
 
+  @doc """
+  Renders a list of labels as prose for an initiative brief: `"a, b"`, or
+  `"none"` when there are none.
+
+  Lives here rather than in each adapter because the brief it feeds is what an
+  agent is briefed from — four copies of this is four chances for one tracker's
+  brief to say `[]` where the others say `none`.
+  """
+  @spec format_list([String.t()]) :: String.t()
+  def format_list([]), do: "none"
+  def format_list(items), do: Enum.join(items, ", ")
+
   @doc "Returns an item's relation to the user, defaulting to `\"assigned\"`."
   @spec relation(Item.t()) :: String.t()
   def relation(%Item{metadata: %{relation: relation}}), do: relation

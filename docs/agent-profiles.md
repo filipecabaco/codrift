@@ -13,9 +13,9 @@ config are untouched (profiles set `CLAUDE_CONFIG_DIR`, not `HOME`).
 
 ## Defining profiles
 
-In the app: open **Launch profiles** — the badge icon in the header, the gear
-beside the **Agent** dropdown, `manage profiles` in the New initiative overlay,
-or `Launch profiles` in the command palette (⌃P). **New profile** asks for a
+In the app: open **Settings › Launch profiles** — the gear in the header (or
+`⌃,`), the gear beside the **Agent** dropdown, `manage profiles` in the New
+initiative overlay, or `Launch profiles` in the command palette (⌃P). **New profile** asks for a
 name, a base adapter, the command, the arguments, and the environment variables
 to set; the suggested variable follows the adapter you pick
 (`CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex). Editing writes
@@ -77,8 +77,10 @@ Each initiative has one agent, and it is asked for up front:
   next to the name. Whatever you choose is stored on the initiative *and*
   becomes `default_agent` in `~/.codrift/settings.json`, so the next initiative
   starts from the same answer.
-- **Afterwards.** The **Agent** dropdown in the Context view changes it for that
-  initiative only, and persists immediately.
+- **Afterwards.** `p` on the selected initiative opens a filterable list of every
+  adapter and profile — `↑↓` to move, `Enter` to apply, `⇥` to aim the same list
+  at `default_agent` instead. The **Agent** dropdown in the Context view does the
+  same thing with the mouse. Both persist immediately.
 - **Falling back.** An initiative with no agent of its own uses `default_agent`;
   with neither set, plain `claude`.
 

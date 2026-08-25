@@ -36,21 +36,6 @@ defmodule Codrift.Initiative.Store do
   @doc "Returns the context folder path for an initiative (pure function, no GenServer call)."
   def context_path(id), do: Codrift.Paths.initiative_dir(id)
 
-  @doc """
-  Returns `true` when `path` is strictly inside `~/.codrift/initiatives/`.
-
-  Used as a safety guard before any read, write, or delete operation on
-  context files, preventing accidental access to project directories outside
-  the managed tree.
-  """
-  def context_file_path?(nil), do: false
-
-  def context_file_path?(path) do
-    base = Codrift.Paths.initiatives_base()
-    expanded = Path.expand(path)
-    String.starts_with?(expanded, base <> "/")
-  end
-
   @doc "Starts the store, optionally accepting `:name` and `:path` opts."
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -233,6 +218,13 @@ defmodule Codrift.Initiative.Store do
       ensure_git_repo(ctx)
       ensure_claude_md_symlink(ctx)
       write_orchestration_md(ctx, initiative)
+      # Re-render the directory block every boot. It is generated content inside
+      # markers, so this is a no-op unless the rendering itself changed — which
+      # is what makes it the migration path: initiatives configured before
+      # `dir_line/1` learned to name the worktree keep pointing their agents at
+      # the source repo until something rewrites the block, and nothing else on
+      # a normal run does.
+      update_initiative_md_dirs(initiative, ctx_base)
     end)
 
     # Prune only when the file loaded cleanly. After a failed or partial load
@@ -988,6 +980,19 @@ defmodule Codrift.Initiative.Store do
   defp dirs_block(dirs) do
     body = Enum.map_join(dirs, "\n", &dir_line/1)
     "<!-- codrift:dirs:start -->\n## Directories\n\n#{body}\n<!-- codrift:dirs:end -->"
+  end
+
+  # A worktree exists so agents never touch the working copy the user is sitting
+  # in — but this block is *where an agent learns which directory to work in*.
+  # `resolve_agent_dir/2` already starts it with the worktree as its cwd; naming
+  # the source path here undoes that the moment the agent uses an absolute path,
+  # which is what agents do. The result is the worst of both worlds: the source
+  # repo gets edited (so two initiatives on one repo overwrite each other) while
+  # the worktree stays empty — and the diff view, which reads the worktree,
+  # reports no changes at all. So name the checkout, and say what it isolates.
+  defp dir_line(%DirEntry{worktree_path: wt} = entry) when is_binary(wt) do
+    "- #{Codrift.Paths.compact(wt)} — work here. Git worktree isolating " <>
+      "#{Codrift.Paths.compact(entry.path)}, which must be left untouched."
   end
 
   defp dir_line(%DirEntry{branch: branch} = entry) when is_binary(branch),

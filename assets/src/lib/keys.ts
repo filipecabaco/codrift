@@ -34,6 +34,12 @@ export type ActionId =
   | "palette"
   | "start_orchestration"
   | "branch_initiative"
+  | "initiative_agent"
+  | "git_fetch"
+  | "git_rebase"
+  | "git_commit"
+  | "git_push"
+  | "settings"
   | "appearance"
   | "agent_profiles"
   | "setup";
@@ -47,7 +53,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   add_dir: "Add directory",
   start_agent: "Start agent",
   start_terminal: "Start terminal",
-  delete: "Delete / stop selection",
+  delete: "Delete / stop the highlighted row",
   edit_context: "Edit context",
   new_context: "New context file",
   refresh: "Refresh",
@@ -72,8 +78,14 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   palette: "Command palette",
   start_orchestration: "Start orchestration",
   branch_initiative: "Branch git directories for this initiative",
-  appearance: "Appearance (theme & font)",
-  agent_profiles: "Launch profiles (accounts & env)",
+  initiative_agent: "Change this initiative's agent",
+  git_fetch: "Git: fetch all remotes",
+  git_rebase: "Git: rebase onto upstream",
+  git_commit: "Git: commit everything",
+  git_push: "Git: push and offer the PR link",
+  settings: "Settings",
+  appearance: "Settings › Appearance (theme & font)",
+  agent_profiles: "Settings › Launch profiles (accounts & env)",
   setup: "Setup (register MCP server & install agent skills)",
 };
 
@@ -91,6 +103,11 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "start_terminal",
   "start_orchestration",
   "branch_initiative",
+  "initiative_agent",
+  "git_fetch",
+  "git_rebase",
+  "git_commit",
+  "git_push",
   "delete",
   "edit_context",
   "refresh",
@@ -109,6 +126,7 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "focus_right",
   "focus_up",
   "focus_down",
+  "settings",
   "appearance",
   "agent_profiles",
   "setup",
@@ -156,6 +174,16 @@ export const DEFAULT_KEYMAP: Keymap = {
   palette: "ctrl+p",
   start_orchestration: "o",
   branch_initiative: "b",
+  initiative_agent: "p",
+  settings: "ctrl+,",
+  // Git, as a row of bare keys. Bare because onCaptureKeydown eats modifier
+  // combos before the PTY sees them, and taking ⌃R from a shell to mean "rebase"
+  // would cost every user reverse-search. f/m/u are mnemonic; g is simply the
+  // free key that keeps the four together.
+  git_fetch: "f",
+  git_rebase: "g",
+  git_commit: "m",
+  git_push: "u",
 };
 
 // spec -> action, e.g. { "j": "navigate_down", "ctrl+p": "palette" }

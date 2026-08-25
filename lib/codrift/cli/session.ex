@@ -14,6 +14,8 @@ defmodule Codrift.CLI.Session do
       codrift session prune
   """
 
+  import Codrift.CLI.Output
+
   alias Codrift.Paths
 
   defp db_path, do: Path.join(Paths.data_dir(), "codrift.db")
@@ -30,13 +32,7 @@ defmodule Codrift.CLI.Session do
     if db_missing?() do
       print_json(%{sessions: []})
     else
-      with_db(fn db ->
-        rows = list_sessions(db, initiative_id)
-
-        sessions = Enum.map(rows, &row_to_session/1)
-
-        print_json(%{sessions: sessions})
-      end)
+      with_db(&print_json(%{sessions: sessions_in(&1, initiative_id)}))
     end
   end
 
@@ -47,10 +43,7 @@ defmodule Codrift.CLI.Session do
     if db_missing?() do
       print_json(%{pruned: 0})
     else
-      with_db(fn db ->
-        pruned = prune_sessions(db, valid_ids)
-        print_json(%{pruned: pruned})
-      end)
+      with_db(&print_json(%{pruned: pruned_count(&1, valid_ids)}))
     end
   end
 
@@ -65,6 +58,25 @@ defmodule Codrift.CLI.Session do
   # ── SQLite helpers ────────────────────────────────────────────────────────────
 
   defp db_missing?, do: not File.exists?(db_path())
+
+  defp sessions_in(db, initiative_id) do
+    if no_session_table?(db),
+      do: [],
+      else: db |> list_sessions(initiative_id) |> Enum.map(&row_to_session/1)
+  end
+
+  defp pruned_count(db, valid_ids) do
+    if no_session_table?(db), do: 0, else: prune_sessions(db, valid_ids)
+  end
+
+  # A database file with no session table is a database with no sessions in it:
+  # `Sqlite3.open/1` creates the file, and the schema migration drops the table
+  # before recreating it, so a process that dies in between leaves exactly this.
+  # `db_missing?/0` already guards the same case one step earlier — without
+  # this, an agent parsing our JSON got a MatchError stack trace instead.
+  defp no_session_table?(db) do
+    match?({:error, _}, Exqlite.Sqlite3.prepare(db, "SELECT 1 FROM claude_sessions LIMIT 1"))
+  end
 
   defp with_db(fun) do
     path = db_path()
@@ -157,8 +169,6 @@ defmodule Codrift.CLI.Session do
   defp ensure_exqlite do
     {:ok, _} = Application.ensure_all_started(:exqlite)
   end
-
-  defp print_json(data), do: IO.puts(JSON.encode!(data))
 
   defp row_to_session({agent_id, init_id, dir, session_id}) do
     %{agent_id: agent_id, initiative_id: init_id, dir: dir, session_id: session_id}

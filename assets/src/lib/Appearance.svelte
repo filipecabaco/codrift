@@ -1,10 +1,12 @@
 <script lang="ts">
   // Theme and typeface in one place, both previewed live: arrowing through the
-  // lists re-skins and re-typesets the whole app immediately, and Esc puts back
-  // what you started with. You cannot judge a theme from a swatch or a font
-  // from its name — you judge them by looking at your own work in them.
-  import { onMount } from "svelte";
-  import Overlay from "$lib/Overlay.svelte";
+  // lists re-skins and re-typesets the whole app immediately, and leaving puts
+  // back what you started with. You cannot judge a theme from a swatch or a
+  // font from its name — you judge them by looking at your own work in them.
+  //
+  // A Settings panel, not an overlay: the shell around it owns the scrim, Esc
+  // and the section nav.
+  import { onDestroy, onMount } from "svelte";
   import { applyTheme, selectTheme, themeState, type ThemeEntry } from "$lib/theme.svelte";
   import {
     MAX_SIZE,
@@ -17,16 +19,16 @@
     type FontOption,
   } from "$lib/fonts.svelte";
 
-  let { onClose }: { onClose: () => void } = $props();
-
   type Section = "theme" | "font";
   let section = $state<Section>("theme");
 
-  const startedWith = {
+  // What to fall back to when the panel goes away with a preview still hovering
+  // — updated on every keep, so it always names the last *chosen* look.
+  let startedWith = $state({
     theme: themeState.id,
     font: fontState.label,
     size: fontState.size,
-  };
+  });
 
   let query = $state("");
   let cursor = $state(0);
@@ -107,16 +109,26 @@
     } else if (row) {
       void selectFont(row as FontOption, fontState.size);
     }
-    onClose();
+    // Read off the chosen row, not off themeState: applying a theme is async,
+    // so the store may still be showing the one before it.
+    startedWith = {
+      theme: section === "theme" && row ? (row as ThemeEntry).id : startedWith.theme,
+      font: section === "font" && row ? (row as FontOption).label : startedWith.font,
+      size: fontState.size,
+    };
   }
 
+  // Leaving the panel — closing Settings, or switching to another section —
+  // throws away a preview nobody confirmed. Anything kept is already the
+  // baseline, so this is a no-op after Enter.
   function revert() {
     if (themeState.id !== startedWith.theme) void applyTheme(startedWith.theme);
     if (fontState.label !== startedWith.font || fontState.size !== startedWith.size) {
       applyFont(optionByLabel(startedWith.font) ?? fontState.available[0], startedWith.size);
     }
-    onClose();
   }
+
+  onDestroy(revert);
 
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "ArrowDown") {
@@ -125,7 +137,9 @@
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       cursor = Math.max(cursor - 1, 0);
-    } else if (e.key === "Tab") {
+    } else if (e.key === "Tab" && !e.shiftKey) {
+      // Plain Tab cycles Theme/Font; ⇧⇥ is left alone so focus can still walk
+      // back out of the field to the section nav.
       e.preventDefault();
       e.stopPropagation();
       switchTo(section === "theme" ? "font" : "theme");
@@ -144,7 +158,7 @@
   });
 </script>
 
-<Overlay label="Appearance" width="560px" top="10vh" padded={false} onClose={revert}>
+<div class="flex h-full min-h-0 flex-col">
   <div class="border-b border-border px-3 pt-3">
     <div class="mb-2 flex items-center gap-1">
       {#each [{ id: "theme", label: "Theme" }, { id: "font", label: "Font" }] as tab (tab.id)}
@@ -199,7 +213,7 @@
     </div>
   {/if}
 
-  <ul bind:this={listEl} class="max-h-[46vh] overflow-y-auto py-1" role="listbox" aria-label={section}>
+  <ul bind:this={listEl} class="min-h-0 flex-1 overflow-y-auto py-1" role="listbox" aria-label={section}>
     {#each rows as row, i (rowLabel(row))}
       <li>
         <button
@@ -233,11 +247,11 @@
     {/each}
   </ul>
 
-  <p class="border-t border-border px-3 py-2 text-[11px] text-muted">
+  <p class="shrink-0 border-t border-border px-3 py-2 text-[11px] text-muted">
     {#if failed}
       <span class="text-red-400">{failed}</span>
     {:else}
-      ↑↓ preview · ⇥ {section === "theme" ? "fonts" : "themes"} · Enter keep · Esc revert
+      ↑↓ preview · ⇥ {section === "theme" ? "fonts" : "themes"} · Enter keep · leave to revert
       {#if section === "theme"}
         · drop VS Code theme JSON in <code class="rounded bg-canvas px-1">~/.codrift/themes</code>
       {:else}
@@ -245,4 +259,4 @@
       {/if}
     {/if}
   </p>
-</Overlay>
+</div>

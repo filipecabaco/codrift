@@ -14,6 +14,7 @@ defmodule Codrift.Config.Settings do
 
       {
         "default_agent": "claude-work",
+        "workspace_dir": "~/Documents/workspace",
         "profiles": {
           "claude-work":     { "adapter": "claude", "command": "claude-work", "args": ["--model", "opus"], "env": { "CLAUDE_CONFIG_DIR": "~/.claude-work" } },
           "claude-personal": { "adapter": "claude", "env": { "CLAUDE_CONFIG_DIR": "~/.claude-personal" } }
@@ -84,6 +85,25 @@ defmodule Codrift.Config.Settings do
   @doc "Remembers the launch choice to seed new initiatives with."
   def put_default_agent(choice) when is_binary(choice) do
     write(Map.put(read(), "default_agent", choice))
+  end
+
+  @doc """
+  Returns the folder the directory picker starts browsing from, or `nil` when
+  the user has never set one (the picker then falls back to `~`).
+
+  Stored verbatim, so a `~`-relative value stays portable across machines; it is
+  expanded where it is used, not here.
+  """
+  def workspace_dir, do: read() |> Map.get("workspace_dir")
+
+  @doc "Remembers the folder the directory picker starts from."
+  def put_workspace_dir(path) when is_binary(path) do
+    write(Map.put(read(), "workspace_dir", path))
+  end
+
+  @doc "Forgets the default workspace folder, so the picker starts from `~` again."
+  def clear_workspace_dir do
+    write(Map.delete(read(), "workspace_dir"))
   end
 
   @doc "Returns a map of adapter name → start count."

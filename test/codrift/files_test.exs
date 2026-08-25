@@ -28,7 +28,7 @@ defmodule Codrift.FilesTest do
       File.mkdir_p!(plain)
       on_exit(fn -> File.rm_rf!(plain) end)
 
-      refute Codrift.Files.git_repo?(plain)
+      refute Codrift.Files.in_git_repo?(plain)
     end
 
     test "is true for a repository root and for directories inside it", %{tmp_dir: tmp} do
@@ -37,8 +37,8 @@ defmodule Codrift.FilesTest do
       nested = Path.join([repo, "lib", "deep"])
       File.mkdir_p!(nested)
 
-      assert Codrift.Files.git_repo?(repo)
-      assert Codrift.Files.git_repo?(nested)
+      assert Codrift.Files.in_git_repo?(repo)
+      assert Codrift.Files.in_git_repo?(nested)
     end
   end
 

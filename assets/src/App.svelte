@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
-  import { ArrowPath, CommandLine, Identification, Link, Swatch } from "@steeze-ui/heroicons";
+  import { ArrowPath, Cog6Tooth, CommandLine } from "@steeze-ui/heroicons";
   import {
     createScratchpad,
     openUrl,
@@ -42,11 +42,10 @@
   import Choice, { type ChoiceOption } from "$lib/Choice.svelte";
   import DirPreview from "$lib/DirPreview.svelte";
   import Editor from "$lib/Editor.svelte";
-  import Integrations from "$lib/Integrations.svelte";
   import NewInitiative from "$lib/NewInitiative.svelte";
-  import Appearance from "$lib/Appearance.svelte";
-  import Profiles from "$lib/Profiles.svelte";
-  import { initTheme, themeState } from "$lib/theme.svelte";
+  import AgentPicker from "$lib/AgentPicker.svelte";
+  import Settings, { type SettingsSection } from "$lib/Settings.svelte";
+  import { initTheme } from "$lib/theme.svelte";
   import { initFonts } from "$lib/fonts.svelte";
   import { initTitlebar, overlayed, titlebar } from "$lib/titlebar.svelte";
 
@@ -354,10 +353,9 @@
     | { kind: "dirpicker"; submit: (v: string) => void }
     | { kind: "confirm"; message: string; confirmLabel?: string; onConfirm: () => void }
     | { kind: "choice"; title: string; description?: string; options: ChoiceOption[] }
-    | { kind: "integrations" }
     | { kind: "new_initiative" }
-    | { kind: "appearance" }
-    | { kind: "profiles" }
+    | { kind: "agent_picker" }
+    | { kind: "settings"; section: SettingsSection }
     | null;
   let modal = $state<Modal>(null);
 
@@ -540,6 +538,76 @@
     window.dispatchEvent(new CustomEvent(REDRAW_TERMINALS));
     await load();
     toast("Refreshed");
+  }
+
+  function openSettings(section: SettingsSection) {
+    modal = { kind: "settings", section };
+  }
+
+  // Which repository a git action runs in. The cursor's directory when it names
+  // one (or the directory of the agent under it), otherwise nothing — the
+  // backend then falls back to the initiative's only repo, and refuses to guess
+  // when there are several. Always the SOURCE path: the backend resolves it to
+  // the worktree, which is where the agent's work actually is.
+  function gitTarget(): { initiative_id: string; dir?: string } | null {
+    if (!selectedInitiative) {
+      toast("Select an initiative first.");
+      return null;
+    }
+    const dir = ws.cursorDir;
+    return { initiative_id: selectedInitiative.id, ...(dir ? { dir } : {}) };
+  }
+
+  // Git operations are slow enough to look broken without a pending message, and
+  // they fail for ordinary reasons (nothing to commit, a conflict) whose text is
+  // the useful part — so surface git's own words rather than "failed".
+  async function runGit(
+    op: "git_fetch" | "git_rebase" | "git_push",
+    pending: string,
+    describe: ((r: any) => string) | null,
+    extra: Record<string, unknown> = {},
+  ) {
+    const target = gitTarget();
+    if (!target) return;
+    toast(pending);
+    try {
+      const result = await rpc<any>(op, { ...target, ...extra });
+      await load();
+      // A push is the one operation with somewhere to go afterwards: offer the
+      // link the forge printed (or one derived from the remote) instead of
+      // making the user go find the branch in a browser.
+      if (op === "git_push" && result.pr_url) {
+        modal = {
+          kind: "confirm",
+          message: `Pushed ${result.branch}. Open the pull request page?`,
+          confirmLabel: "Open PR",
+          onConfirm: async () => {
+            await rpc("open_url", { url: result.pr_url });
+            modal = null;
+          },
+        };
+        return;
+      }
+      toast(describe ? describe(result) : `Pushed ${result.branch}.`);
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+
+  function promptCommit() {
+    if (!gitTarget()) return;
+    openPrompt("Commit message", async (message) => {
+      modal = null;
+      const target = gitTarget();
+      if (!target) return;
+      try {
+        const r = await rpc<any>("git_commit", { ...target, message });
+        await load();
+        toast(`Committed ${r.sha} on ${r.branch}.`);
+      } catch (e) {
+        toast((e as Error).message);
+      }
+    });
   }
 
   function promptAddDir() {
@@ -933,7 +1001,7 @@
   async function createInitiative(name: string, agent: string) {
     try {
       const created = await rpc<{ id: string }>("create_initiative", { name, agent });
-      await ws.refreshProfiles();
+      await ws.refreshSettings();
       await revealInitiative(created.id);
     } catch (e) {
       modal = null;
@@ -1034,6 +1102,20 @@
         if (!selectedInitiative) return toast("Select an initiative first.");
         promptAddDir();
         break;
+      case "git_fetch":
+        await runGit("git_fetch", "Fetching…", (r) =>
+          r.changed ? "Fetched." : "Already up to date.",
+        );
+        break;
+      case "git_rebase":
+        await runGit("git_rebase", "Rebasing…", (r) => `Rebased onto ${r.onto}.`);
+        break;
+      case "git_commit":
+        promptCommit();
+        break;
+      case "git_push":
+        await runGit("git_push", "Pushing…", null);
+        break;
       case "delete":
         deleteSelection();
         break;
@@ -1041,11 +1123,18 @@
         if (active.treeSelectedPath) editing = { path: active.treeSelectedPath };
         else toast("Open a file in the Tree view to edit it.");
         break;
+      case "settings":
+        openSettings("general");
+        break;
       case "appearance":
-        modal = { kind: "appearance" };
+        openSettings("appearance");
         break;
       case "agent_profiles":
-        modal = { kind: "profiles" };
+        openSettings("profiles");
+        break;
+      case "initiative_agent":
+        if (!selectedInitiative) return toast("Select an initiative first.");
+        modal = { kind: "agent_picker" };
         break;
       case "quit":
         confirmQuit();
@@ -1279,7 +1368,7 @@
   // is deliberate — that type mirrors `Codrift.Config.Keybindings`, and inventing
   // ids there would put the desktop menu and the TUI's keymap out of sync.
   const MENU_ONLY: Record<string, () => void | Promise<void>> = {
-    integrations: () => void (modal = { kind: "integrations" }),
+    integrations: () => openSettings("integrations"),
     sync_context: () => syncImportedContext(),
     focus_next_waiting: () => focusNextWaiting(),
     split_vertical: () => toggleSplit("vertical"),
@@ -1333,18 +1422,76 @@
     selectAgent(next.init.id, next.agent.id);
   }
 
+  // What `d` acts on is the row under the sidebar cursor, NOT whatever the pane
+  // happens to be showing. The cursor is what the user is pointing at, and one
+  // key that always meant "delete initiative" made every other row look as if it
+  // had no delete at all — worse, it offered to delete the whole initiative when
+  // the user was pointing at a single directory.
+  //
+  // Cursor and pane can never disagree about which initiative is in play
+  // (applyRow/select* route every move through viewFor), so reading the row is
+  // enough to know both the target and the initiative it belongs to.
+  //
+  // Native confirm() is a no-op in Tauri's WebKit webview, so the handlers below
+  // use the in-app confirm modal. They deliberately do NOT catch: Confirm keeps
+  // itself open and shows the error. Closing the dialog is the *success* path,
+  // so a failed delete can never look like it silently worked.
   function deleteSelection() {
-    // Native confirm() is a no-op in Tauri's WebKit webview, so use an in-app
-    // confirm modal instead.
-    //
-    // These handlers deliberately do NOT catch: Confirm keeps itself open and
-    // shows the error. Closing the dialog is the *success* path, so a failed
-    // delete can never look like it silently worked.
-    if (active.agentId) confirmStopAgent(active.agentId);
-    else if (selectedInitiative) confirmDeleteInitiative(selectedInitiative);
-    // Nothing selected: say so rather than swallowing the keypress, which read
-    // as "delete is broken".
-    else toast("Select an initiative or agent first.");
+    const row = ws.cursorRow;
+    switch (row?.kind) {
+      case "agent":
+        return confirmStopAgent(row.agentId);
+      case "dir":
+        return confirmRemoveDir(row.initId, row.path);
+      case "init": {
+        const init = ws.initiatives.find((i) => i.id === row.initId);
+        return init ? confirmDeleteInitiative(init) : undefined;
+      }
+      case "file":
+      case "folder":
+        // Context documents are edited in place; there is no delete endpoint for
+        // them, and silently deleting the initiative instead is how this key
+        // earned its reputation.
+        return toast("Context files can't be deleted from here.");
+      case "memory":
+        return toast("Delete memory entries from the memory view.");
+      default:
+        // Nothing selected: say so rather than swallowing the keypress, which
+        // read as "delete is broken".
+        toast("Select an initiative, directory or agent first.");
+    }
+  }
+
+  function confirmRemoveDir(initId: string, path: string) {
+    const init = ws.initiatives.find((i) => i.id === initId);
+    const entry = init?.dirs.find((d) => d.path === path);
+    if (!init || !entry) return;
+    // Un-linking a directory leaves the user's repository exactly where it is —
+    // except for a worktree, which is Codrift's own checkout and goes with it.
+    // `git worktree remove --force` takes uncommitted work in it too, so that
+    // has to be said before the key is pressed, not discovered afterwards.
+    const consequence = entry.worktree_path
+      ? "Its worktree is deleted, including any uncommitted changes in it. The original repository is untouched."
+      : "The folder itself is left on disk.";
+    // Agents launched in it keep running; they just lose the row they nested
+    // under and move up to the initiative.
+    const running = ws.agentsForDir(initId, path).length;
+    const agents = running
+      ? ` ${running} agent${running > 1 ? "s" : ""} running in it will keep running.`
+      : "";
+    modal = {
+      kind: "confirm",
+      message: `Remove "${path}" from "${init.name}"? ${consequence}${agents}`,
+      confirmLabel: "Remove directory",
+      onConfirm: async () => {
+        await rpc("remove_dir", { initiative_id: initId, dir: path });
+        await load();
+        modal = null;
+        // Its row is gone; land on the initiative that held it rather than
+        // leaving the cursor to be re-anchored from nowhere.
+        ws.syncCursor((r) => r.kind === "init" && r.initId === initId);
+      },
+    };
   }
 
   function confirmStopAgent(id: string) {
@@ -1357,9 +1504,10 @@
       confirmLabel: isTerminal ? "Close terminal" : "Stop agent",
       onConfirm: async () => {
         await rpc("stop_agent", { agent_id: id });
-        // Guarded because the menu can stop an agent that is not the one in the
-        // pane, and clearing the pane then would blank an unrelated terminal.
-        if (active.agentId === id) active.agentId = null;
+        // Guarded because the menu — and now the sidebar cursor — can stop an
+        // agent that is not the one in the active pane, and clearing that pane
+        // would blank an unrelated terminal. Clear whichever pane holds it.
+        for (const p of panes) if (p.agentId === id) p.agentId = null;
         await load();
         modal = null;
       },
@@ -1636,6 +1784,33 @@
 
   // Contextual shortcut hints for the footer — a quiet, always-on cheat row that
   // doubles as onboarding. Specs come from the live keymap so user overrides show.
+  // `d` means several different things depending on the row under the cursor, so
+  // the footer names the one it means right now — a shortcut that changes shape
+  // is only an improvement if you can see which shape it is in.
+  const deleteHint = $derived.by<string | null>(() => {
+    const row = ws.cursorRow;
+    switch (row?.kind) {
+      case "agent":
+        return ws.agent(row.agentId)?.adapter === "terminal" ? "Close terminal" : "Stop agent";
+      case "dir":
+        return "Remove dir";
+      case "init":
+        return "Delete initiative";
+      default:
+        return null;
+    }
+  });
+
+  // The git row is only worth naming when the cursor is actually on a repository
+  // — offering "Commit" while pointing at a context file is noise, and the
+  // footer is a cheat row, not a menu of everything that exists.
+  const onGitDir = $derived.by<boolean>(() => {
+    const row = ws.cursorRow;
+    if (row?.kind !== "dir") return false;
+    const init = ws.initiatives.find((i) => i.id === row.initId);
+    return init?.dirs.find((d) => d.path === row.path)?.git === true;
+  });
+
   const keyHints = $derived.by<{ spec: string; label: string }[]>(() => {
     const k = (a: ActionId) => formatSpec(keymap[a]);
     const palette = { spec: k("palette"), label: "Commands" };
@@ -1656,6 +1831,10 @@
     if (selectedInitiative?.dirs.some((d) => d.git && !d.branch)) {
       hints.push({ spec: k("branch_initiative"), label: "Branch" });
     }
+    if (onGitDir) {
+      hints.push({ spec: k("git_commit"), label: "Commit" }, { spec: k("git_push"), label: "Push" });
+    }
+    if (deleteHint) hints.push({ spec: k("delete"), label: deleteHint });
     if (selectedInitiative) hints.push({ spec: `${PRIMARY_MOD}D`, label: "Split" });
     if (split) hints.push({ spec: `${PRIMARY_MOD}W`, label: "Close pane" }, { spec: "⌘⌃=", label: "Balance" });
     hints.push(palette);
@@ -1751,6 +1930,26 @@
     return () => window.removeEventListener(MENU_EVENT, onMenu);
   });
 
+  /**
+   * Moving the sidebar changes every terminal's width, and re-measuring is not
+   * repainting. `AgentTerminal`'s ResizeObserver refits the grid, but WKWebView
+   * keeps presenting the old surface until something forces it — which is why
+   * dragging the window edge "fixed" the garbled pane and nothing else did.
+   * So perform that drag ourselves, through the same path the refresh action
+   * uses (`redraw`: refit, repaint every row, then SIGWINCH the agent).
+   *
+   * Deferred rather than immediate: the effect runs before the browser has laid
+   * the new width out, so measuring now would measure the old box. Debounced by
+   * the cleanup, because a width drag emits a change per pointer move and each
+   * one would otherwise cost a SIGWINCH.
+   */
+  $effect(() => {
+    sidebarCollapsed;
+    sidebarWidth;
+    const t = setTimeout(() => window.dispatchEvent(new CustomEvent(REDRAW_TERMINALS)), 10);
+    return () => clearTimeout(t);
+  });
+
   // Agents asking for a human. The frame arrives after the `agent_started` that
   // created the terminal, so `ws` already knows the agent by the time we look.
   $effect(() => onPaneRequest((req) => openAgentPane(req)));
@@ -1814,29 +2013,17 @@
     <!-- Grouped rather than five `ml-auto`-chained buttons, so the gap between
          the status text and the controls is one draggable run of bar. -->
     <div class="ml-auto flex items-center gap-0.5">
+      <!-- One door, not three: theme, profiles and integrations were separate
+           icons whose contents you had to already know to find. -->
       <button
         class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
-        title="Appearance — theme &amp; font ({themeState.label})"
-        onclick={() => (modal = { kind: "appearance" })}
-        aria-label="Appearance"
+        title="Settings — workspace folder, appearance, profiles, integrations ({formatSpec(
+          keymap.settings,
+        )})"
+        onclick={() => openSettings("general")}
+        aria-label="Settings"
       >
-        <Icon src={Swatch} class="size-4" />
-      </button>
-      <button
-        class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
-        title="Launch profiles — named agents with their own command and account"
-        onclick={() => (modal = { kind: "profiles" })}
-        aria-label="Launch profiles"
-      >
-        <Icon src={Identification} class="size-4" />
-      </button>
-      <button
-        class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
-        title="Integrations"
-        onclick={() => (modal = { kind: "integrations" })}
-        aria-label="Integrations"
-      >
-        <Icon src={Link} class="size-4" />
+        <Icon src={Cog6Tooth} class="size-4" />
       </button>
       <button
         class="rounded-md p-1 text-muted hover:bg-canvas hover:text-fg"
@@ -2057,7 +2244,7 @@
               wantFile={view.wantFile}
               wantPanel={view.wantPanel}
               onChanged={load}
-              onManageProfiles={() => (modal = { kind: "profiles" })}
+              onManageProfiles={() => openSettings("profiles")}
             />
           {/if}
         {/if}
@@ -2138,17 +2325,32 @@
   />
 {/if}
 
-{#if modal?.kind === "appearance"}
-  <Appearance onClose={() => (modal = null)} />
-{:else if modal?.kind === "profiles"}
-  <Profiles onClose={() => (modal = null)} onChanged={() => ws.refreshProfiles()} />
-{:else if modal?.kind === "integrations"}
-  <Integrations onClose={() => (modal = null)} />
+{#if modal?.kind === "settings"}
+  <Settings
+    section={modal.section}
+    {keymap}
+    onChanged={() => ws.refreshSettings()}
+    onClose={() => (modal = null)}
+  />
+{:else if modal?.kind === "agent_picker" && selectedInitiative}
+  <AgentPicker
+    initiative={selectedInitiative}
+    onDone={async (choice, scope) => {
+      modal = null;
+      await load();
+      toast(
+        scope === "default"
+          ? `New initiatives start ${choice}`
+          : `${selectedInitiative!.name} starts ${choice}`,
+      );
+    }}
+    onClose={() => (modal = null)}
+  />
 {:else if modal?.kind === "new_initiative"}
   <NewInitiative
     onCreate={createInitiative}
     onOpen={revealInitiative}
-    onManageProfiles={() => (modal = { kind: "profiles" })}
+    onManageProfiles={() => openSettings("profiles")}
     onClose={() => (modal = null)}
   />
 {:else if modal?.kind === "palette"}
@@ -2161,7 +2363,7 @@
     onClose={() => (modal = null)}
   />
 {:else if modal?.kind === "dirpicker"}
-  <DirPicker onSubmit={modal.submit} onClose={() => (modal = null)} />
+  <DirPicker start={ws.workspaceDir} onSubmit={modal.submit} onClose={() => (modal = null)} />
 {:else if modal?.kind === "confirm"}
   <Confirm
     message={modal.message}

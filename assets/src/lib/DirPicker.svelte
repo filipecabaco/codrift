@@ -1,162 +1,38 @@
 <script lang="ts">
-  import { rpc } from "$lib/api";
+  import DirField from "$lib/DirField.svelte";
   import Overlay from "$lib/Overlay.svelte";
 
   let {
     onSubmit,
     onClose,
+    start,
   }: {
     onSubmit: (path: string) => void;
     onClose: () => void;
+    /**
+     * Where browsing begins — the workspace folder from Settings when there is
+     * one, otherwise home. Most repos live under one parent folder, and `~`
+     * meant retyping the same two segments on every add.
+     */
+    start?: string | null;
   } = $props();
 
-  // Start browsing from home, matching the "start from ~" convention.
-  let value = $state("~/");
-  let base = $state("~");
-  let entries = $state<string[]>([]);
-  let cursor = $state(0);
-  let input: HTMLInputElement;
-
-  $effect(() => {
-    input?.focus();
-    // Put the caret at the end so typing continues the path.
-    input?.setSelectionRange(value.length, value.length);
-  });
-
-  // The still-being-typed trailing segment, e.g. "Doc" in "~/Doc". Used to
-  // fuzzy-filter the listed directory against what the user is typing.
-  const fragment = $derived(value.slice(value.lastIndexOf("/") + 1));
-
-  // Subsequence fuzzy match with light scoring: exact-prefix and contiguous
-  // matches rank first, so "dl" finds "Downloads" but "Documents" (prefix)
-  // still wins for "doc".
-  function score(query: string, target: string): number | null {
-    if (!query) return 0;
-    const q = query.toLowerCase();
-    const t = target.toLowerCase();
-    if (t.startsWith(q)) return 1000 - target.length;
-    let qi = 0;
-    let last = -1;
-    let bonus = 0;
-    for (let ti = 0; ti < t.length && qi < q.length; ti++) {
-      if (t[ti] === q[qi]) {
-        if (ti === last + 1) bonus += 2;
-        last = ti;
-        qi++;
-      }
-    }
-    return qi === q.length ? bonus - target.length : null;
-  }
-
-  // `.git` is never a project directory — offering it invites adding a repo's
-  // internals as a workspace.
-  const HIDDEN = new Set([".git"]);
-
-  const matches = $derived(
-    entries
-      .filter((name) => !HIDDEN.has(name))
-      .map((name) => ({ name, s: score(fragment, name) }))
-      .filter((m): m is { name: string; s: number } => m.s !== null)
-      .sort((a, b) => b.s - a.s)
-      .map((m) => m.name),
-  );
-
-  // Reset the highlight whenever the candidate list changes.
-  $effect(() => {
-    matches;
-    cursor = 0;
-  });
-
-  // Reload the listing whenever the directory portion of the input changes.
-  // Debounced so fast typing doesn't hammer the backend.
-  let listTimer: ReturnType<typeof setTimeout> | undefined;
-  $effect(() => {
-    const path = value;
-    clearTimeout(listTimer);
-    listTimer = setTimeout(async () => {
-      try {
-        const res = await rpc<{ base: string; entries: string[] }>("list_dirs", { path });
-        base = res.base;
-        entries = res.entries;
-      } catch {
-        entries = [];
-      }
-    }, 80);
-  });
-
-  function join(dir: string, name: string): string {
-    return dir.endsWith("/") ? dir + name : dir + "/" + name;
-  }
-
-  // Complete into the highlighted directory and keep browsing (trailing slash
-  // so the next listing is that directory's children).
-  function complete() {
-    const pick = matches[cursor];
-    if (!pick) return;
-    value = join(base, pick) + "/";
-    queueMicrotask(() => {
-      input?.setSelectionRange(value.length, value.length);
-      // Programmatic edits don't scroll the field, so a long path would still
-      // show its middle — the completed segment has to be the visible one.
-      if (input) input.scrollLeft = input.scrollWidth;
-    });
-  }
-
-  function onkeydown(e: KeyboardEvent) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      cursor = Math.min(cursor + 1, matches.length - 1);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      cursor = Math.max(cursor - 1, 0);
-    } else if (e.key === "Tab" || e.key === "ArrowRight") {
-      // Tab always completes; ArrowRight only when the caret is at the end.
-      if (e.key === "ArrowRight" && input.selectionStart !== value.length) return;
-      e.preventDefault();
-      complete();
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      const v = value.trim();
-      if (v) onSubmit(v);
-    }
-  }
+  // A trailing slash makes the first listing that folder's children rather than
+  // its siblings filtered by its own name. Read once on purpose: this is the
+  // field's starting point, and a later settings change must not yank the path
+  // out from under someone mid-type.
+  // svelte-ignore state_referenced_locally
+  let value = $state(((start ?? "~").replace(/\/+$/, "") || "/") + "/");
 </script>
 
-<Overlay label="Add directory" width="520px" top="12vh" padded={false} {onClose}>
-  <div class="border-b border-border px-3 pt-3">
+<!-- ownsTab: the field spends Tab on path completion, not on cycling focus. -->
+<Overlay label="Add directory" width="520px" top="12vh" padded={false} ownsTab {onClose}>
+  <div class="px-3 pt-3">
     <h3 class="mb-2 text-[13px] font-semibold text-fg">Add directory</h3>
-    <input
-      bind:this={input}
-      bind:value
-      {onkeydown}
-      name="dir"
-      aria-label="Directory path"
-      placeholder="~/path/to/repo"
-      autocomplete="off"
-      spellcheck="false"
-      class="w-full rounded-md border border-border bg-canvas px-3 py-2 font-mono text-sm text-fg outline-none focus:border-accent"
-    />
+    <!-- The list bleeds to the panel edges: it is the picker's body, not an
+         indented afterthought under the field. -->
+    <DirField bind:value {onSubmit} autofocus listClass="max-h-72 -mx-3 mt-3 border-t border-border" />
   </div>
-  <ul class="max-h-72 overflow-y-auto py-1">
-    {#each matches as name, i (name)}
-      <li>
-        <button
-          class={["flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px]", i === cursor ? "bg-accent/20 text-white" : "text-fg/90"]}
-          onmouseenter={() => (cursor = i)}
-          onclick={() => {
-            cursor = i;
-            complete();
-            input?.focus();
-          }}
-        >
-          <span class="text-muted">📁</span>
-          <span class="truncate font-mono">{name}</span>
-        </button>
-      </li>
-    {:else}
-      <li class="px-3 py-2 text-[13px] text-muted">No matching directories.</li>
-    {/each}
-  </ul>
   <p class="border-t border-border px-3 py-2 text-[11px] text-muted">
     Tab to complete · ↑↓ to navigate · Enter to add · Esc to cancel
   </p>

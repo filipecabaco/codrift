@@ -17,6 +17,8 @@ defmodule Codrift.Worktree do
   require Logger
 
   @doc "Returns true when `path` is a git repository (has a .git entry)."
+  # Repository *root* only: a subdirectory of a clone answers false here. For
+  # "is this inside a working tree", see `Codrift.Files.in_git_repo?/1`.
   def git_repo?(path) do
     File.exists?(Path.join(path, ".git"))
   end

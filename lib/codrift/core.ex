@@ -338,12 +338,21 @@ defmodule Codrift.Core do
   end
 
   # Backs the "add directory" fuzzy picker: given a partially-typed path
-  # (defaulting to `~`), returns the directory being browsed plus its child
-  # directory names so the UI can autocomplete. Read-only listing of the host
-  # filesystem — acceptable since this is a local desktop app and `add_dir`
-  # already accepts arbitrary absolute paths.
+  # (defaulting to the configured workspace folder, else `~`), returns the
+  # directory being browsed plus its child directory names so the UI can
+  # autocomplete. Read-only listing of the host filesystem — acceptable since
+  # this is a local desktop app and `add_dir` already accepts arbitrary
+  # absolute paths.
   def call("list_dirs", args) do
-    path = Map.get(args, "path", "~")
+    # A blank path is "nothing typed yet", not "the current directory": letting
+    # it through makes `Path.dirname/1` resolve to the server's cwd, which is
+    # wherever the app happened to be launched from.
+    path =
+      case args |> Map.get("path", "") |> to_string() |> String.trim() do
+        "" -> Settings.workspace_dir() || "~"
+        typed -> typed
+      end
+
     {:ok, Codrift.Files.list_subdirs(path)}
   end
 
@@ -354,6 +363,33 @@ defmodule Codrift.Core do
     {:ok, Codrift.Files.inspect_path(path)}
   end
 
+  # Where the directory picker starts browsing. Most people keep every repo
+  # under one folder, and starting at `~` meant retyping the same two segments
+  # on every add.
+  def call("get_workspace_dir", _args) do
+    {:ok, %{"path" => Settings.workspace_dir()}}
+  end
+
+  # An empty path clears the preference rather than storing "", so the picker
+  # goes back to `~` instead of browsing the process's working directory.
+  def call("set_workspace_dir", %{"path" => path}) when is_binary(path) do
+    case String.trim(path) do
+      "" ->
+        Settings.clear_workspace_dir()
+        {:ok, %{"path" => nil}}
+
+      trimmed ->
+        # Validated, not expanded: a `~`-relative value stays portable, and a
+        # typo silently accepted here would only surface as an empty picker.
+        if File.dir?(Codrift.Files.expand_user(trimmed)) do
+          Settings.put_workspace_dir(trimmed)
+          {:ok, %{"path" => trimmed}}
+        else
+          {:error, "not a directory: #{trimmed}"}
+        end
+    end
+  end
+
   def call("add_dir", %{"initiative_id" => id, "dir" => dir} = args) do
     expanded = Path.expand(dir)
     opts = if truthy?(Map.get(args, "worktree")), do: [worktree_enabled: true], else: []
@@ -362,6 +398,48 @@ defmodule Codrift.Core do
       {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
       {:error, :not_found} -> {:error, "initiative not found: #{id}"}
     end
+  end
+
+  def call("remove_dir", %{"initiative_id" => id, "dir" => dir}) do
+    expanded = Path.expand(dir)
+
+    case Store.remove_dir(id, expanded) do
+      {:ok, initiative} -> {:ok, Codrift.Initiative.to_map(initiative)}
+      {:error, :not_found} -> {:error, "initiative not found: #{id}"}
+    end
+  end
+
+  # ── Git ─────────────────────────────────────────────────────────────────────
+  #
+  # Every one of these routes its `dir` through `DirEntry.resolve/2` before
+  # touching git. That is the whole point: agent work lands in the worktree, and
+  # the UI names the source path, so committing or pushing the source would push
+  # a branch with none of the work on it.
+
+  def call("git_fetch", %{"initiative_id" => id} = args) do
+    with_git_dir(id, args, &Codrift.Git.fetch/1)
+  end
+
+  def call("git_rebase", %{"initiative_id" => id} = args) do
+    with_git_dir(id, args, &Codrift.Git.rebase/1)
+  end
+
+  def call("git_commit", %{"initiative_id" => id, "message" => message} = args)
+      when is_binary(message) do
+    with_git_dir(id, args, &Codrift.Git.commit(&1, message))
+  end
+
+  def call("git_push", %{"initiative_id" => id} = args) do
+    with_git_dir(id, args, &Codrift.Git.push/1)
+  end
+
+  def call("git_info", %{"initiative_id" => id} = args) do
+    with_git_dir(id, args, fn dir ->
+      case Codrift.Git.info(dir) do
+        nil -> {:error, "#{dir} is not a git repository"}
+        info -> {:ok, info}
+      end
+    end)
   end
 
   # The sidebar's directory preview: the repo's README if it has one, otherwise
@@ -966,7 +1044,7 @@ defmodule Codrift.Core do
   # Derived at the API boundary, never persisted: whether a directory is under
   # version control decides how the UI draws it (a repo you can diff vs a plain
   # folder), and that can change on disk between two calls.
-  defp tag_git(%{"path" => path} = dir), do: Map.put(dir, "git", Codrift.Files.git_repo?(path))
+  defp tag_git(%{"path" => path} = dir), do: Map.put(dir, "git", Codrift.Files.in_git_repo?(path))
 
   # Everything the user keeps in the initiative folder, as paths relative to it:
   # `initiative.md`, but also `scripts/deploy.sh` and `docs/runbook.md`. Skips
@@ -1178,6 +1256,44 @@ defmodule Codrift.Core do
   defp resolve_agent_dir(init_id, _blank) do
     with {:ok, _initiative} <- Store.add_dir(init_id, Store.context_path(init_id)) do
       {:ok, Store.context_path(init_id)}
+    end
+  end
+
+  # Picks the directory a git action runs in and reports the result with the
+  # directory attached, so the UI can say which repository it acted on when an
+  # initiative holds several.
+  defp with_git_dir(init_id, args, fun) do
+    case git_dir(init_id, Map.get(args, "dir")) do
+      {:ok, dir} ->
+        case fun.(dir) do
+          {:ok, result} -> {:ok, Map.put(result, "dir", dir)}
+          {:error, message} -> {:error, message}
+        end
+
+      {:error, message} ->
+        {:error, message}
+    end
+  end
+
+  defp git_dir(init_id, dir) do
+    case Store.get(init_id) do
+      {:error, :not_found} -> {:error, "initiative not found: #{init_id}"}
+      {:ok, initiative} -> resolve_git_dir(initiative, dir)
+    end
+  end
+
+  defp resolve_git_dir(initiative, dir) when is_binary(dir) and dir != "",
+    do: {:ok, DirEntry.resolve(dir, initiative.dirs)}
+
+  # No directory named: fall back to the initiative's only repository. Guessing
+  # between several would act on the wrong one silently.
+  defp resolve_git_dir(initiative, _dir) do
+    initiative.dirs
+    |> Enum.filter(&Codrift.Worktree.git_repo?(DirEntry.effective_path(&1)))
+    |> case do
+      [entry] -> {:ok, DirEntry.effective_path(entry)}
+      [] -> {:error, "this initiative has no git repository"}
+      _ -> {:error, "several repositories here — select one in the sidebar first"}
     end
   end
 

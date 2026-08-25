@@ -23,6 +23,7 @@ terminal — there, bare keys pass through to the field/PTY and only modifier co
 | `r` | Refresh (reload initiatives & agents) | `refresh` |
 | `Ctrl+P` | Open command palette | `palette` |
 | `Ctrl+B` | Collapse / expand sidebar | `toggle_sidebar` |
+| `Ctrl+,` / `⌘,` | Open Settings | `settings` |
 | `Ctrl+Q` / `⌘Q` | Quit — asks first, listing any agents still running | `quit` |
 
 ## Panes & layout
@@ -94,12 +95,48 @@ stack is a recency stack rather than a collection you organise.
 | `t` | Start a raw `$SHELL` terminal in the directory under the cursor | `start_terminal` |
 | `d` | Delete initiative / stop agent (context-sensitive, confirms first) | `delete` |
 | `o` | Start orchestration for the selected initiative | `start_orchestration` |
+| `p` | Change which agent (or launch profile) this initiative starts | `initiative_agent` |
+| `b` | Put every git directory on the initiative's branch | `branch_initiative` |
+| `f` | Fetch all remotes (prunes gone refs) | `git_fetch` |
+| `g` | Rebase onto upstream (`--autostash`; aborts cleanly on conflict) | `git_rebase` |
+| `m` | Stage everything and commit, asking for a message | `git_commit` |
+| `u` | Push and offer the pull-request link | `git_push` |
 | `[` | Cycle status back (`archived → done → ongoing → planning`) | `status_prev` |
 | `]` | Cycle status forward (`planning → ongoing → done → archived`) | `status_next` |
 
 To start a specific adapter (Codex, Opencode, Gemini, Copilot, Cursor), use the **Launch**
 dropdown next to a directory in the Context view, or the command palette. `s`
-always launches Claude.
+starts whatever the initiative is set to.
+
+`p` opens that choice as a filterable list — `↑↓` to move, `⇥` to switch between
+"this initiative" and "the default for new ones", `Enter` to apply. It covers
+both base adapters and [launch profiles](agent-profiles.md), so switching an
+initiative to a different account never needs the mouse.
+
+Git acts on the repository under the cursor — or, when the cursor names none,
+on the initiative's only repository; with several it asks you to pick rather
+than guessing. The path it acts in is always resolved to the **worktree** when
+the directory has one, so a commit lands where the agent actually wrote.
+
+These four carry no modifier on purpose: a focused terminal hands every
+modifier combo to the app before the PTY sees it, and taking `⌃R` from a shell
+to mean "rebase" would cost you reverse-search.
+
+## Settings
+
+`Ctrl+,` (`⌘,`) opens one window for everything stored in
+`~/.codrift/settings.json`: the default workspace folder, the default agent,
+appearance (theme & font), launch profiles, integrations, and this keyboard
+reference. The desktop app also lists it as **Codrift ▸ Settings…**, with
+**Appearance…**, **Launch Profiles…** (`⇧⌘P`) and **Integrations…** (`⇧⌘I`)
+below it as direct jumps to those sections.
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Move between sections (while the section list has focus) |
+| `Ctrl+↑` / `Ctrl+↓` | Move between sections from anywhere in the window |
+| `Tab` | Move focus into the section's panel |
+| `Esc` | Close — or back out of a half-written profile / an in-flight connection first |
 
 Adding a git repository with `a` asks one extra question: work in an isolated
 [worktree](worktrees.md) or in the directory itself. Plain folders skip it —
@@ -225,7 +262,14 @@ Create `~/.codrift/keybindings.json` with any subset of the default map. Use the
   "quit": "ctrl+q",
   "toggle_sidebar": "ctrl+b",
   "palette": "ctrl+p",
-  "start_orchestration": "o"
+  "start_orchestration": "o",
+  "branch_initiative": "b",
+  "initiative_agent": "p",
+  "git_fetch": "f",
+  "git_rebase": "g",
+  "git_commit": "m",
+  "git_push": "u",
+  "settings": "ctrl+,"
 }
 ```
 

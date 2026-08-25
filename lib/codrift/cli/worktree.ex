@@ -20,6 +20,8 @@ defmodule Codrift.CLI.Worktree do
   never at risk either way: removing a worktree leaves its branch alone.
   """
 
+  import Codrift.CLI.Output
+
   alias Codrift.CLI.Initiative
   alias Codrift.Worktree.Inventory
 
@@ -59,6 +61,4 @@ defmodule Codrift.CLI.Worktree do
     Committed work is safe regardless, since removing a worktree keeps its branch.
     """)
   end
-
-  defp print_json(data), do: IO.puts(JSON.encode!(data))
 end

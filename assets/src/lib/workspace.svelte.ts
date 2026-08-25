@@ -6,6 +6,7 @@ import {
   rpc,
   getDefaultAgent,
   getSidebarSort,
+  getWorkspaceDir,
   listAgentProfiles,
   setSidebarSort,
   type Agent,
@@ -168,6 +169,9 @@ class Workspace {
   // added on disk shows up on the next refresh instead of only on a reload.
   profiles = $state<AgentProfile[]>([]);
   defaultAgent = $state<string>("claude");
+  // Where the "add directory" picker starts browsing. null = no preference, so
+  // the picker falls back to `~` the way it always did.
+  workspaceDir = $state<string | null>(null);
   // The cursor is identified by ROW KEY, not by index: rows appear and vanish
   // under it (an agent stops, an initiative is deleted, another pane's agent
   // starts) and an index would then point at an unrelated row — highlighting
@@ -480,7 +484,7 @@ class Workspace {
         }),
       );
       this.agentsByInit = Object.fromEntries(entries);
-      await this.refreshProfiles();
+      await this.refreshSettings();
       await this.refreshSort();
     } catch (e) {
       this.error = (e as Error).message;
@@ -489,10 +493,11 @@ class Workspace {
     }
   }
 
-  // Profiles live in settings.json, editable in the Profiles view or by hand —
-  // so a refresh has to re-read them. A failure here must not fail the whole
-  // load: the initiative list is what the sidebar needs.
-  async refreshProfiles() {
+  // Everything that lives in settings.json — profiles, the default agent, the
+  // workspace folder — is editable in Settings or by hand, so a refresh has to
+  // re-read it. A failure here must not fail the whole load: the initiative
+  // list is what the sidebar needs.
+  async refreshSettings() {
     try {
       this.profiles = await listAgentProfiles();
     } catch {
@@ -504,6 +509,11 @@ class Workspace {
       this.defaultAgent = "claude";
     }
     if (!this.knownAgent(this.defaultAgent)) this.defaultAgent = "claude";
+    try {
+      this.workspaceDir = await getWorkspaceDir();
+    } catch {
+      this.workspaceDir = null;
+    }
   }
 
   async refreshSort() {

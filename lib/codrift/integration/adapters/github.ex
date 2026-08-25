@@ -16,6 +16,8 @@ defmodule Codrift.Integration.Adapters.GitHub do
   alias Codrift.Integration.HTTP
   alias Codrift.Integration.Item
 
+  import Codrift.Integration, only: [format_list: 1]
+
   @base "https://api.github.com"
 
   @impl true
@@ -170,7 +172,4 @@ defmodule Codrift.Integration.Adapters.GitHub do
 
     if token, do: [{"authorization", "Bearer #{token}"} | base], else: base
   end
-
-  defp format_list([]), do: "none"
-  defp format_list(items), do: Enum.join(items, ", ")
 end
