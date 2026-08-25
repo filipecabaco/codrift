@@ -32,17 +32,13 @@
     "@replit/codemirror-vim": "^6.3.0",
     "@steeze-ui/heroicons": "^2.4.2",
     "@steeze-ui/svelte-icon": "^1.6.2",
-    "@uiw/codemirror-theme-github": "^4.25.10",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^5.5.0",
-    "clsx": "^2.1.1",
     "codemirror": "^6.0.2",
     "marked": "^18.0.5",
-    "shiki": "^4.3.0",
-    "tailwind-merge": "^3.6.0",
-    "tailwind-variants": "^3.2.2"
+    "shiki": "^4.3.0"
   }
 }

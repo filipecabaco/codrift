@@ -36,21 +36,6 @@ defmodule Codrift.Initiative.Store do
   @doc "Returns the context folder path for an initiative (pure function, no GenServer call)."
   def context_path(id), do: Codrift.Paths.initiative_dir(id)
 
-  @doc """
-  Returns `true` when `path` is strictly inside `~/.codrift/initiatives/`.
-
-  Used as a safety guard before any read, write, or delete operation on
-  context files, preventing accidental access to project directories outside
-  the managed tree.
-  """
-  def context_file_path?(nil), do: false
-
-  def context_file_path?(path) do
-    base = Codrift.Paths.initiatives_base()
-    expanded = Path.expand(path)
-    String.starts_with?(expanded, base <> "/")
-  end
-
   @doc "Starts the store, optionally accepting `:name` and `:path` opts."
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)

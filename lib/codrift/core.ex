@@ -1044,7 +1044,7 @@ defmodule Codrift.Core do
   # Derived at the API boundary, never persisted: whether a directory is under
   # version control decides how the UI draws it (a repo you can diff vs a plain
   # folder), and that can change on disk between two calls.
-  defp tag_git(%{"path" => path} = dir), do: Map.put(dir, "git", Codrift.Files.git_repo?(path))
+  defp tag_git(%{"path" => path} = dir), do: Map.put(dir, "git", Codrift.Files.in_git_repo?(path))
 
   # Everything the user keeps in the initiative folder, as paths relative to it:
   # `initiative.md`, but also `scripts/deploy.sh` and `docs/runbook.md`. Skips

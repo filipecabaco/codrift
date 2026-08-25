@@ -27,15 +27,20 @@ defmodule Codrift.Files do
   end
 
   @doc """
-  True when `dir` sits inside a git working tree.
+  True when `dir` sits *anywhere inside* a git working tree.
+
+  Deliberately not named `git_repo?`: `Codrift.Worktree.git_repo?/1` answers
+  the narrower question "is this directory itself a repository root", and the
+  two disagree for every subdirectory of a clone. They used to share a name,
+  which made picking the wrong one a silent mistake at the call site.
 
   Walks up looking for `.git` (a directory in a normal clone, a file in a
   worktree) instead of shelling out to `git rev-parse`, because the UI asks
   this for every directory of every initiative on every refresh — a few `stat`
   calls, not a process spawn each.
   """
-  @spec git_repo?(String.t()) :: boolean()
-  def git_repo?(dir) when is_binary(dir), do: dir |> Path.expand() |> walk_up_for_git()
+  @spec in_git_repo?(String.t()) :: boolean()
+  def in_git_repo?(dir) when is_binary(dir), do: dir |> Path.expand() |> walk_up_for_git()
 
   defp walk_up_for_git(path) do
     parent = Path.dirname(path)
@@ -228,7 +233,7 @@ defmodule Codrift.Files do
       "path" => path,
       "exists" => File.exists?(path),
       "dir" => File.dir?(path),
-      "git" => git_repo?(path),
+      "git" => in_git_repo?(path),
       "git_root" => File.exists?(Path.join(path, ".git"))
     }
   end

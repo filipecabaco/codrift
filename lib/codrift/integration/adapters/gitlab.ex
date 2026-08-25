@@ -18,6 +18,8 @@ defmodule Codrift.Integration.Adapters.GitLab do
   alias Codrift.Integration.HTTP
   alias Codrift.Integration.Item
 
+  import Codrift.Integration, only: [format_list: 1]
+
   @impl true
   def name, do: "gitlab"
 
@@ -165,7 +167,4 @@ defmodule Codrift.Integration.Adapters.GitLab do
     host = System.get_env("GITLAB_HOST") || "gitlab.com"
     "https://#{host}/api/v4"
   end
-
-  defp format_list([]), do: "none"
-  defp format_list(items), do: Enum.join(items, ", ")
 end

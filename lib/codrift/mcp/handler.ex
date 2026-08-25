@@ -59,11 +59,6 @@ defmodule Codrift.MCP.Handler do
   @doc "Returns the raw server-info map (used for the MCP SSE endpoint event)."
   def server_info, do: @server_info
 
-  @doc "Returns a JSON-encoded MCP parse-error response."
-  def parse_error do
-    encode_error(nil, -32_700, "Parse error")
-  end
-
   @doc """
   Dispatches an already-decoded MCP JSON-RPC request map.
 

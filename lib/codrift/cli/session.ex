@@ -14,6 +14,8 @@ defmodule Codrift.CLI.Session do
       codrift session prune
   """
 
+  import Codrift.CLI.Output
+
   alias Codrift.Paths
 
   defp db_path, do: Path.join(Paths.data_dir(), "codrift.db")
@@ -167,8 +169,6 @@ defmodule Codrift.CLI.Session do
   defp ensure_exqlite do
     {:ok, _} = Application.ensure_all_started(:exqlite)
   end
-
-  defp print_json(data), do: IO.puts(JSON.encode!(data))
 
   defp row_to_session({agent_id, init_id, dir, session_id}) do
     %{agent_id: agent_id, initiative_id: init_id, dir: dir, session_id: session_id}

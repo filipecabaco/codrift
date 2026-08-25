@@ -18,6 +18,8 @@ defmodule Codrift.CLI.Initiative do
       codrift initiative delete  <id>
   """
 
+  import Codrift.CLI.Output
+
   alias Codrift.{ClaudePermissions, Initiative}
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.Paths
@@ -300,13 +302,5 @@ defmodule Codrift.CLI.Initiative do
 
   defp replace_dir(dirs, path, updated_entry) do
     Enum.map(dirs, &if(&1.path == path, do: updated_entry, else: &1))
-  end
-
-  defp print_json(data), do: IO.puts(JSON.encode!(data))
-
-  @spec fail(String.t()) :: no_return()
-  defp fail(msg) do
-    IO.puts(:stderr, JSON.encode!(%{error: msg}))
-    System.halt(1)
   end
 end

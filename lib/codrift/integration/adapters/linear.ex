@@ -18,6 +18,8 @@ defmodule Codrift.Integration.Adapters.Linear do
   alias Codrift.Integration.HTTP
   alias Codrift.Integration.Item
 
+  import Codrift.Integration, only: [format_list: 1]
+
   @graphql_url "https://api.linear.app/graphql"
 
   @impl true
@@ -167,7 +169,4 @@ defmodule Codrift.Integration.Adapters.Linear do
   end
 
   defp format_gql_errors(errors), do: Error.from_graphql(errors, name())
-
-  defp format_list([]), do: "none"
-  defp format_list(items), do: Enum.join(items, ", ")
 end

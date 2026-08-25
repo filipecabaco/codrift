@@ -15,6 +15,8 @@ defmodule Codrift.CLI.Integration do
   - API key env var: fallback for CI or headless environments.
   """
 
+  import Codrift.CLI.Output
+
   alias Codrift.Initiative
   alias Codrift.Initiative.Store
   alias Codrift.Integration
@@ -265,13 +267,5 @@ defmodule Codrift.CLI.Integration do
       {:error, %{reason: :econnrefused}} -> {:error, :server_unavailable}
       {:error, reason} -> {:error, inspect(reason)}
     end
-  end
-
-  defp print_json(data), do: IO.puts(JSON.encode!(data))
-
-  @spec fail(term()) :: no_return()
-  defp fail(reason) do
-    IO.puts(:stderr, JSON.encode!(%{error: to_string(reason)}))
-    System.halt(1)
   end
 end
