@@ -117,6 +117,40 @@ defmodule Codrift.CLI.MCPTest do
   # cover the three decisions that make `--profile` register in the right place:
   # which profiles were asked for, where that profile's config lives, and whether
   # the server is already there.
+  describe "registered?/1 and listing_line/1" do
+    # `claude mcp list` output is another program's human-facing text, so the
+    # match has to survive its indentation and the servers listed around ours.
+    @listing """
+    Checking MCP server health...
+
+      some-other: https://example.test/mcp - ✓ Connected
+      codrift: http://localhost:43117/mcp - ✓ Connected
+    """
+
+    test "finds our entry among the others" do
+      assert MCP.registered?(@listing)
+      assert MCP.listing_line(@listing) =~ "codrift: http://localhost:43117/mcp"
+    end
+
+    test "a listing without us is not a false positive" do
+      without = "  some-other: https://example.test/mcp - ✓ Connected\n"
+
+      refute MCP.registered?(without)
+      assert MCP.listing_line(without) == nil
+    end
+
+    test "a server whose name merely contains ours does not count" do
+      # `codrift-staging:` starts with our name as a substring but is a
+      # different server; the colon is what makes the match exact.
+      refute MCP.registered?("  codrift-staging: http://localhost:1/mcp\n")
+    end
+
+    test "empty output is simply not registered" do
+      refute MCP.registered?("")
+      assert MCP.listing_line("") == nil
+    end
+  end
+
   describe "profile_selection/1" do
     setup do
       path = Path.join(Codrift.Paths.data_dir(), "settings.json")
