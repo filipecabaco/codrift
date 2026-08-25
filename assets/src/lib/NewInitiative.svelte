@@ -178,7 +178,7 @@
     <select
       id="new-initiative-agent"
       bind:value={agent}
-      title="Which agent this initiative starts. Changeable later from the Context view."
+      title="Which agent this initiative starts. Changeable later with the p key, or from the Context view."
       class="rounded-md border border-border bg-canvas px-2 py-1 text-xs text-fg"
     >
       {#each ADAPTERS as a (a)}

@@ -62,7 +62,7 @@ defmodule Codrift.Files do
   """
   @spec list_subdirs(String.t()) :: %{base: String.t(), entries: [String.t()]}
   def list_subdirs(input) when is_binary(input) do
-    expanded = expand_home(input)
+    expanded = expand_user(input)
 
     base =
       cond do
@@ -85,12 +85,17 @@ defmodule Codrift.Files do
     %{base: Path.expand(base), entries: entries}
   end
 
-  # Elixir's Path.expand does not perform tilde expansion, so handle a leading
-  # `~` explicitly; everything else is returned untouched (the caller may still
-  # be mid-typing a relative fragment).
-  defp expand_home("~"), do: System.user_home!()
-  defp expand_home("~/" <> rest), do: Path.join(System.user_home!(), rest)
-  defp expand_home(other), do: other
+  @doc """
+  Expands a leading `~` to the user's home directory.
+
+  Elixir's `Path.expand/1` does not perform tilde expansion, so handle it
+  explicitly; everything else is returned untouched (the caller may still be
+  mid-typing a relative fragment).
+  """
+  @spec expand_user(String.t()) :: String.t()
+  def expand_user("~"), do: System.user_home!()
+  def expand_user("~/" <> rest), do: Path.join(System.user_home!(), rest)
+  def expand_user(other), do: other
 
   @doc """
   A cheap "what is in here?" summary of `base`, for the sidebar's directory

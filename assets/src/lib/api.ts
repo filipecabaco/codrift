@@ -200,6 +200,19 @@ export function setInitiativeAgent(initiativeId: string, agent: string): Promise
   return rpc<Initiative>("set_initiative_agent", { initiative_id: initiativeId, agent });
 }
 
+// The folder the directory picker starts browsing from. `null` until the user
+// sets one, at which point the picker still falls back to `~`.
+export async function getWorkspaceDir(): Promise<string | null> {
+  const res = await rpc<{ path: string | null }>("get_workspace_dir");
+  return res.path;
+}
+
+/** Passing an empty path clears the preference. */
+export async function setWorkspaceDir(path: string): Promise<string | null> {
+  const res = await rpc<{ path: string | null }>("set_workspace_dir", { path });
+  return res.path;
+}
+
 // The variable each tool reads for "which account/config folder am I?", used to
 // prefill a new profile. Adapters without a documented one start with no rows.
 export const PROFILE_CONFIG_VAR: Record<string, string> = {

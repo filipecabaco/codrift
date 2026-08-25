@@ -44,6 +44,8 @@ defmodule Codrift.Config.Keybindings do
   | `palette` | `ctrl+p` | Open command palette |
   | `start_orchestration` | `o` | Start orchestration for the selected initiative |
   | `branch_initiative` | `b` | Put every git directory on the initiative's branch |
+  | `initiative_agent` | `p` | Pick which agent/profile the selected initiative launches |
+  | `settings` | `ctrl+,` | Open Settings |
   | `focus_left` | `ctrl+left` | Move focus left: pane → pane → sidebar |
   | `focus_right` | `ctrl+right` | Move focus right: sidebar → pane → pane |
   | `focus_up` | `ctrl+up` | Move focus up, between stacked panes |
@@ -94,6 +96,16 @@ defmodule Codrift.Config.Keybindings do
     palette: "ctrl+p",
     start_orchestration: "o",
     branch_initiative: "b",
+    initiative_agent: "p",
+    settings: "ctrl+,",
+    # Git, as a row of bare keys: bare because the capture handler eats modifier
+    # combos before the PTY sees them, and taking ⌃R from a shell to mean
+    # "rebase" would cost every user reverse-search. f/m/u are mnemonic; g is
+    # simply the free key that keeps the four together.
+    git_fetch: "f",
+    git_rebase: "g",
+    git_commit: "m",
+    git_push: "u",
     focus_left: "ctrl+left",
     focus_right: "ctrl+right",
     focus_up: "ctrl+up",
@@ -124,6 +136,12 @@ defmodule Codrift.Config.Keybindings do
           | :palette
           | :start_orchestration
           | :branch_initiative
+          | :initiative_agent
+          | :git_fetch
+          | :git_rebase
+          | :git_commit
+          | :git_push
+          | :settings
           | :focus_left
           | :focus_right
           | :focus_up
@@ -185,6 +203,12 @@ defmodule Codrift.Config.Keybindings do
   defp string_to_action("palette"), do: :palette
   defp string_to_action("start_orchestration"), do: :start_orchestration
   defp string_to_action("branch_initiative"), do: :branch_initiative
+  defp string_to_action("initiative_agent"), do: :initiative_agent
+  defp string_to_action("settings"), do: :settings
+  defp string_to_action("git_fetch"), do: :git_fetch
+  defp string_to_action("git_rebase"), do: :git_rebase
+  defp string_to_action("git_commit"), do: :git_commit
+  defp string_to_action("git_push"), do: :git_push
   defp string_to_action("focus_left"), do: :focus_left
   defp string_to_action("focus_right"), do: :focus_right
   defp string_to_action("focus_up"), do: :focus_up

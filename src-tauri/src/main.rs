@@ -275,7 +275,11 @@ fn build_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<
         &[
             &PredefinedMenuItem::about(handle, Some("About Codrift"), Some(AboutMetadata::default()))?,
             &sep()?,
-            &command(handle, "appearance", "Appearance…", Some("CmdOrCtrl+,"))?,
+            &command(handle, "settings", "Settings…", Some("CmdOrCtrl+,"))?,
+            // Direct jumps to a section of that same window. Only Settings gets
+            // ⌘, — it is the door, and the page binds the same key to the same
+            // action for the dev server, where there is no menu to swallow it.
+            &command(handle, "appearance", "Appearance…", None)?,
             &command(handle, "agent_profiles", "Launch Profiles…", Some("Shift+CmdOrCtrl+P"))?,
             &command(handle, "integrations", "Integrations…", Some("Shift+CmdOrCtrl+I"))?,
             &command(handle, "setup", "Run Setup…", None)?,
@@ -295,6 +299,7 @@ fn build_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<
             &sep()?,
             &command(handle, "add_dir", "Add Directory…", Some("Shift+CmdOrCtrl+A"))?,
             &sep()?,
+            &command(handle, "initiative_agent", "Change Agent…", None)?,
             &command(handle, "branch_initiative", "Branch Git Directories", Some("Shift+CmdOrCtrl+B"))?,
             &command(handle, "sync_context", "Sync Imported Context", None)?,
             &sep()?,

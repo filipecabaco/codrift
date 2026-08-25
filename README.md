@@ -168,6 +168,7 @@ Installs into Claude Code, Codex, Cursor, Gemini CLI, Copilot and Opencode.
 | `⇅` in the sidebar header | Order initiatives by created / recent / name / status |
 | `⌘D` / `⌘⇧D` | Split the content area side by side / stacked |
 | `⌘W` | Close the focused pane |
+| `Ctrl+,` | Settings — workspace folder, appearance, launch profiles, integrations |
 | `Ctrl+Q` | Quit |
 
 ### Initiatives & agents
@@ -181,10 +182,13 @@ Installs into Claude Code, Codex, Cursor, Gemini CLI, Copilot and Opencode.
 | `t` | Start a raw `$SHELL` terminal in the directory under the cursor |
 | `d` | Delete or stop (context-sensitive) |
 | `o` | Start orchestration for the selected initiative |
+| `p` | Change which agent (or launch profile) this initiative starts |
+| `f` / `g` / `m` / `u` | Git: fetch / rebase / commit / push (acts on the worktree) |
 | `[` / `]` | Cycle initiative status |
 
 Use the **Launch** dropdown next to a directory (or the palette) to start Codex,
-Opencode, Gemini, Copilot, or Cursor.
+Opencode, Gemini, Copilot, or Cursor — or `p` to set the initiative's agent from
+the keyboard.
 
 ### Context, tree & editor
 

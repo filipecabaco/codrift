@@ -7,7 +7,6 @@
   import { onMount } from "svelte";
   import { Icon } from "@steeze-ui/svelte-icon";
   import { Plus, Trash } from "@steeze-ui/heroicons";
-  import Overlay from "$lib/Overlay.svelte";
   import {
     ADAPTERS,
     PROFILE_CONFIG_VAR,
@@ -17,7 +16,7 @@
     type AgentProfileConfig,
   } from "$lib/api";
 
-  let { onClose, onChanged }: { onClose: () => void; onChanged?: () => void } = $props();
+  let { onChanged }: { onChanged?: () => void } = $props();
 
   // Env is edited as ordered rows, not a map: a map would reorder on every
   // keystroke and drop a row the moment two keys collided mid-typing.
@@ -154,19 +153,25 @@
     }
   }
 
-  // Dismissal backs out one level (confirm → form → panel) rather than throwing
-  // away a half-written profile and the panel in one keystroke. Overlay routes
-  // both Esc and the backdrop click here.
-  function back() {
-    if (confirmDelete) confirmDelete = null;
-    else if (draft) draft = null;
-    else onClose();
+  // Esc backs out one level (confirm → form) rather than throwing away a
+  // half-written profile and the whole Settings window in one keystroke.
+  // Returning false hands the key back to the shell, which closes Settings.
+  export function onEscape(): boolean {
+    if (confirmDelete) {
+      confirmDelete = null;
+      return true;
+    }
+    if (draft) {
+      draft = null;
+      return true;
+    }
+    return false;
   }
 
   onMount(refresh);
 </script>
 
-<Overlay label="Launch profiles" width="620px" top="10vh" padded={false} onClose={back}>
+<div class="flex h-full min-h-0 flex-col">
   <div class="flex items-center justify-between gap-4 border-b border-border px-4 py-3">
     <div>
       <h2 class="text-[13px] font-semibold text-fg">Launch profiles</h2>
@@ -188,7 +193,7 @@
     <p class="border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-[11px] text-red-300">{error}</p>
   {/if}
 
-  <div class="max-h-[52vh] min-h-0 overflow-y-auto p-2">
+  <div class="min-h-0 flex-1 overflow-y-auto p-2">
     {#if loading}
       <p class="p-3 text-xs text-muted">Loading…</p>
     {:else}
@@ -250,7 +255,7 @@
   </div>
 
   {#if draft}
-    <div class="border-t border-border bg-canvas/40 px-4 py-3">
+    <div class="max-h-[55%] shrink-0 overflow-y-auto border-t border-border bg-canvas/40 px-4 py-3">
       <div class="flex items-end gap-3">
         <label class="flex-1">
           <span class="mb-1 block text-[11px] text-muted">Name</span>
@@ -395,7 +400,7 @@
     </div>
   {/if}
 
-  <p class="border-t border-border px-4 py-2 text-[11px] text-muted">
-    Stored in <code class="rounded bg-canvas px-1">~/.codrift/settings.json</code> · Esc to close
+  <p class="shrink-0 border-t border-border px-4 py-2 text-[11px] text-muted">
+    Stored in <code class="rounded bg-canvas px-1">~/.codrift/settings.json</code>
   </p>
-</Overlay>
+</div>

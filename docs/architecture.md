@@ -76,7 +76,7 @@ Codrift (Application)
 | `Codrift.OAuth.Config` | Per-service OAuth parameters, env var names, endpoints |
 | `Codrift.MCP.Handler` | JSON-RPC 2.0 dispatch |
 | `Codrift.Config.Keybindings` | Loads `~/.codrift/keybindings.json`, merges over defaults; served to the UI via the `get_keybindings` RPC |
-| `Codrift.Config.Settings` | Reads/writes `~/.codrift/settings.json`; tracks per-adapter start counts for agent picker sort order |
+| `Codrift.Config.Settings` | Reads/writes `~/.codrift/settings.json`: launch profiles, default agent, default workspace folder, theme, font, per-adapter start counts |
 
 ## Frontend
 

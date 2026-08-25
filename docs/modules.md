@@ -181,9 +181,18 @@ palette hints, so displayed labels always match the user's config.
 
 Pure module. Reads/writes `~/.codrift/settings.json` (Elixir 1.18+ JSON module).
 
-Tracks per-adapter start counts for sorting the agent launcher (most-used first).
+Holds everything the Settings window edits: launch profiles, the default agent
+for new initiatives, the default workspace folder the "add directory" picker
+starts from, theme and font, and per-adapter start counts for sorting the agent
+launcher (most-used first).
 
-API: `adapter_start_counts/0`, `increment_adapter_start/1`
+Paths are stored verbatim, so a `~`-relative value stays portable; expansion
+happens where the path is used.
+
+API: `profiles/0`, `profile/1`, `put_profile/2`, `delete_profile/1`,
+`default_agent/0`, `put_default_agent/1`, `workspace_dir/0`,
+`put_workspace_dir/1`, `clear_workspace_dir/0`, `theme/0`, `put_theme/1`,
+`font/0`, `put_font/2`, `adapter_start_counts/0`, `increment_adapter_start/1`
 
 ## Codrift.Integration (behaviour)
 
