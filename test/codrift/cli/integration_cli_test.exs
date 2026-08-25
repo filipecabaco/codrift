@@ -19,6 +19,7 @@ defmodule Codrift.CLI.IntegrationCLITest do
 
   alias Codrift.CLI.Integration, as: CLI
   alias Codrift.Integration
+  alias Codrift.OAuth.Config, as: OAuthConfig
 
   @moduletag :tmp_dir
 
@@ -54,12 +55,12 @@ defmodule Codrift.CLI.IntegrationCLITest do
     test "the auth type matches the flow the OAuth config declares" do
       by_name = Map.new(run_json(["services"]), &{&1["name"], &1["auth"]})
 
-      for service <- Codrift.OAuth.Config.pkce_services(), Map.has_key?(by_name, service) do
+      for service <- OAuthConfig.pkce_services(), Map.has_key?(by_name, service) do
         assert by_name[service] =~ "pkce" or by_name[service] =~ "browser",
                "#{service} should report a browser flow, got #{by_name[service]}"
       end
 
-      for service <- Codrift.OAuth.Config.device_flow_services(),
+      for service <- OAuthConfig.device_flow_services(),
           Map.has_key?(by_name, service) do
         assert by_name[service] =~ "device",
                "#{service} should report a device flow, got #{by_name[service]}"
