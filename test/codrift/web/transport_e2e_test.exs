@@ -156,6 +156,13 @@ defmodule Codrift.Web.TransportE2ETest do
     header <> mask <> masked
   end
 
+  # A masked ping (opcode 0x9). The spec caps control-frame payloads at 125
+  # bytes, which is all a marker needs.
+  defp ws_ping_frame(payload) when byte_size(payload) < 126 do
+    mask = :crypto.strong_rand_bytes(4)
+    <<0x89, 0x80 ||| byte_size(payload)>> <> mask <> mask_payload(payload, mask)
+  end
+
   defp mask_payload(payload, mask) do
     payload
     |> :binary.bin_to_list()
@@ -209,16 +216,22 @@ defmodule Codrift.Web.TransportE2ETest do
       :ok =
         :gen_tcp.send(sock, ws_text_frame(~s({"t":"d","agent_id":"#{agent_id}","d":"#{big}"})))
 
-      # Survival is read off the socket, not off the shell: the bytes reach the
-      # PTY and come straight back as `output` frames, which is the entire
-      # claim — an oversized frame is accepted and the connection stays usable.
+      # Survival is read off the socket itself, with a ping: Bandit answers
+      # control frames on its own, so a pong echoing our payload proves the
+      # connection is alive. Had the oversized frame been rejected, the
+      # connection would be closed and no pong could come back.
       #
-      # Asking the shell to *run* something afterwards made this a test of how
-      # fast zsh's line editor can redraw a 100 000-character line instead. When
-      # it takes the per-character path (`x \e[K\e[K`, over and over) that is
-      # effectively unbounded, and the test either passed in 50 ms or hung.
-      {output, _rest} = read_until(sock, ~s("event":"output"), rest)
-      assert output =~ ~s("event":"output"), "socket died on an oversized frame"
+      # Neither obvious alternative holds on both platforms. Asking the shell to
+      # *run* something afterwards makes this a test of how fast a line editor
+      # can redraw a 100 000-character line — macOS zsh takes the per-character
+      # path and effectively never finishes. Waiting for the paste to return as
+      # `output` frames assumes the shell echoes it, which the minimal bash on
+      # the Linux runner does not.
+      marker = Base.encode16(:crypto.strong_rand_bytes(8))
+      :ok = :gen_tcp.send(sock, ws_ping_frame(marker))
+
+      {pong, _rest} = read_until(sock, marker, rest)
+      assert pong =~ marker, "socket died on an oversized frame"
 
       :gen_tcp.close(sock)
     end

@@ -293,16 +293,13 @@ defmodule Codrift.AgentProcessTest do
       # TUI reads as a paste (and note the extra blank line the LF submitted).
       AgentProcess.send_input(pid, "alpha\nomega")
 
-      assert_receive {:agent_output, _, first}, 2_000
-      assert first =~ "alpha"
+      early = output_within(80)
+      assert early =~ "alpha", "the prompt body never reached the pty"
 
-      refute first =~ "omega",
+      refute early =~ "omega",
              "prompt body and Enter were written together; a TUI reads that as a paste"
 
-      refute_receive {:agent_output, _, _}, 80
-
-      assert_receive {:agent_output, _, second}, 2_000
-      assert second =~ "omega"
+      assert await_output("omega", 2_000), "the deferred Enter never arrived"
     end
 
     test "a keystroke cannot overtake the Enter deferred behind a prompt" do
@@ -382,6 +379,54 @@ defmodule Codrift.AgentProcessTest do
       {:agent_output, _, _} -> collect_output(pid)
     after
       200 -> pid |> AgentProcess.recent_output() |> Enum.join()
+    end
+  end
+
+  # Everything the agent emits in the next `ms`, joined.
+  #
+  # These assert on *content over a window*, never on which chunk carried what:
+  # how a tty splits one write across reads is a platform detail. macOS hands
+  # back "alpha\r\n" in one go where Linux splits it into "alpha" and "\r\n",
+  # and an assertion phrased as "nothing else arrives for 80ms" fails on the
+  # second for reasons that have nothing to do with what it is testing.
+  defp output_within(ms) do
+    collect_within(System.monotonic_time(:millisecond) + ms, "")
+  end
+
+  defp collect_within(deadline, acc) do
+    case deadline - System.monotonic_time(:millisecond) do
+      left when left <= 0 ->
+        acc
+
+      left ->
+        receive do
+          {:agent_output, _, data} -> collect_within(deadline, acc <> data)
+        after
+          left -> acc
+        end
+    end
+  end
+
+  # Waits for `needle`, across however many chunks it takes to arrive.
+  defp await_output(needle, ms) do
+    await_output(needle, System.monotonic_time(:millisecond) + ms, "")
+  end
+
+  defp await_output(needle, deadline, acc) do
+    if String.contains?(acc, needle) do
+      true
+    else
+      case deadline - System.monotonic_time(:millisecond) do
+        left when left <= 0 ->
+          false
+
+        left ->
+          receive do
+            {:agent_output, _, data} -> await_output(needle, deadline, acc <> data)
+          after
+            left -> false
+          end
+      end
     end
   end
 
