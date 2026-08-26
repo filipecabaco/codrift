@@ -49,7 +49,8 @@ defmodule Codrift.AgentSupervisor do
          profile: Keyword.get(opts, :profile),
          profile_env: Keyword.get(opts, :profile_env, []),
          command: Keyword.get(opts, :command),
-         extra_args: Keyword.get(opts, :extra_args, [])
+         extra_args: Keyword.get(opts, :extra_args, []),
+         role: Keyword.get(opts, :role, :user)
        ]}
 
     case DynamicSupervisor.start_child(server, spec) do

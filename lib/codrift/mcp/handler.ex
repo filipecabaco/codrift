@@ -77,7 +77,7 @@ defmodule Codrift.MCP.Handler do
     name = params["name"]
     args = params["arguments"] || %{}
 
-    case Codrift.Core.call(name, args) do
+    case Codrift.Core.call(name, args, source: :mcp) do
       {:ok, result} ->
         encode_ok(id, %{"content" => [%{"type" => "text", "text" => JSON.encode!(result)}]})
 

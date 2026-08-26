@@ -34,6 +34,19 @@ defmodule Codrift.Agent.Adapters.ClaudeTest do
     assert :running = Claude.parse_status("Running some tool...")
   end
 
+  # A working Claude Code repaints its prompt box every frame, so a frame that
+  # carries the ❯ says nothing about readiness on its own. Reading it as
+  # `:awaiting_input` told an orchestrator the agent was free the entire time it
+  # was busy.
+  test "a frame drawn while working is :running even though it carries the prompt char" do
+    frame = "\e[2J❯ Verification task\n✻ Reticulating… ⏵⏵ esc to interrupt"
+    assert :running = Claude.parse_status(frame)
+  end
+
+  test "the same frame without the interrupt hint is :awaiting_input" do
+    assert :awaiting_input = Claude.parse_status("\e[2J❯ Cogitated for 1s · done")
+  end
+
   test "parse_status returns nil for unrecognized output" do
     assert nil == Claude.parse_status("just some text")
   end

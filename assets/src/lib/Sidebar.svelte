@@ -18,17 +18,23 @@
   // The initiative tree. Rows come from `workspace.rows`, so what renders and
   // what j/k walks are the same list.
   import { Icon } from "@steeze-ui/svelte-icon";
-  import { workspace as ws, isDead, needsInput, statusLabel } from "$lib/workspace.svelte";
   import {
-    AgentIcon,
+    workspace as ws,
+    agentIconLabel,
+    isDead,
+    isOrchestrated,
+    needsInput,
+    statusLabel,
+  } from "$lib/workspace.svelte";
+  import {
     FolderIcon,
     FolderOpenIcon,
     InitiativeIcon,
     MemoryIcon,
     PromoteIcon,
     ScratchpadIcon,
-    TerminalAgentIcon,
     WorktreeIcon,
+    agentIcon,
     contextFileIcon,
     dirIcon,
   } from "$lib/icons";
@@ -57,7 +63,12 @@
     /** Open panes per initiative, for initiatives that currently have a split. */
     paneStrips: Record<
       string,
-      { label: string; kind: "terminal" | "agent" | "view"; active: boolean }[]
+      {
+        label: string;
+        kind: "terminal" | "agent" | "view";
+        active: boolean;
+        role?: string | null;
+      }[]
     >;
     onSelectPane: (initId: string, idx: number) => void;
     newInitiativeKey: string;
@@ -252,10 +263,11 @@
                   onclick={() => onSelectPane(init.id, i)}
                 >
                   {#if chip.kind !== "view"}
+                    {@const chipAdapter = chip.kind === "terminal" ? "terminal" : "agent"}
                     <Icon
-                      src={chip.kind === "terminal" ? TerminalAgentIcon : AgentIcon}
+                      src={agentIcon(chipAdapter, chip.role)}
                       class="size-2.5 shrink-0"
-                      title={chip.kind === "terminal" ? "Terminal" : "Agent"}
+                      title={agentIconLabel(chipAdapter, chip.role)}
                     />
                   {/if}
                   <span class="min-w-0 truncate">{chip.label}</span>
@@ -400,9 +412,23 @@
       oncontextmenu={(e) =>
         onContextMenu(e, { kind: "agent", initId: init.id, agentId: agent.id })}
     >
+      <!-- Role decides the glyph, and only then the adapter: who is driving an
+           agent is the one thing the row cannot say in words, whereas the
+           adapter is written immediately to its right. The amber is left to
+           mean exactly one thing — blocked on you — so an orchestrated agent
+           that is *not* blocked is lifted a step out of the muted grey
+           instead. -->
       <Icon
-        src={agent.adapter === "terminal" ? TerminalAgentIcon : AgentIcon}
-        class={["size-3.5 shrink-0", needsInput(agent.status) ? "text-accent" : "text-muted"]}
+        src={agentIcon(agent.adapter, agent.role)}
+        title={agentIconLabel(agent.adapter, agent.role)}
+        class={[
+          "size-3.5 shrink-0",
+          needsInput(agent.status)
+            ? "text-accent"
+            : isOrchestrated(agent.role)
+              ? "text-fg/70"
+              : "text-muted",
+        ]}
       />
       <!-- Adapter, profile and status compete for a narrow sidebar. The adapter
            and the status are short and fixed, so the user-named profile is the

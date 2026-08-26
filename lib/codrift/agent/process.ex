@@ -35,6 +35,17 @@ defmodule Codrift.AgentProcess do
   `:crashed` on a non-zero exit, so supervisors can tell a finished agent
   from a dead one.
 
+  ## Roles
+
+  Who started an agent changes how it is presented, so each one carries a
+  `:role`:
+
+  - `:user` — started from the desktop UI or the CLI. The default.
+  - `:orchestrator` — the agent a `Codrift.Conductor` runs in orchestrator mode,
+    which starts and directs the others through the MCP tools.
+  - `:directed` — started through the MCP door, i.e. *by* another agent rather
+    than by the person at the keyboard.
+
   ## Subscriptions
 
   Subscribers receive:
@@ -68,9 +79,12 @@ defmodule Codrift.AgentProcess do
     :profile,
     :command,
     :log_fd,
+    role: :user,
     profile_env: [],
     extra_args: [],
-    last_size: nil
+    last_size: nil,
+    submit_timer: nil,
+    utf8_tail: ""
   ]
 
   @doc false
@@ -85,7 +99,13 @@ defmodule Codrift.AgentProcess do
   @doc "Starts an agent process. Required opts: `:id`, `:initiative_id`, `:dir`, `:adapter`."
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "Sends `text` followed by a newline. For `:pty` mode, use `send_raw/2` to forward individual keypresses."
+  @doc """
+  Sends `text` and then submits it.
+
+  On the `:pty` path the Enter keystroke is a *separate* write a beat later, so a
+  TUI reads it as a keypress rather than swallowing it into a pasted block. Use
+  `send_raw/2` to forward individual keypresses, or to type without submitting.
+  """
   def send_input(pid, text), do: GenServer.cast(pid, {:input, text})
 
   @doc "Sends raw bytes directly to the process stdin — use for `:pty` keypress forwarding."
@@ -107,6 +127,11 @@ defmodule Codrift.AgentProcess do
   @buffer_limit 1_000
   @buffer_bytes_limit 1_048_576
 
+  # How long the Enter keystroke waits behind the prompt body on the PTY path.
+  # Long enough that a TUI's event loop reads the two as separate events, short
+  # enough to be invisible to whoever is waiting for the agent to start.
+  @submit_delay_ms 150
+
   @doc "Returns the `n` most recent output lines in chronological order."
   def recent_output(pid, n \\ 50), do: GenServer.call(pid, {:recent_output, n})
 
@@ -126,6 +151,7 @@ defmodule Codrift.AgentProcess do
     profile_env = Keyword.get(opts, :profile_env, [])
     command = Keyword.get(opts, :command)
     extra_args = Keyword.get(opts, :extra_args, [])
+    role = Keyword.get(opts, :role, :user)
     mode = adapter.mode()
 
     if Process.whereis(Codrift.AgentRegistry) do
@@ -147,6 +173,7 @@ defmodule Codrift.AgentProcess do
       subscribers: %{},
       conversation_started: false,
       raw_line_buf: "",
+      role: role,
       profile: profile,
       profile_env: profile_env,
       command: command,
@@ -226,6 +253,10 @@ defmodule Codrift.AgentProcess do
     do: {:noreply, state}
 
   def handle_cast({:raw, data}, %{mode: :pty, exec_pid: pid} = state) when not is_nil(pid) do
+    # A keystroke must never land between a prompt body and the Enter deferred
+    # behind it — the two lines would merge into one, and the keystrokes the UI
+    # forwards arrive on exactly this path. Let the queued Enter out first.
+    state = flush_submit(state)
     :exec.send(pid, data)
     {:noreply, state}
   end
@@ -249,9 +280,27 @@ defmodule Codrift.AgentProcess do
 
   def handle_cast({:resize, _cols, _rows}, state), do: {:noreply, state}
 
+  # The prompt body and the Enter keystroke go out as two writes with a gap
+  # between them, because a TUI reading raw stdin cannot tell a burst write from
+  # a paste. Claude Code, and every other Ink or Bubble Tea prompt, treats one
+  # large multi-line arrival as pasted text: the embedded newlines are inserted
+  # literally and the trailing terminator is swallowed into the same block. So
+  # `text <> "\r\n"` in a single write left the prompt typed but never
+  # submitted, and the agent sat there looking idle. Arriving on its own, a lone
+  # CR is read as the keypress it is. (CR, not CRLF: Enter is one keystroke, and
+  # the LF submitted a second, empty line.)
+  def handle_cast({:input, _text}, %{mode: :pty, exec_pid: nil} = state),
+    do: {:noreply, state}
+
   def handle_cast({:input, text}, %{mode: :pty} = state) do
-    :exec.send(state.exec_pid, text <> "\r\n")
-    {:noreply, %{state | status: :running}}
+    # A second prompt arriving inside the gap must not wedge its body between
+    # this body and its terminator: let the queued Enter out first.
+    state = flush_submit(state)
+
+    :exec.send(state.exec_pid, text)
+    timer = Process.send_after(self(), :submit_input, @submit_delay_ms)
+
+    {:noreply, transition(%{state | submit_timer: timer}, :input_pending)}
   end
 
   def handle_cast({:input, text}, %{mode: :interactive} = state) do
@@ -282,7 +331,8 @@ defmodule Codrift.AgentProcess do
        adapter: state.adapter,
        status: state.status,
        mode: state.mode,
-       profile: state.profile
+       profile: state.profile,
+       role: state.role
      }, state}
   end
 
@@ -293,7 +343,18 @@ defmodule Codrift.AgentProcess do
   def handle_call({:recent_output, n}, _from, state) do
     # O(size), but only on an explicit replay — never per chunk, which is the
     # whole point of the queue.
-    {:reply, state.buffer |> :queue.to_list() |> Enum.take(-n), state}
+    #
+    # Scrubbing here is belt and braces: `process_output/2` already keeps split
+    # codepoints out of the buffer, but this is the binary a JSON encoder gets
+    # handed (`get_agent_output`), and an encoder that raises on one stray byte
+    # takes the orchestrator's only view of the agent with it.
+    output =
+      state.buffer
+      |> :queue.to_list()
+      |> Enum.take(-n)
+      |> Enum.map(&scrub/1)
+
+    {:reply, output, state}
   end
 
   def handle_call({:subscribe, pid}, _from, state) do
@@ -315,6 +376,9 @@ defmodule Codrift.AgentProcess do
       when stream in [:stdout, :stderr] do
     {:noreply, process_output(state, data)}
   end
+
+  # The Enter keystroke for a prompt sent `@submit_delay_ms` ago.
+  def handle_info(:submit_input, state), do: {:noreply, do_submit(state)}
 
   # PTY process exited (erlexec monitor message)
   def handle_info({:DOWN, ospid, :process, _pid, reason}, %{exec_ospid: ospid} = state) do
@@ -392,13 +456,81 @@ defmodule Codrift.AgentProcess do
   end
 
   defp process_output(state, data) do
-    new_status = state.adapter.parse_status(data) || state.status
-    state = push_buffer(state, data)
-    for {sub, _} <- state.subscribers, do: send(sub, {:agent_output, state.id, data})
+    {data, tail} = split_utf8(state.utf8_tail <> data)
+    state = %{state | utf8_tail: tail}
 
-    if new_status != state.status, do: broadcast_status(state, new_status)
+    if data == "" do
+      state
+    else
+      new_status = state.adapter.parse_status(data) || state.status
+      state = push_buffer(state, data)
+      for {sub, _} <- state.subscribers, do: send(sub, {:agent_output, state.id, data})
 
-    %{state | status: new_status}
+      if new_status != state.status, do: broadcast_status(state, new_status)
+
+      %{state | status: new_status}
+    end
+  end
+
+  # A PTY read ends on a byte boundary, not a codepoint boundary, so a
+  # multi-byte character routinely arrives split across two chunks — and a TUI
+  # drawing box characters, spinners and emoji splits one more or less
+  # constantly. Left in the buffer the dangling head is not valid UTF-8, which
+  # is what made `get_agent_output` raise `:unexpected_end` on every call. Hold
+  # the tail back and prepend it to the next chunk: at most three bytes ever
+  # wait, and the transcript log still receives every byte in order.
+  defp split_utf8(data) do
+    case :unicode.characters_to_binary(data) do
+      decoded when is_binary(decoded) ->
+        {decoded, ""}
+
+      {:incomplete, decoded, tail} ->
+        {decoded, tail}
+
+      # Genuinely invalid bytes rather than a split: no later chunk completes
+      # them, so replace them instead of stalling the stream behind them.
+      {:error, _decoded, _rest} ->
+        {String.replace_invalid(data), ""}
+    end
+  end
+
+  # `String.replace_invalid/1` walks the binary in Elixir, which measured ~5 ms
+  # over a full 1 MB buffer — real money on a path the UI hits to draw
+  # scrollback. `:unicode.characters_to_binary/1` is a BIF and hands back the
+  # same binary when it is already valid, which after `split_utf8/1` is every
+  # chunk but a pathological one.
+  defp scrub(data) do
+    case :unicode.characters_to_binary(data) do
+      valid when is_binary(valid) -> valid
+      _ -> String.replace_invalid(data)
+    end
+  end
+
+  # Writes the Enter keystroke that `handle_cast({:input, ...})` deferred. Until
+  # it lands the agent is `:input_pending` — text in its box, nothing submitted
+  # — which is the state the old code reported as `:running`.
+  defp do_submit(%{submit_timer: nil} = state), do: state
+
+  defp do_submit(%{exec_pid: nil} = state), do: %{state | submit_timer: nil}
+
+  defp do_submit(state) do
+    :exec.send(state.exec_pid, "\r")
+    transition(%{state | submit_timer: nil}, :running)
+  end
+
+  defp flush_submit(%{submit_timer: nil} = state), do: state
+
+  defp flush_submit(state) do
+    Process.cancel_timer(state.submit_timer)
+    do_submit(state)
+  end
+
+  # Sets a status and tells subscribers about it, in that order.
+  defp transition(%{status: status} = state, status), do: state
+
+  defp transition(state, status) do
+    broadcast_status(state, status)
+    %{state | status: status}
   end
 
   # Fans a status transition out to subscribers. `:awaiting_input` additionally

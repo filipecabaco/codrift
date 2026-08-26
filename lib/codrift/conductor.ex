@@ -134,7 +134,8 @@ defmodule Codrift.Conductor do
     ctx_dir = state.context_dir || Store.context_path(state.initiative_id)
 
     case AgentSupervisor.start_agent(state.initiative_id, ctx_dir, state.adapter,
-           server: state.agent_supervisor
+           server: state.agent_supervisor,
+           role: :orchestrator
          ) do
       {:ok, pid} ->
         AgentProcess.subscribe(pid)

@@ -74,6 +74,7 @@ defmodule Codrift.Web.EventRelay do
     |> AgentProcess.status()
     |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
     |> Map.update!(:status, &to_string/1)
+    |> Map.update!(:role, &to_string/1)
   end
 
   @impl true

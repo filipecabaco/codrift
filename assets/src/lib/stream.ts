@@ -7,10 +7,14 @@ import type { Initiative } from "$lib/api";
 export type AgentStatus =
   | "starting"
   | "running"
+  | "input_pending"
   | "awaiting_input"
   | "idle"
   | "stopped"
   | "crashed";
+
+/** Who started an agent. Decides how it is drawn, not what it can do. */
+export type AgentRole = "user" | "orchestrator" | "directed";
 
 /** Shape the backend sends for an agent (mirrors a `list_agents` entry). */
 export type AgentInfo = {
@@ -21,6 +25,7 @@ export type AgentInfo = {
   initiative_id: string;
   mode: string;
   profile?: string | null;
+  role?: AgentRole;
 };
 
 /**

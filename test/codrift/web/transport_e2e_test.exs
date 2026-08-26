@@ -60,9 +60,18 @@ defmodule Codrift.Web.TransportE2ETest do
 
     # Don't wait for a spontaneous PS1 prompt — minimal CI shells (bash without a
     # profile) print none. Nudge the PTY with a marker command and wait until it
-    # echoes back, which proves the shell is live and accepting input.
-    marker = "READY_#{System.unique_integer([:positive])}"
-    _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo #{marker}"})
+    # comes back, which proves the shell is live and *running* what it is sent.
+    #
+    # The marker is arithmetic the shell has to evaluate, so what appears on
+    # screen while the command is being typed can never contain it. An
+    # interactive shell echoes as it goes, and `send_to_agent` writes the body
+    # and the Enter as two writes, so "the text is visible" and "the shell ran
+    # it" are genuinely different moments — a nudge whose literal text is the
+    # marker cannot tell them apart, and the caller proceeds against a shell
+    # that has not started.
+    n = System.unique_integer([:positive])
+    marker = "READY_#{n}"
+    _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo READY_$((#{n}))"})
 
     assert eventually(fn -> String.contains?(agent_output(agent_id), marker) end),
            "shell agent never became ready (no echo of nudge command)"
@@ -192,25 +201,24 @@ defmodule Codrift.Web.TransportE2ETest do
     test "accepts a paste larger than the default frame limit", %{port: port, tmp_dir: tmp_dir} do
       {_initiative_id, agent_id} = start_live_agent(tmp_dir)
 
-      {sock, _rest} = ws_connect(port, "/ws")
+      {sock, rest} = ws_connect(port, "/ws")
 
-      # ~100 KB of pasted text, with no newline so the shell just buffers it.
+      # ~100 KB of pasted text in one frame.
       big = String.duplicate("x", 100_000)
 
       :ok =
         :gen_tcp.send(sock, ws_text_frame(~s({"t":"d","agent_id":"#{agent_id}","d":"#{big}"})))
 
-      # The socket survived, so a normal keystroke frame still lands.
-      marker = "AFTER_BIG_PASTE"
-
-      :ok =
-        :gen_tcp.send(
-          sock,
-          ws_text_frame(~s({"t":"d","agent_id":"#{agent_id}","d":"\\u0015echo #{marker}\\n"}))
-        )
-
-      assert eventually(fn -> String.contains?(agent_output(agent_id), marker) end),
-             "socket died on an oversized frame"
+      # Survival is read off the socket, not off the shell: the bytes reach the
+      # PTY and come straight back as `output` frames, which is the entire
+      # claim — an oversized frame is accepted and the connection stays usable.
+      #
+      # Asking the shell to *run* something afterwards made this a test of how
+      # fast zsh's line editor can redraw a 100 000-character line instead. When
+      # it takes the per-character path (`x \e[K\e[K`, over and over) that is
+      # effectively unbounded, and the test either passed in 50 ms or hung.
+      {output, _rest} = read_until(sock, ~s("event":"output"), rest)
+      assert output =~ ~s("event":"output"), "socket died on an oversized frame"
 
       :gen_tcp.close(sock)
     end

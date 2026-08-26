@@ -4,6 +4,7 @@
 // Heroicons are stroked with `currentColor`, which is the whole point here: a
 // theme change re-colours every icon for free, no per-theme asset set.
 import {
+  ArrowTurnDownRight,
   CircleStack,
   CommandLine,
   CpuChip,
@@ -90,6 +91,35 @@ export function dirIcon(isGit: boolean | undefined): IconSource {
 /** A shell agent (the embedded terminal) vs an AI coding agent. */
 export const TerminalAgentIcon: IconSource = CommandLine;
 export const AgentIcon: IconSource = CpuChip;
+
+/**
+ * The agent running an orchestration: the same node-graph mark as
+ * `orchestration.md`, because it is the same idea — one thing coordinating
+ * several others — and a reader who has learnt the glyph in one place should
+ * not have to learn it again in the other.
+ */
+export const OrchestratorAgentIcon: IconSource = Share;
+
+/**
+ * An agent an orchestrator started and is driving, rather than one the user
+ * started. The turned arrow is the "spawned from the thing above" mark a file
+ * tree uses, which is exactly the relationship — and a different silhouette,
+ * not a tint, because the palette is neutrals plus one amber that already means
+ * "this agent is blocked on you", and a second meaning on the same colour would
+ * cost more than it buys.
+ */
+export const DirectedAgentIcon: IconSource = ArrowTurnDownRight;
+
+/**
+ * What an agent looks like in a list. Role wins over adapter: who is driving an
+ * agent is the thing you cannot recover from anywhere else on the row, whereas
+ * the adapter is already written next to the icon.
+ */
+export function agentIcon(adapter: string, role?: string | null): IconSource {
+  if (role === "orchestrator") return OrchestratorAgentIcon;
+  if (role === "directed") return DirectedAgentIcon;
+  return adapter === "terminal" ? TerminalAgentIcon : AgentIcon;
+}
 
 const PROSE = new Set(["md", "markdown", "txt", "rst", "adoc"]);
 
