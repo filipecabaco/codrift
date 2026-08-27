@@ -42,7 +42,8 @@ export type ActionId =
   | "settings"
   | "appearance"
   | "agent_profiles"
-  | "setup";
+  | "setup"
+  | "check_updates";
 
 export const ACTION_LABELS: Record<ActionId, string> = {
   navigate_down: "Navigate down",
@@ -87,6 +88,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   appearance: "Settings › Appearance (theme & font)",
   agent_profiles: "Settings › Launch profiles (accounts & env)",
   setup: "Setup (register MCP server & install agent skills)",
+  check_updates: "Check for updates",
 };
 
 // Actions the desktop UI actually performs. The keymap itself is wider — it is
@@ -130,6 +132,7 @@ export const PALETTE_ACTIONS: ActionId[] = [
   "appearance",
   "agent_profiles",
   "setup",
+  "check_updates",
   "palette",
   "quit",
 ];

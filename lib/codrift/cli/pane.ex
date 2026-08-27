@@ -12,7 +12,7 @@ defmodule Codrift.CLI.Pane do
   Unlike `codrift memory`, these need the desktop app running — a pane only
   exists inside a window, and the shell has to be a child of the app's
   supervision tree for the window to attach to it. Requests go to the local
-  HTTP API, authenticated with `~/.codrift/auth-token`.
+  HTTP API via `Codrift.CLI.API`.
 
   All output is JSON to stdout; errors go to stderr with a non-zero exit.
 
@@ -28,9 +28,8 @@ defmodule Codrift.CLI.Pane do
   to reach for on the steps an agent is not permitted to take.
   """
 
+  import Codrift.CLI.API
   import Codrift.CLI.Output
-
-  @default_port 43_117
 
   @doc "Dispatches pane CLI subcommands from argv."
   @spec run([String.t()]) :: :ok
@@ -74,64 +73,12 @@ defmodule Codrift.CLI.Pane do
   @spec terminal_args(String.t(), [String.t()]) :: map()
   def terminal_args(initiative_id, argv) do
     %{"initiative_id" => initiative_id}
-    |> put_flag(argv, "dir")
-    |> put_flag(argv, "command")
-    |> put_flag(argv, "reason")
+    |> flag(argv, "dir")
+    |> flag(argv, "command")
+    |> flag(argv, "reason")
   end
 
   @doc false
   @spec focus_args(String.t(), [String.t()]) :: map()
-  def focus_args(agent_id, argv), do: put_flag(%{"agent_id" => agent_id}, argv, "reason")
-
-  # ── Helpers ──────────────────────────────────────────────────────────────────
-
-  # `--name=value`. Absent flags are left out entirely rather than sent as null,
-  # so the server's own defaults (context dir, no prefill) still apply.
-  defp put_flag(args, argv, name) do
-    prefix = "--#{name}="
-
-    case Enum.find(argv, &String.starts_with?(&1, prefix)) do
-      nil -> args
-      flag -> Map.put(args, name, String.slice(flag, String.length(prefix)..-1//1))
-    end
-  end
-
-  defp rpc(name, args) do
-    # The release runs CLI commands through `eval`, which starts no applications
-    # — Req's Finch pool included, and without it the first request dies on an
-    # "unknown registry" that says nothing about what went wrong.
-    {:ok, _} = Application.ensure_all_started(:req)
-
-    url = "http://localhost:#{configured_port()}/api/rpc"
-
-    # State-changing calls are rejected by Codrift.Plugs.LocalGuard without the
-    # local token — the same one `codrift mcp install` embeds in registrations.
-    headers = [{"x-codrift-token", Codrift.AuthToken.fetch()}]
-
-    case Req.post(url, json: %{name: name, args: args}, headers: headers, receive_timeout: 5_000) do
-      {:ok, %{status: 200, body: %{"ok" => result}}} ->
-        {:ok, result}
-
-      {:ok, %{status: _, body: %{"error" => message}}} ->
-        {:error, message}
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, "HTTP #{status}: #{inspect(body)}"}
-
-      {:error, %{reason: :econnrefused}} ->
-        {:error,
-         "The Codrift desktop app must be running to open a pane. " <>
-           "Launch it with `codrift start`, then run this command again."}
-
-      {:error, reason} ->
-        {:error, inspect(reason)}
-    end
-  end
-
-  defp configured_port do
-    case Application.get_env(:codrift, :bandit_opts, [])[:port] do
-      port when is_integer(port) and port > 0 -> port
-      _ -> @default_port
-    end
-  end
+  def focus_args(agent_id, argv), do: flag(%{"agent_id" => agent_id}, argv, "reason")
 end

@@ -28,6 +28,28 @@ export async function rpc<T = unknown>(
   return body.ok as T;
 }
 
+// Extensions the backend will serve raw over `GET /api/file`; keep in step with
+// `@image_mimes` in lib/codrift/files.ex — a mismatch shows the pane an <img>
+// the server then refuses.
+const IMAGE_EXTENSIONS = /\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i;
+
+/** True for a path the preview should render as a picture rather than as text. */
+export function isImagePath(path: string): boolean {
+  return IMAGE_EXTENSIONS.test(path);
+}
+
+/**
+ * Source URL for an image inside one of the initiative's directories.
+ *
+ * The one thing that does not go through `rpc()`: `<img src>` is a GET, and a
+ * multi-megabyte screenshot base64'd into a JSON envelope would cost a third
+ * more bytes and bypass the browser's image cache. See the `/api/file` route.
+ */
+export function fileUrl(initiativeId: string, path: string): string {
+  const q = new URLSearchParams({ initiative_id: initiativeId, path });
+  return `/api/file?${q}`;
+}
+
 export type Initiative = {
   id: string;
   name: string;
@@ -367,3 +389,44 @@ export const SERVICE_META: Record<string, { label: string; blurb: string }> = {
   github_projects: { label: "GitHub Projects", blurb: "Project boards" },
   gitlab: { label: "GitLab", blurb: "Issues & merge requests" },
 };
+
+/** `update_status`: whether a newer release exists, and who is allowed to install it. */
+export type UpdateStatus = {
+  current: string;
+  latest: string | null;
+  /** False whenever there is nothing to offer — no newer release, or no way to install one. */
+  available: boolean;
+  /**
+   * Who owns the installed app. `unknown` means the desktop shell never told the
+   * backend where the app lives (a dev build), so no update is offered at all.
+   */
+  manager: "homebrew" | "self" | "unknown";
+  cli_manager: "homebrew" | "self" | "missing" | "unknown";
+  brew_command: string;
+  /** Set when the version probe failed; the UI stays silent rather than complaining. */
+  error: string | null;
+};
+
+/** `update_progress`: one running update, as the runner sees it. */
+export type UpdateProgress = {
+  stage: "idle" | "running" | "done" | "failed";
+  mode: "homebrew" | "self" | null;
+  version: string | null;
+  log: string[];
+  error: string | null;
+  /** `done` never means "installed" — the app has to quit for the handoff to run. */
+  quit_required: boolean;
+  log_path: string;
+};
+
+export function updateStatus(): Promise<UpdateStatus> {
+  return rpc<UpdateStatus>("update_status");
+}
+
+export function startUpdate(): Promise<UpdateProgress> {
+  return rpc<UpdateProgress>("start_update");
+}
+
+export function updateProgress(): Promise<UpdateProgress> {
+  return rpc<UpdateProgress>("update_progress");
+}

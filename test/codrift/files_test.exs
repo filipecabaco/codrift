@@ -42,6 +42,70 @@ defmodule Codrift.FilesTest do
     end
   end
 
+  describe "image_mime/1" do
+    test "names the type for every extension the preview renders" do
+      assert Codrift.Files.image_mime("a/b/shot.png") == "image/png"
+      assert Codrift.Files.image_mime("photo.JPG") == "image/jpeg"
+      assert Codrift.Files.image_mime("icon.svg") == "image/svg+xml"
+    end
+
+    test "is nil for anything the browser would not render as a picture" do
+      refute Codrift.Files.image_mime("lib/codrift.ex")
+      refute Codrift.Files.image_mime("README.md")
+      refute Codrift.Files.image_mime("archive.png.gz")
+      refute Codrift.Files.image_mime("no-extension")
+    end
+  end
+
+  describe "read_image_within/2" do
+    test "returns the bytes and the MIME type", %{tmp_dir: tmp} do
+      path = Path.join(tmp, "shot.png")
+      File.write!(path, <<137, 80, 78, 71>>)
+
+      assert {:ok, "image/png", <<137, 80, 78, 71>>} =
+               Codrift.Files.read_image_within([tmp], path)
+    end
+
+    # The route exists to show pictures, not to hand out arbitrary bytes — an
+    # extension outside the allowlist has to be refused before anything is read.
+    test "refuses a file that is not a renderable image", %{tmp_dir: tmp} do
+      path = Path.join(tmp, "secrets.env")
+      File.write!(path, "TOKEN=1")
+
+      assert {:error, :not_an_image} = Codrift.Files.read_image_within([tmp], path)
+    end
+
+    test "refuses an image outside the allowed directories", %{tmp_dir: tmp} do
+      outside =
+        Path.join(System.tmp_dir!(), "codrift-image-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(outside)
+      on_exit(fn -> File.rm_rf!(outside) end)
+      path = Path.join(outside, "shot.png")
+      File.write!(path, "x")
+
+      assert {:error, :forbidden} = Codrift.Files.read_image_within([tmp], path)
+    end
+
+    test "reads an image far past the text preview ceiling", %{tmp_dir: tmp} do
+      path = Path.join(tmp, "big.png")
+      File.write!(path, :binary.copy("x", 2_000_000))
+
+      # The same file through the text path is refused, which is exactly why the
+      # image path does not share its limit.
+      assert {:error, :too_large} = Codrift.Files.read_within([tmp], path)
+      assert {:ok, "image/png", data} = Codrift.Files.read_image_within([tmp], path)
+      assert byte_size(data) == 2_000_000
+    end
+
+    test "refuses an image past even the image ceiling", %{tmp_dir: tmp} do
+      path = Path.join(tmp, "huge.png")
+      File.write!(path, :binary.copy("x", 20_000_001))
+
+      assert {:error, :too_large} = Codrift.Files.read_image_within([tmp], path)
+    end
+  end
+
   describe "read_within/2" do
     test "reads a file inside an allowed directory", %{tmp_dir: tmp} do
       path = Path.join(tmp, "f.txt")

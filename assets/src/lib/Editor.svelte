@@ -7,7 +7,7 @@
   import { LanguageDescription } from "@codemirror/language";
   import { languages } from "@codemirror/language-data";
   import { vim, Vim } from "@replit/codemirror-vim";
-  import { rpc } from "$lib/api";
+  import { isImagePath, rpc } from "$lib/api";
   import { editorTheme } from "$lib/editor-theme";
   import { themeState } from "$lib/theme.svelte";
   import { fontState } from "$lib/fonts.svelte";
@@ -76,6 +76,14 @@
     let destroyed = false;
 
     (async () => {
+      // A picture opened as text is mojibake in a vim buffer that can then be
+      // saved back over the original. The Tree pane hides Edit for these, but
+      // the command palette and the context menu reach the same path.
+      if (isImagePath(path) && !path.toLowerCase().endsWith(".svg")) {
+        status = `${path.split("/").pop()} is an image — open it in the Tree preview instead.`;
+        return;
+      }
+
       let initial = "";
       try {
         const res = await rpc<{ content: string }>("read_file", {

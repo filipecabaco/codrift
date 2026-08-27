@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { marked } from "marked";
   import { Icon } from "@steeze-ui/svelte-icon";
   import { Cog6Tooth } from "@steeze-ui/heroicons";
   import {
+    fileUrl,
+    isImagePath,
     rpc,
     openUrl,
     setInitiativeAgent,
@@ -14,6 +15,9 @@
   import { workspace as ws } from "$lib/workspace.svelte";
   import { MemoryIcon, WorktreeIcon, contextFileIcon, dirIcon } from "$lib/icons";
   import MemoryView from "$lib/MemoryView.svelte";
+  import { markdownFor } from "$lib/markdown";
+  import { highlightToHtml, langForPath } from "$lib/highlight";
+  import { themeState } from "$lib/theme.svelte";
 
   let {
     initiative,
@@ -174,21 +178,49 @@
     panel = wantPanel;
   });
 
+  // Everything in the folder used to be a markdown document, so everything was
+  // parsed as one. A pinned file of interest (`open_file`) is whatever the agent
+  // pointed at — source, JSON, a config — and markdown does real damage to that:
+  // a leading `#` becomes a heading, indented lines become quoted blocks, and
+  // what is left reads as prose. Anything that is not markdown gets syntax
+  // highlighting instead, the same way the Tree pane previews it.
+  const isMarkdown = (name: string) => /\.(md|markdown|mdx)$/i.test(name) || !name.includes(".");
+
+  // An initiative folder holds whatever agents put in it, and screenshots are a
+  // routine part of that. They are files like any other in the strip above, but
+  // there is nothing to parse — the pane shows the picture instead.
+  const activeImage = $derived(
+    activeFile && isImagePath(activeFile) && initiative.context_path
+      ? fileUrl(initiative.id, `${initiative.context_path}/${activeFile}`)
+      : null,
+  );
+
   // Render the selected context file as markdown.
   $effect(() => {
     const id = initiative.id;
     const name = activeFile;
-    if (!name) {
+    // Highlighted HTML has the old theme's colours baked in, so a re-skin has to
+    // re-render it — the same reason the Tree pane's preview watches the theme.
+    themeState.id;
+    if (!name || (isImagePath(name) && initiative.context_path)) {
       docHtml = "";
       agentNotesHtml = "";
       return;
     }
     docError = null;
     rpc<{ content: string }>("read_context_file", { initiative_id: id, name })
-      .then((res) => {
+      .then(async (res) => {
+        if (!isMarkdown(name)) {
+          docHtml = await highlightToHtml(res.content, langForPath(name));
+          agentNotesHtml = "";
+          return;
+        }
         const { body, notes } = splitDoc(res.content);
-        docHtml = marked.parse(body) as string;
-        agentNotesHtml = notes ? (marked.parse(notes) as string) : "";
+        // Images resolve against the context folder, so a screenshot an agent
+        // dropped next to initiative.md renders where the doc references it.
+        const md = markdownFor(id, initiative.context_path ?? null);
+        docHtml = md.parse(body) as string;
+        agentNotesHtml = notes ? (md.parse(notes) as string) : "";
       })
       .catch((e) => {
         docError = (e as Error).message;
@@ -367,9 +399,20 @@
       <div class="h-full overflow-auto px-6 py-4">
         {#if docError}
           <p class="text-xs text-red-400">{docError}</p>
+        {:else if activeImage}
+          <img
+            src={activeImage}
+            alt={activeFile ?? "image"}
+            class="mx-auto max-w-full rounded border border-border"
+          />
+        {:else if docHtml && activeFile && !isMarkdown(activeFile)}
+          <!-- Shiki emits its own <pre>; the prose classes below would restyle it. -->
+          <div class="text-[12px] leading-5 [&_pre]:m-0 [&_pre]:overflow-auto [&_pre]:bg-transparent [&_pre]:p-0">
+            {@html docHtml}
+          </div>
         {:else if docHtml}
           <div
-            class="text-[13px] leading-6 [&_a]:text-accent [&_a]:underline [&_code]:rounded [&_code]:bg-surface [&_code]:px-1 [&_code]:py-0.5 [&_h1]:hidden [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-accent [&_h2:first-child]:mt-0 [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_li]:my-0.5 [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-surface [&_pre]:p-3 [&_strong]:text-fg [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+            class="text-[13px] leading-6 [&_a]:text-accent [&_a]:underline [&_code]:rounded [&_code]:bg-surface [&_code]:px-1 [&_code]:py-0.5 [&_h1]:hidden [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-accent [&_h2:first-child]:mt-0 [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded [&_img]:border [&_img]:border-border [&_li]:my-0.5 [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-surface [&_pre]:p-3 [&_strong]:text-fg [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
           >
             {@html docHtml}
           </div>

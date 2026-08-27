@@ -42,6 +42,19 @@ export type PaneRequest = {
 };
 
 /**
+ * An agent asking the window to open a file it has pinned into the initiative.
+ *
+ * The sibling of `PaneRequest`, and a request for the same reason: the backend
+ * cannot open a pane. `name` is the file's name inside the context folder — the
+ * link `open_file` just made — not the path it points at.
+ */
+export type FileRequest = {
+  initiativeId: string;
+  name: string;
+  reason: string | null;
+};
+
+/**
  * An initiative appearing, changing, or going away somewhere other than here.
  *
  * The sidebar is not the only writer: `codrift initiative create` in a shell, an
@@ -63,6 +76,7 @@ const stoppedSubs = new Map<string, Set<(code: number) => void>>();
 const statusSubs = new Set<(agentId: string, status: AgentStatus) => void>();
 const agentSubs = new Set<(agent: AgentInfo) => void>();
 const paneSubs = new Set<(req: PaneRequest) => void>();
+const fileSubs = new Set<(req: FileRequest) => void>();
 const initiativeSubs = new Set<(change: InitiativeChange) => void>();
 const memorySubs = new Set<(initiativeId: string) => void>();
 
@@ -97,6 +111,15 @@ function dispatch(frame: Record<string, unknown>) {
         fn({
           agentId,
           initiativeId: frame.initiative_id as string,
+          reason: (frame.reason as string) ?? null,
+        }),
+      );
+      break;
+    case "file_request":
+      fileSubs.forEach((fn) =>
+        fn({
+          initiativeId: frame.initiative_id as string,
+          name: frame.name as string,
           reason: (frame.reason as string) ?? null,
         }),
       );
@@ -219,6 +242,12 @@ export function onAgent(fn: (agent: AgentInfo) => void): () => void {
 export function onPaneRequest(fn: (req: PaneRequest) => void): () => void {
   paneSubs.add(fn);
   return () => paneSubs.delete(fn);
+}
+
+/** Subscribe to agents asking for a pinned file to be opened. */
+export function onFileRequest(fn: (req: FileRequest) => void): () => void {
+  fileSubs.add(fn);
+  return () => fileSubs.delete(fn);
 }
 
 /** Subscribe to initiatives created, changed, or deleted outside this session. */

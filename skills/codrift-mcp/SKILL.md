@@ -120,14 +120,14 @@ around.
 | Worktrees | `list_worktrees`, `set_dir_worktree`, `prune_worktrees` | `codrift-initiatives` |
 | Memory | `memory_search`, `memory_add`, `memory_delete`, `memory_recent`, `memory_list` | `codrift-memory` |
 | Agents | `start_agent`, `send_to_agent`, `get_agent_output`, `broadcast_to_initiative` | `codrift-orchestration` |
-| Handoff | `open_terminal`, `focus_agent` | `codrift-orchestration` |
-
-The handoff pair is also on the CLI as `codrift pane terminal` / `codrift pane
-focus`, which is the way to reach it when the MCP server is not registered for
-the config directory you are running under.
+| Handoff | `open_terminal`, `focus_agent`, `open_file` | `codrift-orchestration` |
 | Conductor | `start_conductor`, `start_orchestration`, `get_conductor_status`, `stop_orchestration` | `codrift-orchestration` |
 | Integrations | `start_oauth_flow`, `list_assigned_items`, `import_from_integration` | `codrift-integrations` |
 | Profiles | `list_agent_profiles` | `codrift-profiles` |
+
+Every handoff tool is on the CLI too — `codrift pane terminal`, `codrift pane
+focus`, `codrift open` — which is the way to reach them when the MCP server is
+not registered for the config directory you are running under.
 
 ## Sessions
 

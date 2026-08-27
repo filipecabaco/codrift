@@ -406,7 +406,8 @@ fn start_server(app: &tauri::AppHandle, token: &str, died: Arc<AtomicBool>) {
         .shell()
         .sidecar("desktop")
         .expect("failed to setup `desktop` sidecar")
-        .env("CODRIFT_INSTANCE_TOKEN", token);
+        .env("CODRIFT_INSTANCE_TOKEN", token)
+        .env("CODRIFT_APP_PATH", app_bundle_path());
 
     let (mut rx, child) = sidecar_command
         .spawn()
@@ -443,6 +444,37 @@ fn start_server(app: &tauri::AppHandle, token: &str, died: Arc<AtomicBool>) {
             }
         }
     });
+}
+
+/// The installed artifact a user would drag to the Trash — `/Applications/Codrift.app`
+/// on macOS, the AppImage on Linux.
+///
+/// The sidecar cannot work this out for itself. Burrito unpacks the release into
+/// `~/Library/Application Support/.burrito/…` and execs from there, so its
+/// `RELEASE_ROOT` is a cache directory with no relation to where the app is
+/// installed — and that path is exactly what an in-app update has to replace.
+///
+/// Empty when there is nothing to name (a `cargo tauri dev` build running out of
+/// `target/`), which `Codrift.Updater.app_manager/1` reads as "this build does
+/// not self-update" rather than guessing.
+fn app_bundle_path() -> String {
+    if let Ok(appimage) = std::env::var("APPIMAGE") {
+        if !appimage.is_empty() {
+            return appimage;
+        }
+    }
+
+    if cfg!(target_os = "macos") {
+        if let Ok(exe) = std::env::current_exe() {
+            for ancestor in exe.ancestors() {
+                if ancestor.extension().and_then(|e| e.to_str()) == Some("app") {
+                    return ancestor.to_string_lossy().into_owned();
+                }
+            }
+        }
+    }
+
+    String::new()
 }
 
 // Unique per launch, and cheap: no RNG crate, and it only has to distinguish this

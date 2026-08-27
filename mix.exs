@@ -30,7 +30,13 @@ defmodule Codrift.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  @cli_commands ~w(mcp initiative session memory integration update start worktree prune)
+  # Every verb `Codrift.CLI.Main` dispatches has to be listed here or the shipped
+  # `codrift` cannot reach it: the boot script only knows the cases patched into
+  # it below, and anything else falls through to the release's own dispatch.
+  # `Codrift.CLI.MainTest` asserts the two stay in step — `pane` was missing from
+  # this list for its whole life, which made `codrift pane focus` a documented
+  # command that did nothing in a release.
+  @cli_commands ~w(mcp initiative session memory integration update start worktree prune open pane)
 
   defp releases do
     [

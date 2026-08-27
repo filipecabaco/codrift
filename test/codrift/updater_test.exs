@@ -43,6 +43,76 @@ defmodule Codrift.UpdaterTest do
     end
   end
 
+  describe "desktop_asset/2" do
+    # The names come from the Tauri bundler, not from us, so the updater matches
+    # their shape instead of reconstructing them.
+    @assets %{
+      "Codrift_1.2.3_aarch64.dmg" => "https://example.test/arm.dmg",
+      "Codrift_1.2.3_x64.dmg" => "https://example.test/intel.dmg",
+      "Codrift_1.2.3_amd64.AppImage" => "https://example.test/linux.AppImage",
+      "codrift-cli-1.2.3-aarch64-apple-darwin.tar.gz" => "https://example.test/cli.tar.gz"
+    }
+
+    test "picks the arm disk image on Apple silicon" do
+      assert {:ok, {"Codrift_1.2.3_aarch64.dmg", "https://example.test/arm.dmg"}} =
+               Updater.desktop_asset(@assets, "aarch64-apple-darwin")
+    end
+
+    test "picks the intel disk image on x86 macOS" do
+      assert {:ok, {"Codrift_1.2.3_x64.dmg", "https://example.test/intel.dmg"}} =
+               Updater.desktop_asset(@assets, "x86_64-apple-darwin")
+    end
+
+    test "picks the AppImage on Linux" do
+      assert {:ok, {"Codrift_1.2.3_amd64.AppImage", _}} =
+               Updater.desktop_asset(@assets, "x86_64-linux-gnu")
+    end
+
+    # An arm Linux release publishes no bundle today. Saying so beats
+    # downloading an intel one and calling it an update.
+    test "is an error when the release carries nothing for this platform" do
+      assert :error = Updater.desktop_asset(@assets, "aarch64-linux-gnu")
+      assert :error = Updater.desktop_asset(%{}, "aarch64-apple-darwin")
+      assert :error = Updater.desktop_asset(@assets, "sparc-solaris")
+    end
+
+    # The CLI tarball is published in the same release and must never be
+    # mistaken for the app bundle.
+    test "never matches the CLI tarball" do
+      cli = %{
+        "codrift-cli-1.2.3-aarch64-apple-darwin.tar.gz" => "https://example.test/cli.tar.gz"
+      }
+
+      assert :error = Updater.desktop_asset(cli, "aarch64-apple-darwin")
+    end
+  end
+
+  describe "app_manager/1" do
+    # `:unknown`, not `:self`. Without CODRIFT_APP_PATH there is no bundle to
+    # replace, and guessing one is how a self-update overwrites the wrong tree.
+    test "is unknown when the shell named no app" do
+      assert Updater.app_manager(nil) == :unknown
+      assert Updater.app_manager("") == :unknown
+    end
+
+    test "is homebrew for a bundle inside a Caskroom" do
+      assert Updater.app_manager("/opt/homebrew/Caskroom/codrift/0.2.7/Codrift.app") == :homebrew
+    end
+  end
+
+  describe "brew_upgrade_command/0" do
+    # The cask depends on the formula but `brew upgrade codrift` bumps the cask
+    # alone, which is the mismatch Casks/codrift.rb's caveats warn about.
+    test "always names the cask" do
+      assert Updater.brew_upgrade_command() =~ ~r/^brew upgrade codrift\b/
+    end
+
+    test "matches the command the cask's caveats tell users to run" do
+      cask = File.read!(Path.join(@repo_root, "Casks/codrift.rb"))
+      assert cask =~ "brew upgrade codrift codrift-cli"
+    end
+  end
+
   describe "cli_asset_url/2" do
     test "points at the GitHub release download path for the v-prefixed tag" do
       assert Updater.cli_asset_url("0.1.0", "aarch64-apple-darwin") ==
