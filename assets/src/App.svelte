@@ -161,22 +161,28 @@
    * send the reader to the screen to find out what it meant — which is the work
    * the strip exists to save.
    */
-  type PaneChip = { label: string; kind: "terminal" | "agent" | "view"; active: boolean };
+  type PaneChip = {
+    label: string;
+    kind: "terminal" | "agent" | "view";
+    active: boolean;
+    role?: string | null;
+  };
 
-  function paneChip(p: PaneView): { label: string; kind: PaneChip["kind"] } {
+  function paneChip(p: PaneView): { label: string; kind: PaneChip["kind"]; role?: string | null } {
     const agent = p.agentId ? ws.agent(p.agentId) : null;
     if (agent) {
       // A terminal is named by where it is, an agent by what it is: two shells
       // in one initiative are told apart by their directory, two Claudes by
       // nothing else the chip has room for.
-      if (agent.adapter !== "terminal") return { label: agent.adapter, kind: "agent" };
+      if (agent.adapter !== "terminal")
+        return { label: agent.adapter, kind: "agent", role: agent.role };
       // A folderless initiative's directory *is* its context folder, whose
       // basename is the 16-character id — a hex blob in the pane strip, where
       // the whole job of the label is to say which pane holds what. The sidebar
       // already calls that directory "scratch"; so does this.
       const init = ws.initiatives.find((i) => i.id === p.initiativeId);
       const label = agent.dir === init?.context_path ? "scratch" : base(agent.dir);
-      return { label, kind: "terminal" };
+      return { label, kind: "terminal", role: agent.role };
     }
     if (p.chooser) return { label: "Empty", kind: "view" };
     return {

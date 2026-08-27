@@ -76,6 +76,9 @@ export type ContextNode = {
 const STATUS_LABELS: Record<string, string> = {
   starting: "starting",
   running: "running",
+  // Text is in its box but the Enter keystroke has not gone out yet — not the
+  // same thing as an agent that is free, which is what this used to be told.
+  input_pending: "sending",
   awaiting_input: "needs input",
   idle: "idle",
   stopped: "stopped",
@@ -84,6 +87,22 @@ const STATUS_LABELS: Record<string, string> = {
 
 export function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status.replace(/_/g, " ");
+}
+
+/** An agent that is part of an orchestration, not one the user started. */
+export function isOrchestrated(role?: string | null): boolean {
+  return role === "orchestrator" || role === "directed";
+}
+
+/**
+ * What an agent's icon means, spelled out. The row has no space for the word,
+ * so this is the tooltip and the accessible name — the glyph carries it on
+ * screen, this carries it everywhere else.
+ */
+export function agentIconLabel(adapter: string, role?: string | null): string {
+  if (role === "orchestrator") return "Orchestrator — directing the other agents";
+  if (role === "directed") return "Started and directed by the orchestrator";
+  return adapter === "terminal" ? "Terminal" : "Agent";
 }
 
 /** An agent blocked on the user is the one signal worth interrupting for. */

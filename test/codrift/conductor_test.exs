@@ -195,9 +195,14 @@ defmodule Codrift.ConductorTest do
       statuses = Conductor.agent_status(pid)
       assert map_size(statuses) == 1
 
-      [{_id, info}] = Map.to_list(statuses)
+      [{id, info}] = Map.to_list(statuses)
       assert info.dir == ctx
       assert info.role == :orchestrator
+
+      # The Conductor's own map is not what the sidebar reads — the agent has to
+      # carry the role itself, or nothing outside this process ever learns it.
+      {:ok, agent} = Codrift.AgentSupervisor.find_agent(id)
+      assert %{role: :orchestrator} = Codrift.AgentProcess.status(agent)
     end
 
     test "orchestrator receives a planning prompt containing the task", %{

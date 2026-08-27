@@ -70,6 +70,12 @@ defmodule Codrift.Agent.Adapters.Claude do
   @impl true
   def parse_status(output) do
     cond do
+      # Checked before the prompt char, because Claude Code draws its prompt box
+      # in *every* frame — including the ones it paints while working. Reading
+      # the ❯ alone reported "waiting for you" for the whole length of a task,
+      # which is precisely what an orchestrator must not be told. The interrupt
+      # hint is only offered while there is something to interrupt.
+      String.contains?(output, "esc to interrupt") -> :running
       # Claude Code's interactive prompt uses ❯ (U+276F) or > as the prompt char.
       String.contains?(output, "❯") -> :awaiting_input
       String.contains?(output, "> ") -> :awaiting_input

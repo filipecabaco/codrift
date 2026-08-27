@@ -85,6 +85,8 @@ export type Agent = {
   initiative_id: string;
   mode: string;
   profile?: string | null;
+  /** Who started it: "user", "orchestrator", or "directed". See AgentProcess. */
+  role?: string | null;
 };
 
 export type DiffLine = { type: "add" | "remove" | "context"; content: string };

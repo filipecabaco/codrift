@@ -18,6 +18,38 @@ defmodule Codrift.Core do
   alias Codrift.Web.EventRelay
   alias Codrift.Worktree.Inventory
 
+  # The MCP door. Everything arriving through it is an *agent* acting, not the
+  # person at the keyboard, so agents started that way are marked `:directed`
+  # and the sidebar draws them apart from the ones the user started.
+  #
+  # Carried in the process dictionary rather than as a parameter because `call/2`
+  # has some eighty clauses and threading a third argument through every one of
+  # them to serve two is the worse trade.
+  @source_key :codrift_call_source
+
+  @doc """
+  `call/2` on behalf of a specific caller.
+
+  Pass `source: :mcp` from the MCP handler. Anything else, including omitting it,
+  is treated as the user acting directly.
+  """
+  def call(name, args, opts) do
+    Process.put(@source_key, Keyword.get(opts, :source, :user))
+    call(name, args)
+  after
+    Process.delete(@source_key)
+  end
+
+  # An agent the user started is theirs; one started through the MCP door was
+  # started by another agent. See `Codrift.AgentProcess` for the roles.
+  #
+  # Only `start_agent` asks. `open_terminal` deliberately does not: it prefills a
+  # command *without* submitting it and returns `awaiting_user: true`, so even
+  # over MCP it is a terminal handed to the person, not an agent being driven.
+  defp agent_role do
+    if Process.get(@source_key) == :mcp, do: :directed, else: :user
+  end
+
   @doc """
   Invokes a named operation with a string-keyed argument map.
 
@@ -55,13 +87,7 @@ defmodule Codrift.Core do
   end
 
   def call("list_agents", _args) do
-    agents =
-      Enum.map(Codrift.AgentSupervisor.list_agents(), fn pid ->
-        pid
-        |> Codrift.AgentProcess.status()
-        |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
-        |> Map.update!(:status, &Atom.to_string/1)
-      end)
+    agents = Enum.map(Codrift.AgentSupervisor.list_agents(), &EventRelay.describe/1)
 
     {:ok, agents}
   end
@@ -70,12 +96,7 @@ defmodule Codrift.Core do
     agents =
       initiative_id
       |> Codrift.AgentSupervisor.list_agents_for_initiative()
-      |> Enum.map(fn pid ->
-        pid
-        |> Codrift.AgentProcess.status()
-        |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
-        |> Map.update!(:status, &Atom.to_string/1)
-      end)
+      |> Enum.map(&EventRelay.describe/1)
 
     {:ok, agents}
   end
@@ -101,15 +122,10 @@ defmodule Codrift.Core do
              profile: launch.profile,
              profile_env: launch.env,
              command: launch.command,
-             extra_args: launch.args
+             extra_args: launch.args,
+             role: agent_role()
            ) do
-      status =
-        pid
-        |> Codrift.AgentProcess.status()
-        |> Map.update!(:adapter, &Codrift.Agent.adapter_name/1)
-        |> Map.update!(:status, &Atom.to_string/1)
-
-      {:ok, status}
+      {:ok, EventRelay.describe(pid)}
     else
       {:error, reason} -> {:error, inspect(reason)}
     end
@@ -1306,8 +1322,8 @@ defmodule Codrift.Core do
 
   # Types `command` at the prompt WITHOUT submitting it.
   #
-  # `send_input/2` appends CRLF — that runs things, which is exactly what this
-  # tool must not do. `send_raw/2` leaves the line sitting at the prompt for the
+  # `send_input/2` submits what it sends — that runs things, which is exactly
+  # what this tool must not do. `send_raw/2` leaves the line sitting at the prompt for the
   # user to read and press Return on themselves. Newlines inside the command are
   # flattened to spaces for the same reason: an embedded `\n` would submit every
   # line before it, turning a draft into an execution.

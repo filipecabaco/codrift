@@ -29,6 +29,48 @@ defmodule Codrift.CoreOperationsTest do
     {:ok, create: created}
   end
 
+  # Who started an agent decides how the sidebar draws it, and the only thing
+  # that knows is which door the call came in through: an agent reaching for
+  # `start_agent` over MCP is another agent acting, not the person at the
+  # keyboard. The `terminal` adapter is used here because it needs no AI CLI
+  # installed to spawn.
+  describe "agent role" do
+    setup %{create: create} do
+      start = fn name, opts ->
+        id = create.(name)["id"]
+        args = %{"initiative_id" => id, "adapter" => "terminal"}
+
+        {:ok, agent} =
+          case opts do
+            [] -> Core.call("start_agent", args)
+            opts -> Core.call("start_agent", args, opts)
+          end
+
+        on_exit(fn ->
+          with {:ok, pid} <- Codrift.AgentSupervisor.find_agent(agent.id),
+               do: Codrift.AgentSupervisor.stop_agent(pid)
+        end)
+
+        agent
+      end
+
+      {:ok, start: start}
+    end
+
+    test "an agent started through the MCP door is :directed", %{start: start} do
+      assert %{role: "directed"} = start.("through mcp", source: :mcp)
+    end
+
+    test "an agent started by the user is not", %{start: start} do
+      assert %{role: "user"} = start.("by hand", [])
+    end
+
+    test "the source does not leak into the next call on the same process", %{start: start} do
+      start.("first, over mcp", source: :mcp)
+      assert %{role: "user"} = start.("second, by hand", [])
+    end
+  end
+
   describe "rename_initiative" do
     test "renames, and the new name is what the list reports", %{create: create} do
       id = create.("before")["id"]

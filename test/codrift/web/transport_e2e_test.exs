@@ -60,9 +60,18 @@ defmodule Codrift.Web.TransportE2ETest do
 
     # Don't wait for a spontaneous PS1 prompt — minimal CI shells (bash without a
     # profile) print none. Nudge the PTY with a marker command and wait until it
-    # echoes back, which proves the shell is live and accepting input.
-    marker = "READY_#{System.unique_integer([:positive])}"
-    _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo #{marker}"})
+    # comes back, which proves the shell is live and *running* what it is sent.
+    #
+    # The marker is arithmetic the shell has to evaluate, so what appears on
+    # screen while the command is being typed can never contain it. An
+    # interactive shell echoes as it goes, and `send_to_agent` writes the body
+    # and the Enter as two writes, so "the text is visible" and "the shell ran
+    # it" are genuinely different moments — a nudge whose literal text is the
+    # marker cannot tell them apart, and the caller proceeds against a shell
+    # that has not started.
+    n = System.unique_integer([:positive])
+    marker = "READY_#{n}"
+    _ = ok!("send_to_agent", %{"agent_id" => agent_id, "input" => "echo READY_$((#{n}))"})
 
     assert eventually(fn -> String.contains?(agent_output(agent_id), marker) end),
            "shell agent never became ready (no echo of nudge command)"
@@ -147,6 +156,13 @@ defmodule Codrift.Web.TransportE2ETest do
     header <> mask <> masked
   end
 
+  # A masked ping (opcode 0x9). The spec caps control-frame payloads at 125
+  # bytes, which is all a marker needs.
+  defp ws_ping_frame(payload) when byte_size(payload) < 126 do
+    mask = :crypto.strong_rand_bytes(4)
+    <<0x89, 0x80 ||| byte_size(payload)>> <> mask <> mask_payload(payload, mask)
+  end
+
   defp mask_payload(payload, mask) do
     payload
     |> :binary.bin_to_list()
@@ -192,25 +208,30 @@ defmodule Codrift.Web.TransportE2ETest do
     test "accepts a paste larger than the default frame limit", %{port: port, tmp_dir: tmp_dir} do
       {_initiative_id, agent_id} = start_live_agent(tmp_dir)
 
-      {sock, _rest} = ws_connect(port, "/ws")
+      {sock, rest} = ws_connect(port, "/ws")
 
-      # ~100 KB of pasted text, with no newline so the shell just buffers it.
+      # ~100 KB of pasted text in one frame.
       big = String.duplicate("x", 100_000)
 
       :ok =
         :gen_tcp.send(sock, ws_text_frame(~s({"t":"d","agent_id":"#{agent_id}","d":"#{big}"})))
 
-      # The socket survived, so a normal keystroke frame still lands.
-      marker = "AFTER_BIG_PASTE"
+      # Survival is read off the socket itself, with a ping: Bandit answers
+      # control frames on its own, so a pong echoing our payload proves the
+      # connection is alive. Had the oversized frame been rejected, the
+      # connection would be closed and no pong could come back.
+      #
+      # Neither obvious alternative holds on both platforms. Asking the shell to
+      # *run* something afterwards makes this a test of how fast a line editor
+      # can redraw a 100 000-character line — macOS zsh takes the per-character
+      # path and effectively never finishes. Waiting for the paste to return as
+      # `output` frames assumes the shell echoes it, which the minimal bash on
+      # the Linux runner does not.
+      marker = Base.encode16(:crypto.strong_rand_bytes(8))
+      :ok = :gen_tcp.send(sock, ws_ping_frame(marker))
 
-      :ok =
-        :gen_tcp.send(
-          sock,
-          ws_text_frame(~s({"t":"d","agent_id":"#{agent_id}","d":"\\u0015echo #{marker}\\n"}))
-        )
-
-      assert eventually(fn -> String.contains?(agent_output(agent_id), marker) end),
-             "socket died on an oversized frame"
+      {pong, _rest} = read_until(sock, marker, rest)
+      assert pong =~ marker, "socket died on an oversized frame"
 
       :gen_tcp.close(sock)
     end
