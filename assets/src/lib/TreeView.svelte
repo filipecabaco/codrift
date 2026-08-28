@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { rpc } from "$lib/api";
+  import { fileUrl, isImagePath, rpc } from "$lib/api";
   import { highlightToHtml, langForPath } from "$lib/highlight";
   import { themeState } from "$lib/theme.svelte";
 
@@ -45,6 +45,8 @@
   let error = $state<string | null>(null);
   let selected = $state<string | null>(null);
   let previewHtml = $state<string>("");
+  /** Set instead of `previewHtml` when the selection is a picture, not text. */
+  let previewImage = $state<string | null>(null);
   let previewError = $state<string | null>(null);
   let query = $state("");
   let cursor = $state(0);
@@ -290,11 +292,25 @@
     selected = node.key;
     selectedPath = node.fullPath;
     previewHtml = "";
+    previewImage = null;
     await loadPreview(node.fullPath);
   }
 
   async function loadPreview(path: string) {
     previewError = null;
+
+    // An image never goes through `read_file`: its bytes are not text, and the
+    // ones people actually put in a context folder (screenshots) are megabytes
+    // past what the JSON preview path will carry. The browser fetches it.
+    if (isImagePath(path)) {
+      previewHtml = "";
+      // `revision` busts the cache after a save, which is the only way the
+      // bytes behind a path change while the pane is open.
+      previewImage = `${fileUrl(initiativeId, path)}&v=${revision}`;
+      return;
+    }
+
+    previewImage = null;
     try {
       const res = await rpc<{ content: string }>("read_file", {
         initiative_id: initiativeId,
@@ -329,6 +345,7 @@
     selected = null;
     selectedPath = null;
     previewHtml = "";
+    previewImage = null;
     query = "";
     cursor = 0;
     rpc<{ dirs: { dir: string; files: string[] }[] }>("list_tree", { initiative_id: id })
@@ -424,12 +441,25 @@
     {#if selected}
       <div class="flex items-center justify-between border-b border-border px-3 py-1.5 text-[12px]">
         <span class="truncate text-muted">{selected.split("/").pop()}</span>
-        <button class="shrink-0 text-accent hover:underline" onclick={() => onEdit(selected!)}>Edit</button>
+        {#if !previewImage || selected.toLowerCase().endsWith(".svg")}
+          <button class="shrink-0 text-accent hover:underline" onclick={() => onEdit(selected!)}>
+            Edit
+          </button>
+        {/if}
       </div>
     {/if}
     <div class="min-h-0 flex-1 overflow-auto p-3 text-[12px] leading-5">
       {#if previewError}
         <p class="text-red-400">{previewError}</p>
+      {:else if previewImage}
+        <!-- Contained rather than scaled up: a 32px icon shown at pane width is
+             a blurry lie about what the file is. -->
+        <img
+          src={previewImage}
+          alt={selected?.split("/").pop() ?? "image"}
+          class="mx-auto max-h-full max-w-full object-contain"
+          onerror={() => (previewError = "This image could not be loaded.")}
+        />
       {:else if selected}
         <div class="[&_pre]:m-0 [&_pre]:p-0">{@html previewHtml}</div>
       {:else}

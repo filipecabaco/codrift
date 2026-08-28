@@ -21,6 +21,25 @@ defmodule Codrift.Updater do
   @type check_result ::
           {:up_to_date, version} | {:update_available, version, version} | {:error, String.t()}
 
+  @typedoc """
+  Who owns an installed copy, and therefore who is allowed to replace it.
+
+  `:unknown` is not "probably self" — it is "we could not tell", which is the
+  answer whenever the desktop shell did not hand us `CODRIFT_APP_PATH`
+  (`mix ex_tauri.dev`, a plain `mix francis.server`). Nothing self-replaces on
+  an `:unknown`.
+  """
+  @type manager :: :homebrew | :self | :unknown
+
+  @typedoc """
+  Who owns the `codrift` command on PATH.
+
+  `:bundled` is the shipped arrangement: the command is a symlink into
+  `Codrift.app`, so it *is* the app and updating the app updates it. `:missing`
+  when there is no `codrift` on PATH at all; nothing to upgrade.
+  """
+  @type cli_manager :: manager | :bundled | :missing
+
   @doc "Returns the version compiled into the running release."
   @spec current_version() :: version
   def current_version do
@@ -33,11 +52,27 @@ defmodule Codrift.Updater do
   @doc "Fetches the latest published version tag from GitHub releases."
   @spec fetch_latest_version() :: {:ok, version} | {:error, String.t()}
   def fetch_latest_version do
+    with {:ok, %{version: version}} <- fetch_latest_release(), do: {:ok, version}
+  end
+
+  @doc """
+  The latest release's version *and* its published assets, as a
+  `%{name => download_url}` map.
+
+  The desktop bundles are named by the Tauri bundler, not by us
+  (`Codrift_<version>_aarch64.dmg`, `Codrift_<version>_amd64.AppImage`), and
+  that naming has changed with bundler versions. Reading the real asset list and
+  matching a pattern against it means a rename in CI cannot silently turn every
+  in-app update into a 404 the way a hardcoded filename would.
+  """
+  @spec fetch_latest_release() ::
+          {:ok, %{version: version, assets: %{String.t() => String.t()}}} | {:error, String.t()}
+  def fetch_latest_release do
     url = "https://api.github.com/repos/#{@repo}/releases/latest"
 
     case Req.get(url, headers: [{"user-agent", "codrift/#{current_version()}"}]) do
-      {:ok, %{status: 200, body: %{"tag_name" => tag}}} ->
-        {:ok, String.trim_leading(tag, "v")}
+      {:ok, %{status: 200, body: %{"tag_name" => tag} = body}} ->
+        {:ok, %{version: String.trim_leading(tag, "v"), assets: assets_map(body)}}
 
       {:ok, %{status: 404}} ->
         {:error, "no releases found"}
@@ -47,6 +82,67 @@ defmodule Codrift.Updater do
 
       {:error, reason} ->
         {:error, inspect(reason)}
+    end
+  end
+
+  defp assets_map(%{"assets" => assets}) when is_list(assets) do
+    Map.new(assets, fn asset ->
+      {asset["name"], asset["browser_download_url"]}
+    end)
+  end
+
+  defp assets_map(_), do: %{}
+
+  @doc """
+  Picks the desktop bundle for `target` out of a release's asset names.
+
+  Matching is by shape rather than by exact name for the reason given on
+  `fetch_latest_release/0`. Returns `{:ok, {name, url}}` or `:error` when the
+  release carries nothing this platform can install.
+  """
+  @spec desktop_asset(%{String.t() => String.t()}, String.t()) ::
+          {:ok, {String.t(), String.t()}} | :error
+  def desktop_asset(assets, target) do
+    case bundle_pattern(target) do
+      nil ->
+        :error
+
+      pattern ->
+        assets
+        |> Enum.filter(fn {name, _url} -> Regex.match?(pattern, name) end)
+        |> Enum.sort()
+        |> case do
+          [{name, url} | _] -> {:ok, {name, url}}
+          [] -> :error
+        end
+    end
+  end
+
+  defp bundle_pattern("aarch64-apple-darwin"), do: ~r/(aarch64|arm64)\.dmg$/i
+  defp bundle_pattern("x86_64-apple-darwin"), do: ~r/(x64|x86_64|intel)\.dmg$/i
+  defp bundle_pattern("aarch64-linux-gnu"), do: ~r/(aarch64|arm64)\.AppImage$/i
+  defp bundle_pattern("x86_64-linux-gnu"), do: ~r/(amd64|x86_64|x64)\.AppImage$/i
+  defp bundle_pattern(_), do: nil
+
+  @doc "The platform triple this build runs on, e.g. `aarch64-apple-darwin`."
+  @spec detect_target() :: {:ok, String.t()} | {:error, String.t()}
+  def detect_target do
+    os = :os.type()
+    arch = :erlang.system_info(:system_architecture) |> List.to_string()
+
+    case {os, arch} do
+      {{:unix, :darwin}, a} when is_binary(a) ->
+        if String.contains?(a, "aarch64"),
+          do: {:ok, "aarch64-apple-darwin"},
+          else: {:ok, "x86_64-apple-darwin"}
+
+      {{:unix, _}, a} when is_binary(a) ->
+        if String.contains?(a, "aarch64"),
+          do: {:ok, "aarch64-linux-gnu"},
+          else: {:ok, "x86_64-linux-gnu"}
+
+      _ ->
+        {:error, "unsupported platform"}
     end
   end
 
@@ -90,11 +186,11 @@ defmodule Codrift.Updater do
 
   Prefers `RELEASE_ROOT`, which the mix release boot script derives from the
   real location of `bin/codrift` (following the symlink that landed on PATH).
-  That is the only source of truth: the same CLI is installed to
-  `~/.local/share/codrift` by install.sh and to a Homebrew Cellar prefix by the
-  `codrift-cli` formula, and writing to the wrong one leaves the binary that is
-  actually on PATH untouched — an update that reports success and changes
-  nothing. Falls back to install.sh's location outside a release (dev, tests).
+  That is the only source of truth: a standalone CLI can sit in
+  `~/.local/share/codrift` (install.sh on Linux) or in a Homebrew Cellar prefix,
+  and writing to the wrong one leaves the binary that is actually on PATH
+  untouched — an update that reports success and changes nothing. Falls back to
+  install.sh's location outside a release (dev, tests).
   """
   @spec install_dir() :: String.t()
   def install_dir, do: install_dir(System.get_env("RELEASE_ROOT"))
@@ -103,6 +199,146 @@ defmodule Codrift.Updater do
   @spec install_dir(String.t() | nil) :: String.t()
   def install_dir(root) when is_binary(root) and root != "", do: root
   def install_dir(_), do: Path.expand(@default_install_dir)
+
+  @doc """
+  The CLI's release tree as seen from *another* process — the desktop sidecar,
+  which updates the `codrift` command alongside the app.
+
+  `install_dir/0` cannot answer this there: inside the app, `RELEASE_ROOT` is the
+  sidecar's own Burrito unpack directory, so it would have the app happily
+  "update the CLI" by overwriting a cache folder. Follows the `codrift` on PATH
+  back to the release root that contains it instead, and only accepts it when it
+  actually looks like one.
+  """
+  @spec cli_install_dir() :: String.t()
+  def cli_install_dir do
+    with path when is_binary(path) <- System.find_executable("codrift"),
+         root = path |> resolve_link() |> Path.dirname() |> Path.dirname(),
+         true <- File.dir?(Path.join(root, "releases")) do
+      root
+    else
+      _ -> Path.expand(@default_install_dir)
+    end
+  end
+
+  @doc """
+  The `.app` bundle (macOS) or AppImage (Linux) this window is running out of,
+  or `nil` when that is not knowable.
+
+  Read from `CODRIFT_APP_PATH`, which the Tauri shell derives from its own
+  executable and hands to the sidecar. Deliberately *not* derived here from
+  `RELEASE_ROOT` or `__BURRITO_BIN_PATH`: Burrito unpacks the release into
+  `~/Library/Application Support/.burrito/…` and runs from there, so the release
+  root points at a cache directory that has nothing to do with the bundle a user
+  would drag to the Trash. Nothing else on the BEAM side knows where the app is.
+  """
+  @spec app_path() :: String.t() | nil
+  def app_path do
+    case System.get_env("CODRIFT_APP_PATH") do
+      path when is_binary(path) and path != "" -> path
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Who owns the app bundle at `path`.
+
+  Biased towards `:homebrew` on purpose. The two failure directions are not
+  symmetrical: calling a Homebrew install `:self` means replacing a Cellar/cask
+  tree underneath brew — corrupting its manifest, and reverted by the next
+  `brew upgrade` anyway — while calling a manual install `:homebrew` merely runs
+  a `brew upgrade` that reports the cask is not installed. So the presence of a
+  `codrift` cask receipt anywhere is enough, without checking whether *this*
+  bundle is the one it installed.
+  """
+  @spec app_manager(String.t() | nil) :: manager
+  def app_manager(path)
+  def app_manager(nil), do: :unknown
+  def app_manager(""), do: :unknown
+
+  def app_manager(path) do
+    cond do
+      "Caskroom" in Path.split(path) -> :homebrew
+      cask_receipt?() -> :homebrew
+      true -> :self
+    end
+  end
+
+  @doc """
+  Who owns the `codrift` command on PATH — which is a different question from
+  `app_manager/1`, because the command and the app need not be the same install.
+
+  `:bundled` is what both shipped installers now produce: the command is a
+  symlink into the `.app`, whose sidecar is a complete release of this code, so
+  there is no second copy to move and the app's own update carries it. That
+  replaced a separate `codrift-cli` formula/tarball which downloaded the same
+  ~15 MB release a second time. `:self` and `:homebrew` remain for a CLI
+  installed on its own — a Linux tarball, or a leftover from that formula.
+  """
+  @spec cli_manager() :: cli_manager
+  def cli_manager do
+    case System.find_executable("codrift") do
+      nil -> :missing
+      path -> cli_manager(resolve_link(path))
+    end
+  end
+
+  @doc "`cli_manager/0` with the resolved command path passed in, so it can be tested."
+  @spec cli_manager(String.t()) :: cli_manager
+  def cli_manager(path) do
+    cond do
+      bundled_cli?(path) -> :bundled
+      "Cellar" in Path.split(path) -> :homebrew
+      true -> :self
+    end
+  end
+
+  # A path inside a `.app` is the bundle's own sidecar. Matched on the bundle
+  # rather than on the exact executable name so this keeps holding if the
+  # sidecar is ever renamed or moved within Contents/.
+  defp bundled_cli?(path) do
+    Enum.any?(Path.split(path), &String.ends_with?(&1, ".app"))
+  end
+
+  @doc """
+  The `brew upgrade` line that moves a Homebrew install forward.
+
+  One name, because there is one package: the cask ships the app and the
+  `codrift` command as a symlink into it. This used to have to name the
+  `codrift-cli` formula as well — brew does not upgrade a cask's formula
+  dependencies, so a plain `brew upgrade codrift` left the CLI behind and the
+  two drifted apart.
+  """
+  @spec brew_upgrade_command() :: String.t()
+  def brew_upgrade_command, do: "brew upgrade codrift"
+
+  @doc "Absolute path to `brew`, or `nil` when it is not installed/on PATH."
+  @spec brew_executable() :: String.t() | nil
+  def brew_executable do
+    Enum.find_value(
+      [System.find_executable("brew"), "/opt/homebrew/bin/brew", "/usr/local/bin/brew"],
+      fn candidate -> if is_binary(candidate) and File.regular?(candidate), do: candidate end
+    )
+  end
+
+  # Homebrew keeps one directory per installed cask under `<prefix>/Caskroom`,
+  # and it survives the app being moved to /Applications (which is where the
+  # `app` stanza puts it), so it is the durable record that brew owns Codrift.
+  # The env vars are read first for a non-standard prefix, but a GUI app started
+  # from Finder rarely has them — hence the two literal defaults.
+  defp cask_receipt? do
+    [
+      System.get_env("HOMEBREW_CASKROOM"),
+      with(
+        prefix when is_binary(prefix) <- System.get_env("HOMEBREW_PREFIX"),
+        do: Path.join(prefix, "Caskroom")
+      ),
+      "/opt/homebrew/Caskroom",
+      "/usr/local/Caskroom"
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.any?(&File.dir?(Path.join(&1, "codrift")))
+  end
 
   @doc """
   Detects a release tree owned by an external package manager, which self-update
@@ -115,7 +351,7 @@ defmodule Codrift.Updater do
   @spec external_package_manager(String.t()) :: {:ok, String.t()} | :error
   def external_package_manager(dir) do
     if "Cellar" in Path.split(dir) do
-      {:ok, "brew upgrade codrift codrift-cli"}
+      {:ok, brew_upgrade_command()}
     else
       :error
     end
@@ -125,10 +361,10 @@ defmodule Codrift.Updater do
   Returns `{:ok, path}` when the `codrift` that PATH resolves to lives outside
   `dir`, i.e. an update to `dir` will not be the one that runs.
 
-  Two installers write this command — install.sh to `~/.local/bin` and the
-  `codrift-cli` formula to Homebrew's `bin` — and whichever comes first on PATH
-  wins. Updating the loser is silent: `codrift version` keeps reporting the old
-  number and the update looks broken.
+  More than one thing can write this command — the cask's symlink into the app,
+  install.sh's `~/.local/bin`, a leftover Homebrew formula — and whichever comes
+  first on PATH wins. Updating the loser is silent: `codrift version` keeps
+  reporting the old number and the update looks broken.
   """
   @spec shadowing_binary(String.t()) :: {:ok, String.t()} | :none
   def shadowing_binary(dir) do
@@ -162,7 +398,6 @@ defmodule Codrift.Updater do
     with :ok <- ensure_self_managed(dir),
          {:ok, target} <- detect_target(),
          {:ok, tmp_path} <- download(version, target),
-         :ok <- verify_checksum(tmp_path, version, target),
          :ok <- install_tarball(tmp_path, dir) do
       File.rm(tmp_path)
       :ok
@@ -215,59 +450,52 @@ defmodule Codrift.Updater do
 
   # ── Private ────────────────────────────────────────────────────────────────
 
-  defp detect_target do
-    os = :os.type()
-    arch = :erlang.system_info(:system_architecture) |> List.to_string()
-
-    case {os, arch} do
-      {{:unix, :darwin}, a} when is_binary(a) ->
-        if String.contains?(a, "aarch64"),
-          do: {:ok, "aarch64-apple-darwin"},
-          else: {:ok, "x86_64-apple-darwin"}
-
-      {{:unix, _}, a} when is_binary(a) ->
-        if String.contains?(a, "aarch64"),
-          do: {:ok, "aarch64-linux-gnu"},
-          else: {:ok, "x86_64-linux-gnu"}
-
-      _ ->
-        {:error, "unsupported platform"}
-    end
-  end
-
   defp download(version, target) do
     url = cli_asset_url(version, target)
     tmp = Path.join(System.tmp_dir!(), cli_asset(version, target))
 
-    case Req.get(url, into: File.stream!(tmp)) do
-      {:ok, %{status: 200}} -> {:ok, tmp}
+    with :ok <- download_and_verify(url, tmp), do: {:ok, tmp}
+  end
+
+  @doc """
+  Downloads `url` to `dest` and verifies it against the `<url>.sha256` asset
+  published beside it, deleting `dest` on a mismatch.
+
+  Every published asset gets a sibling checksum (release.yml's "Collect release
+  assets" step), and both `install.sh` and every path that installs a downloaded
+  artifact go through this — an unsigned build is the only integrity check
+  there is, so a missing checksum file is an error rather than a skip.
+  """
+  @spec download_and_verify(String.t(), String.t()) :: :ok | {:error, String.t()}
+  def download_and_verify(url, dest) do
+    File.mkdir_p!(Path.dirname(dest))
+
+    case Req.get(url, into: File.stream!(dest)) do
+      {:ok, %{status: 200}} -> verify_checksum(dest, url <> ".sha256")
       {:ok, %{status: 404}} -> {:error, "release not found: #{url}"}
       {:ok, %{status: s}} -> {:error, "download failed with status #{s}"}
       {:error, reason} -> {:error, inspect(reason)}
     end
   end
 
-  # Fetches the published `<asset>.sha256` and compares it to the local
-  # file's digest. The checksum file contains `<hex>  <filename>` (the
-  # `shasum`/`sha256sum` format emitted by release.yml).
-  defp verify_checksum(tmp_path, version, target) do
-    url = cli_asset_url(version, target) <> ".sha256"
-
+  # Fetches the published `.sha256` and compares it to the local file's digest.
+  # The checksum file contains `<hex>  <filename>` (the `shasum`/`sha256sum`
+  # format emitted by release.yml).
+  defp verify_checksum(path, url) do
     with {:ok, %{status: 200, body: body}} <- Req.get(url),
          [expected | _] <- body |> to_string() |> String.split() do
       actual =
         :sha256
-        |> :crypto.hash(File.read!(tmp_path))
+        |> :crypto.hash(File.read!(path))
         |> Base.encode16(case: :lower)
 
       if actual == String.downcase(expected) do
         :ok
       else
-        File.rm(tmp_path)
+        File.rm(path)
 
         {:error,
-         "checksum mismatch for #{Path.basename(tmp_path)}: " <>
-           "expected #{expected}, got #{actual}"}
+         "checksum mismatch for #{Path.basename(path)}: expected #{expected}, got #{actual}"}
       end
     else
       {:ok, %{status: s}} -> {:error, "checksum file unavailable (status #{s}): #{url}"}

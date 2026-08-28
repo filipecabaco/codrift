@@ -12,9 +12,10 @@ defmodule Codrift.Core do
 
   alias Codrift.Config.Keybindings
   alias Codrift.Config.Settings
-  alias Codrift.Initiative.{DirEntry, Store}
+  alias Codrift.Initiative.{DirEntry, Pinned, Store}
   alias Codrift.MCP.Handler
   alias Codrift.OAuth.Config, as: OAuthConfig
+  alias Codrift.Updater.Runner
   alias Codrift.Web.EventRelay
   alias Codrift.Worktree.Inventory
 
@@ -142,6 +143,41 @@ defmodule Codrift.Core do
       {:ok, Map.merge(status, %{prefilled: command, awaiting_user: true})}
     else
       {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  # Pin a file into the initiative and put it in front of the user. Two halves of
+  # one thing on purpose: an agent that has found the file that matters should
+  # not have to choose between showing it now and leaving it findable later.
+  def call("open_file", %{"initiative_id" => id, "path" => path} = params) do
+    with {:ok, initiative} <- Store.get(id),
+         allowed = Enum.map(initiative.dirs, &DirEntry.effective_path/1),
+         {:ok, pinned} <-
+           Pinned.pin(
+             Store.context_path(id),
+             allowed,
+             path,
+             Map.get(params, "name")
+           ) do
+      EventRelay.broadcast({:file_request, id, pinned["name"], Map.get(params, "reason")})
+      {:ok, pinned}
+    else
+      {:error, :not_found} ->
+        {:error, "initiative not found: #{id}"}
+
+      {:error, :forbidden} ->
+        {:error,
+         "#{path} is not inside any of this initiative's directories — " <>
+           "add the directory first with add_dir"}
+
+      {:error, :not_a_file} ->
+        {:error, "not a regular file: #{path}"}
+
+      {:error, :reserved} ->
+        {:error, "the initiative already has a different context file by that name"}
+
+      {:error, reason} ->
+        {:error, "could not pin #{path}: #{inspect(reason)}"}
     end
   end
 
@@ -906,10 +942,17 @@ defmodule Codrift.Core do
   end
 
   def call("read_context_file", %{"initiative_id" => id, "name" => name}) do
-    with {:ok, _initiative} <- Store.get(id),
+    # The initiative's directories are allowed roots here, not just the context
+    # folder, because a pinned file of interest *is* a symlink out of it (see
+    # `Codrift.Initiative.Pinned`). `read_within/2` resolves symlinks before
+    # checking containment, so without them every pin read back as `:forbidden`.
+    # The rule does not widen: `Pinned.pin/4` only ever links to a file those
+    # same roots already contain.
+    with {:ok, initiative} <- Store.get(id),
          :ok <- validate_context_path(name),
          dir = Store.context_path(id),
-         {:ok, content} <- Codrift.Files.read_within([dir], Path.join(dir, name)) do
+         allowed = [dir | Enum.map(initiative.dirs, &DirEntry.effective_path/1)],
+         {:ok, content} <- Codrift.Files.read_within(allowed, Path.join(dir, name)) do
       {:ok, %{"name" => name, "content" => content}}
     else
       {:error, :not_found} -> {:error, "initiative not found: #{id}"}
@@ -964,6 +1007,52 @@ defmodule Codrift.Core do
       {:error, reason} -> {:error, "could not write file: #{inspect(reason)}"}
     end
   end
+
+  # ── Updates ────────────────────────────────────────────────────────────────
+
+  # What the UI needs to decide between "say nothing", "offer an update" and
+  # "explain why it cannot install one". Never fails: a version probe that could
+  # not reach GitHub is a quiet non-event, not an error the user has to dismiss,
+  # so the reason travels in the payload and `available` stays false.
+  def call("update_status", _args) do
+    manager = Codrift.Updater.app_manager(Codrift.Updater.app_path())
+
+    base = %{
+      "current" => Codrift.Updater.current_version(),
+      "manager" => Atom.to_string(manager),
+      "cli_manager" => Atom.to_string(Codrift.Updater.cli_manager()),
+      "brew_command" => Codrift.Updater.brew_upgrade_command(),
+      "latest" => nil,
+      "available" => false,
+      "error" => nil
+    }
+
+    case Codrift.Updater.check() do
+      {:update_available, _current, latest} ->
+        {:ok, %{base | "latest" => latest, "available" => manager != :unknown}}
+
+      {:up_to_date, version} ->
+        {:ok, %{base | "latest" => version}}
+
+      {:error, reason} ->
+        {:ok, %{base | "error" => reason}}
+    end
+  end
+
+  # Starts the update the user just accepted. The release is re-read here rather
+  # than passed in from the browser: the asset list decides what gets downloaded
+  # and executed, and that is not a decision to take from a request body.
+  def call("start_update", _args) do
+    with {:ok, %{version: version, assets: assets}} <- Codrift.Updater.fetch_latest_release(),
+         {:ok, _stage} <- Runner.start(version, assets) do
+      {:ok, Runner.status()}
+    else
+      {:error, :busy} -> {:error, "an update is already running"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def call("update_progress", _args), do: {:ok, Runner.status()}
 
   def call(name, args) do
     if name in Handler.tool_names() do

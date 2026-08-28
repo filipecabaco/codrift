@@ -43,6 +43,104 @@ defmodule Codrift.UpdaterTest do
     end
   end
 
+  describe "desktop_asset/2" do
+    # The names come from the Tauri bundler, not from us, so the updater matches
+    # their shape instead of reconstructing them.
+    @assets %{
+      "Codrift_1.2.3_aarch64.dmg" => "https://example.test/arm.dmg",
+      "Codrift_1.2.3_x64.dmg" => "https://example.test/intel.dmg",
+      "Codrift_1.2.3_amd64.AppImage" => "https://example.test/linux.AppImage",
+      "codrift-cli-1.2.3-aarch64-apple-darwin.tar.gz" => "https://example.test/cli.tar.gz"
+    }
+
+    test "picks the arm disk image on Apple silicon" do
+      assert {:ok, {"Codrift_1.2.3_aarch64.dmg", "https://example.test/arm.dmg"}} =
+               Updater.desktop_asset(@assets, "aarch64-apple-darwin")
+    end
+
+    test "picks the intel disk image on x86 macOS" do
+      assert {:ok, {"Codrift_1.2.3_x64.dmg", "https://example.test/intel.dmg"}} =
+               Updater.desktop_asset(@assets, "x86_64-apple-darwin")
+    end
+
+    test "picks the AppImage on Linux" do
+      assert {:ok, {"Codrift_1.2.3_amd64.AppImage", _}} =
+               Updater.desktop_asset(@assets, "x86_64-linux-gnu")
+    end
+
+    # An arm Linux release publishes no bundle today. Saying so beats
+    # downloading an intel one and calling it an update.
+    test "is an error when the release carries nothing for this platform" do
+      assert :error = Updater.desktop_asset(@assets, "aarch64-linux-gnu")
+      assert :error = Updater.desktop_asset(%{}, "aarch64-apple-darwin")
+      assert :error = Updater.desktop_asset(@assets, "sparc-solaris")
+    end
+
+    # The CLI tarball is published in the same release and must never be
+    # mistaken for the app bundle.
+    test "never matches the CLI tarball" do
+      cli = %{
+        "codrift-cli-1.2.3-aarch64-apple-darwin.tar.gz" => "https://example.test/cli.tar.gz"
+      }
+
+      assert :error = Updater.desktop_asset(cli, "aarch64-apple-darwin")
+    end
+  end
+
+  describe "app_manager/1" do
+    # `:unknown`, not `:self`. Without CODRIFT_APP_PATH there is no bundle to
+    # replace, and guessing one is how a self-update overwrites the wrong tree.
+    test "is unknown when the shell named no app" do
+      assert Updater.app_manager(nil) == :unknown
+      assert Updater.app_manager("") == :unknown
+    end
+
+    test "is homebrew for a bundle inside a Caskroom" do
+      assert Updater.app_manager("/opt/homebrew/Caskroom/codrift/0.2.7/Codrift.app") == :homebrew
+    end
+  end
+
+  describe "brew_upgrade_command/0" do
+    test "always names the cask" do
+      assert Updater.brew_upgrade_command() =~ ~r/^brew upgrade codrift\b/
+    end
+
+    test "matches the command the cask's caveats tell users to run" do
+      cask = File.read!(Path.join(@repo_root, "Casks/codrift.rb"))
+      assert cask =~ Updater.brew_upgrade_command()
+    end
+
+    # The cask used to `depends_on` a codrift-cli formula, which made brew
+    # download the same release twice and — since brew does not upgrade a cask's
+    # formula dependencies — let the app and the CLI drift to different
+    # versions. Naming a formula the tap no longer carries would now just error.
+    test "names one package, because the cask is one package" do
+      assert Updater.brew_upgrade_command() == "brew upgrade codrift"
+    end
+  end
+
+  describe "the cask ships the CLI" do
+    setup do
+      %{cask: File.read!(Path.join(@repo_root, "Casks/codrift.rb"))}
+    end
+
+    # `codrift mcp install` is documented in the cask's own caveats, so the cask
+    # has to actually put that command on PATH. It does it by pointing at the
+    # app bundle's sidecar — a complete release of this code, which runs
+    # `Codrift.CLI.Main` when handed argv (see `Codrift.start/2`).
+    test "symlinks codrift to the bundled sidecar rather than depending on a formula",
+         %{cask: cask} do
+      assert cask =~ ~s(binary "\#{appdir}/Codrift.app/Contents/MacOS/desktop", target: "codrift")
+      refute cask =~ "depends_on formula:"
+    end
+
+    test "the tap no longer carries the formula the cask used to pull in" do
+      refute File.exists?(Path.join(@repo_root, "Formula/codrift-cli.rb")),
+             "the cask ships the CLI itself; a formula installing a second copy " <>
+               "would collide with its binary stanza in Homebrew's bin"
+    end
+  end
+
   describe "cli_asset_url/2" do
     test "points at the GitHub release download path for the v-prefixed tag" do
       assert Updater.cli_asset_url("0.1.0", "aarch64-apple-darwin") ==
@@ -84,6 +182,26 @@ defmodule Codrift.UpdaterTest do
     end
   end
 
+  describe "cli_manager/1" do
+    # The shipped arrangement on both installers: `codrift` is a symlink into
+    # the app bundle. Nothing may try to replace it on its own — the bundle is
+    # the CLI, and the app's own update already moved it.
+    test "a command inside a .app is the bundle's own sidecar" do
+      assert Updater.cli_manager("/Applications/Codrift.app/Contents/MacOS/desktop") == :bundled
+    end
+
+    test "a Cellar tree is Homebrew's to move" do
+      assert Updater.cli_manager("/opt/homebrew/Cellar/codrift-cli/0.0.5/libexec/bin/codrift") ==
+               :homebrew
+    end
+
+    # install.sh's Linux leg still unpacks a standalone tarball, and that one
+    # self-updates.
+    test "a standalone tree is ours to replace" do
+      assert Updater.cli_manager(Path.expand("~/.local/share/codrift/bin/codrift")) == :self
+    end
+  end
+
   describe "install_dir/1" do
     test "uses RELEASE_ROOT, the tree the running binary was booted from" do
       assert Updater.install_dir("/opt/homebrew/Cellar/codrift-cli/0.0.5/libexec") ==
@@ -116,11 +234,7 @@ defmodule Codrift.UpdaterTest do
       assert {:ok, command} =
                Updater.external_package_manager("/opt/homebrew/Cellar/codrift-cli/0.0.5/libexec")
 
-      assert command =~ "brew upgrade"
-      # The cask ships the app and the formula ships the CLI, and `brew upgrade
-      # codrift` alone moves only the cask — which is how an "upgraded" install
-      # keeps reporting the old CLI version.
-      assert command =~ "codrift-cli"
+      assert command == Updater.brew_upgrade_command()
     end
 
     test "leaves install.sh's own tree to self-update" do

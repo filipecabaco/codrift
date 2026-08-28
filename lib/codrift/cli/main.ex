@@ -16,6 +16,7 @@ defmodule Codrift.CLI.Main do
       codrift memory     <subcommand>
       codrift mcp        <subcommand>
       codrift pane       <subcommand>
+      codrift open       <initiative_id> <path>
       codrift worktree   <subcommand>
       codrift prune
   """
@@ -24,6 +25,7 @@ defmodule Codrift.CLI.Main do
   alias Codrift.CLI.Integration
   alias Codrift.CLI.MCP
   alias Codrift.CLI.Memory
+  alias Codrift.CLI.Open
   alias Codrift.CLI.Pane
   alias Codrift.CLI.Session
   alias Codrift.CLI.Start
@@ -69,6 +71,10 @@ defmodule Codrift.CLI.Main do
   defp dispatch(["memory" | rest]), do: Memory.run(rest)
   defp dispatch(["mcp" | rest]), do: MCP.run(rest)
   defp dispatch(["pane" | rest]), do: Pane.run(rest)
+  # Top-level rather than `pane open`: it is the one handoff that names a thing
+  # the user already has a word for, and `codrift open <file>` is what someone
+  # reaches for without reading the help.
+  defp dispatch(["open" | rest]), do: Open.run(rest)
   defp dispatch(["update" | rest]), do: Update.run(rest)
   defp dispatch(["start" | rest]), do: Start.run(rest)
   defp dispatch(["worktree" | rest]), do: Worktree.run(rest)
@@ -85,6 +91,8 @@ defmodule Codrift.CLI.Main do
       codrift session     <subcommand>
       codrift memory      <subcommand>
       codrift mcp         <subcommand>
+      codrift open        <initiative_id> <path>
+                                        Open a file and keep it in the initiative
       codrift pane        <subcommand>  Open a terminal / focus an agent for the user
       codrift worktree    <subcommand>  List Codrift-managed git worktrees
       codrift prune       [--force]     Remove worktrees no initiative claims

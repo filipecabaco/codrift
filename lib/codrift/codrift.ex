@@ -17,6 +17,14 @@ defmodule Codrift do
 
   Run `mix codrift.mcp.install` to register the server with Claude Code.
 
+  ## Headless CLI
+
+  `start/2` is also where the shipped `codrift` command enters. The bundle's
+  Burrito sidecar is a complete release of this code, so the command on PATH is
+  a symlink to it rather than a separate install; given argv it runs
+  `Codrift.CLI.Main` and halts instead of starting the supervision tree. See
+  `cli_argv/0`.
+
   ## Live WebSocket
 
   `ws /ws` carries the live surface both ways for the whole workspace: agent
@@ -28,6 +36,8 @@ defmodule Codrift do
 
   require Logger
 
+  alias Burrito.Util.Args
+  alias Codrift.CLI.Main, as: CLI
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.MCP.Handler
   alias Codrift.MCP.SSESession
@@ -39,7 +49,38 @@ defmodule Codrift do
   plug(Codrift.Plugs.LocalGuard)
 
   @impl true
-  def start(_type, _args) do
+  def start(type, args) do
+    case cli_argv() do
+      [] -> start_supervised(type, args)
+      argv -> run_cli(argv)
+    end
+  end
+
+  # The shipped bundle already carries a complete release of this same code, so
+  # the `codrift` command Homebrew and install.sh put on PATH is a symlink to
+  # this sidecar rather than a second, byte-for-byte-equivalent download of it.
+  # Argv is what tells the two callers apart: Tauri spawns the sidecar with
+  # none, and the symlink passes the user's through untouched.
+  #
+  # Guarded on `running_standalone?/0` so this can only ever trigger for a
+  # Burrito-wrapped build. A plain release boot (`mix ex_tauri.dev`, `bin/desktop
+  # daemon`) has its own plain arguments, and reading those as CLI verbs would
+  # turn a normal start into a usage message.
+  defp cli_argv do
+    if Burrito.Util.running_standalone?(), do: Args.argv(), else: []
+  end
+
+  @spec run_cli([String.t()]) :: no_return()
+  defp run_cli(argv) do
+    CLI.run(argv)
+    # `halt/1`, not `System.stop/0`: the application controller is inside this
+    # very callback, so a graceful stop would wait on it returning and deadlock.
+    # An integer status flushes outstanding output first, which the commands
+    # that print JSON for an agent to parse depend on.
+    System.halt(0)
+  end
+
+  defp start_supervised(_type, _args) do
     if desktop_sidecar?() do
       # When launched as the Tauri desktop app, the process inherits macOS's
       # minimal launchd PATH (no ~/.local/bin, mise shims, homebrew…), so agent
@@ -69,6 +110,7 @@ defmodule Codrift do
       Codrift.OAuth.StateStore,
       Codrift.Scheduler,
       Codrift.Freshness,
+      Codrift.Updater.Runner,
       {Bandit,
        [plug: __MODULE__, startup_log: false] ++
          Application.get_env(:codrift, :bandit_opts, [])}
@@ -258,6 +300,17 @@ defmodule Codrift do
         end
     end
   end)
+
+  # Raw bytes for a previewable image inside one of the initiative's directories.
+  #
+  # The one read that is not an op on `/api/rpc`: `<img src>` issues a GET and
+  # cannot POST a JSON body, and base64ing a multi-megabyte screenshot through
+  # the RPC envelope to work around that would cost a third more bytes and skip
+  # the browser's own image cache. Containment is the same as `read_file` —
+  # `Codrift.Files.read_image_within/2` resolves symlinks and refuses anything
+  # outside the directories this initiative holds — and the extension allowlist
+  # keeps it from becoming a general "read any file as bytes" route.
+  get("/api/file", fn conn -> serve_image(conn) end)
 
   # Generic operation endpoint backing the web UI. Delegates to `Codrift.Core`,
   # the same layer the MCP server uses, so every product capability is reachable
@@ -505,6 +558,49 @@ defmodule Codrift do
   #   * present – HTTP+SSE (2024-11-05). The POST is only acknowledged; the
   #     response belongs on that session's stream. Answering in the body here
   #     would leave the client blocked on the stream until it timed out.
+  defp serve_image(conn) do
+    id = conn.params["initiative_id"] || ""
+    path = conn.params["path"] || ""
+
+    with {:ok, initiative} <- Store.get(id),
+         allowed = image_roots(initiative),
+         {:ok, mime, data} <- Codrift.Files.read_image_within(allowed, path) do
+      conn
+      |> Plug.Conn.put_resp_content_type(mime)
+      # The editor writes over previewed files, so a stale cached copy would
+      # show the old picture. Revalidation is cheap on loopback.
+      |> Plug.Conn.put_resp_header("cache-control", "no-cache")
+      |> Plug.Conn.send_resp(200, data)
+    else
+      {:error, :not_found} ->
+        json(conn, 404, %{"error" => "initiative not found: #{id}"})
+
+      {:error, :forbidden} ->
+        json(conn, 403, %{"error" => "path is outside the initiative"})
+
+      {:error, :not_an_image} ->
+        json(conn, 415, %{"error" => "not a previewable image"})
+
+      {:error, :too_large} ->
+        json(conn, 413, %{"error" => "image is too large to preview"})
+
+      {:error, :enoent} ->
+        json(conn, 404, %{"error" => "no such file"})
+
+      {:error, reason} ->
+        json(conn, 422, %{"error" => "could not read image: #{inspect(reason)}"})
+    end
+  end
+
+  # The initiative's own context folder counts as one of its directories here,
+  # even though it is not in `dirs`. It is where agents drop screenshots and
+  # where the context documents that reference them live, and
+  # `list_context_files` already offers both — so leaving it out meant the
+  # Context pane listing an image it then had no way to show.
+  defp image_roots(initiative) do
+    [Store.context_path(initiative.id) | Enum.map(initiative.dirs, &DirEntry.effective_path/1)]
+  end
+
   defp mcp_post(conn) do
     conn = Plug.Conn.fetch_query_params(conn)
 

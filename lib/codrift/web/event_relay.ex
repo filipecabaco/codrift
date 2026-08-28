@@ -149,6 +149,18 @@ defmodule Codrift.Web.EventRelay do
       reason: reason
     }
 
+  # The same shape of request for a *file*: an agent has pinned something worth
+  # looking at into the initiative's context folder and is asking the window to
+  # open it. Carries the link name rather than the source path because that is
+  # what the Context pane addresses files by.
+  def frame({:file_request, initiative_id, name, reason}),
+    do: %{
+      event: "file_request",
+      initiative_id: initiative_id,
+      name: name,
+      reason: reason
+    }
+
   # ── Initiative lifecycle ────────────────────────────────────────────────────
   #
   # The open window is not the only writer of the initiative list: `codrift

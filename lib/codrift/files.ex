@@ -14,6 +14,28 @@ defmodule Codrift.Files do
 
   @max_preview_bytes 512_000
 
+  # Image previews are served as raw bytes over `GET /api/file`, not squeezed
+  # through the JSON RPC layer, so they get their own — far larger — ceiling.
+  # A screenshot dropped into an initiative's context folder is routinely a
+  # couple of megabytes and every one of them tripped `@max_preview_bytes`.
+  @max_image_bytes 20_000_000
+
+  # Extensions a browser can render directly. `.svg` is in here because the
+  # preview shows it as a picture; it stays editable as text, which is why the
+  # editor asks `text_image?/1` rather than this map.
+  @image_mimes %{
+    ".apng" => "image/apng",
+    ".avif" => "image/avif",
+    ".bmp" => "image/bmp",
+    ".gif" => "image/gif",
+    ".ico" => "image/x-icon",
+    ".jpeg" => "image/jpeg",
+    ".jpg" => "image/jpeg",
+    ".png" => "image/png",
+    ".svg" => "image/svg+xml",
+    ".webp" => "image/webp"
+  }
+
   @doc """
   Returns relative file paths under `base`, sorted, respecting `.gitignore`
   when `base` is a git repository.
@@ -239,6 +261,50 @@ defmodule Codrift.Files do
   end
 
   @doc """
+  The MIME type a browser would render `path` as, or `nil` when the extension
+  is not one of the image types the preview knows how to show.
+
+      iex> Codrift.Files.image_mime("docs/shot.PNG")
+      "image/png"
+      iex> Codrift.Files.image_mime("lib/codrift.ex")
+      nil
+  """
+  @spec image_mime(String.t()) :: String.t() | nil
+  def image_mime(path) when is_binary(path) do
+    Map.get(@image_mimes, path |> Path.extname() |> String.downcase())
+  end
+
+  @doc """
+  Reads an image inside `allowed_dirs` for `GET /api/file`, returning its MIME
+  type alongside the bytes.
+
+  Separate from `read_within/2` on purpose: the containment rules are identical,
+  but an image is answered raw with a `content-type` instead of being embedded
+  in JSON, and it is allowed to be much larger (`#{@max_image_bytes}` bytes)
+  than a text preview.
+
+  `{:error, :not_an_image}` when the extension is not renderable — the route
+  must not become a general "read any file as bytes" hole.
+  """
+  @spec read_image_within([String.t()], String.t()) ::
+          {:ok, String.t(), binary()} | {:error, atom()}
+  def read_image_within(allowed_dirs, path) do
+    case image_mime(path) do
+      nil ->
+        {:error, :not_an_image}
+
+      mime ->
+        with {:ok, abs} <- resolve_within(allowed_dirs, path),
+             {:ok, data} <- read_regular(abs, @max_image_bytes) do
+          {:ok, mime, data}
+        else
+          :error -> {:error, :forbidden}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  @doc """
   Reads `path` only if it resolves inside one of `allowed_dirs`.
 
   Symlinks are fully resolved before the containment check (see `realpath/1`),
@@ -346,9 +412,9 @@ defmodule Codrift.Files do
     File.rename!(tmp, path)
   end
 
-  defp read_regular(abs) do
+  defp read_regular(abs, limit \\ @max_preview_bytes) do
     case File.stat(abs) do
-      {:ok, %{type: :regular, size: size}} when size <= @max_preview_bytes -> File.read(abs)
+      {:ok, %{type: :regular, size: size}} when size <= limit -> File.read(abs)
       {:ok, %{type: :regular}} -> {:error, :too_large}
       {:ok, _} -> {:error, :not_a_file}
       {:error, reason} -> {:error, reason}

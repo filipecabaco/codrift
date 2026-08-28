@@ -131,12 +131,33 @@ command, run something else, or close the terminal without running anything.
 To send them back to a terminal or agent you opened earlier — rather than
 opening a second one — use `focus_agent { agent_id, reason }`.
 
-If you have a shell but not these tools, the CLI does the same two things:
+### Pointing at a file
+
+`open_file { initiative_id, path, reason }` opens a file in a pane *and* links
+it into the initiative's context folder, so it stays in the sidebar for the rest
+of the initiative rather than scrolling away in your output:
+
+```
+open_file {
+  initiative_id,
+  path:   "/Users/me/code/api/lib/api/auth/token.ex",
+  reason: "the rotation window is set here"
+}
+```
+
+The link points at the real file, so later edits show through, and pinning the
+same file twice changes nothing. Use it for the file the work actually turns on
+— the config that explains the bug, the schema everything refers back to — not
+for every file you read. `path` must be inside one of the initiative's
+directories; `add_dir` it first if it is not.
+
+If you have a shell but not these tools, the CLI does the same three things:
 
 ```bash
 codrift pane terminal <initiative_id> --dir=/path \
   --command='git commit -m "…"' --reason='review and commit'
 codrift pane focus <agent_id> --reason='back to you'
+codrift open <initiative_id> lib/api/auth/token.ex --reason='the rotation window'
 ```
 
 Missing tools usually means the MCP server was never registered for the config

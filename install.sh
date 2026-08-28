@@ -1,5 +1,7 @@
 #!/bin/sh
 # Codrift installer — installs the Codrift desktop app plus the headless CLI.
+# On macOS both come out of the one download: the `codrift` command is a symlink
+# into Codrift.app, whose sidecar is a complete release of the same code.
 # Usage: curl -fsSL https://codrift.app/install.sh | sh
 #
 # Environment overrides:
@@ -90,6 +92,7 @@ case "${OS}" in
     rm -rf "/Applications/$(basename "${APP}")"
     cp -R "${APP}" /Applications/
     hdiutil detach "${MNT}" -quiet || true
+    INSTALLED_APP="/Applications/$(basename "${APP}")"
     printf 'Codrift.app installed to /Applications.\n'
     ;;
 
@@ -117,7 +120,38 @@ esac
 
 # ── Install the headless CLI ─────────────────────────────────────────────────
 
+# macOS only: point `codrift` at the bundle we just installed. Its sidecar
+# (Contents/MacOS/desktop) is a complete release of the same Elixir application
+# the CLI tarball is built from, and runs the CLI when handed argv, so linking
+# to it saves downloading that release a second time — and means the command can
+# never report a different version than the app. Mirrors the Homebrew cask's
+# `binary` stanza.
+link_bundled_cli() {
+  BIN_DIR="${HOME}/.local/bin"
+  SIDECAR="${INSTALLED_APP}/Contents/MacOS/desktop"
+
+  if [ ! -x "${SIDECAR}" ]; then
+    printf '\nSkipping CLI: no sidecar at %s.\n' "${SIDECAR}"
+    return 1
+  fi
+
+  mkdir -p "${BIN_DIR}"
+  # A previous run of this installer left a release tree behind; the symlink
+  # replaces it, so the tree is now dead weight.
+  rm -rf "${HOME}/.local/share/codrift"
+  ln -sf "${SIDECAR}" "${BIN_DIR}/codrift"
+  printf '\ncodrift CLI linked to %s/codrift (from Codrift.app)\n' "${BIN_DIR}"
+}
+
 install_cli() {
+  # The bundled command only works where the app is a `.app` we can link into.
+  # A Linux AppImage is a single squashfs file with no reachable sidecar, so
+  # that platform still gets the standalone tarball.
+  if [ -n "${INSTALLED_APP:-}" ] && link_bundled_cli; then
+    warn_if_shadowed
+    return
+  fi
+
   [ -z "${CLI_TARGET}" ] && { printf '\nSkipping CLI: no build for %s-%s.\n' "${OS}" "${ARCH}"; return; }
 
   CLI_URL="$(asset_url "codrift-cli-.*${CLI_TARGET}\.tar\.gz$")"
@@ -138,22 +172,26 @@ install_cli() {
   ln -sf "${CLI_DIR}/bin/codrift" "${BIN_DIR}/codrift"
   printf 'codrift CLI installed to %s/codrift\n' "${BIN_DIR}"
 
+  warn_if_shadowed
+}
+
+# Homebrew's cask puts this same command in its own bin. With both present,
+# whichever comes first on PATH wins, and the loser is invisible: you install a
+# new version here and `codrift version` keeps reporting the old one from the
+# other prefix. Say so at install time.
+warn_if_shadowed() {
   case ":${PATH}:" in
     *":${BIN_DIR}:"*) ;;
     *) printf 'Add %s to your PATH to use the `codrift` command.\n' "${BIN_DIR}" ;;
   esac
 
-  # The `codrift-cli` Homebrew formula installs this same command into Homebrew's
-  # bin. With both present, whichever comes first on PATH wins, and the loser is
-  # invisible: you install a new version here and `codrift version` keeps
-  # reporting the old one from the other prefix. Say so at install time.
   hash -r 2>/dev/null || true
   RESOLVED="$(command -v codrift 2>/dev/null || true)"
   if [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "${BIN_DIR}/codrift" ]; then
     printf '\nWarning: `codrift` on your PATH resolves to %s, not the copy just\n' "${RESOLVED}"
     printf 'installed. That one will keep running and reporting its own version.\n'
-    printf 'If it came from Homebrew, `brew uninstall codrift-cli` (or keep brew and\n'
-    printf 'skip this installer) — otherwise put %s earlier in your PATH.\n' "${BIN_DIR}"
+    printf 'If it came from Homebrew, `brew uninstall --cask codrift` (or keep brew\n'
+    printf 'and skip this installer) — otherwise put %s earlier in your PATH.\n' "${BIN_DIR}"
   fi
 }
 

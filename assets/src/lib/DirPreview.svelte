@@ -6,10 +6,10 @@
   // which is what a person actually wants to know about a repo — and falls back
   // to a shallow tree only when there isn't. Neither is browsable; for that
   // there is "3 Tree", one keypress away.
-  import { Marked } from "marked";
   import { Icon } from "@steeze-ui/svelte-icon";
   import { rpc, type DirPreview, type Initiative } from "$lib/api";
   import { dirIcon, FolderIcon } from "$lib/icons";
+  import { markdownFor } from "$lib/markdown";
 
   let {
     initiativeId,
@@ -59,37 +59,18 @@
     };
   });
 
-  function escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  // A README's images are almost always repo-relative (`docs/images/x.png`),
-  // and nothing serves those — every one of them resolved to a 404 and drew a
-  // broken-image icon through the middle of the prose. A named placeholder says
-  // the same thing honestly and costs nothing. Own `Marked` instance, not
-  // `marked.use`, which would mutate the shared parser ContextOverview uses.
-  //
-  // The renderer hands over the *raw* alt text, so it is escaped here before it
-  // reaches {@html}.
-  const parser = new Marked({
-    renderer: {
-      image({ href, text }) {
-        const label = text || href.split("/").pop() || "image";
-        return `<span class="rounded border border-border px-1.5 py-px text-[11px] text-muted">🖼 ${escapeHtml(label)}</span>`;
-      },
-    },
-  });
-
   // The content is a README from a directory the user chose to add — the same
   // trust boundary the initiative's own context files already sit behind
   // (ContextOverview renders those the same way), and the app runs no
   // cross-origin session for a script to steal.
+  //
+  // The parser is rebuilt per preview because its image resolution is relative
+  // to `preview.dir` — the directory that was actually read, which for a
+  // worktree-backed entry is the worktree rather than the source repo.
   const html = $derived(
-    preview?.kind === "readme" ? (parser.parse(preview.content) as string) : "",
+    preview?.kind === "readme"
+      ? (markdownFor(initiativeId, preview.dir).parse(preview.content) as string)
+      : "",
   );
 </script>
 
@@ -135,7 +116,7 @@
     {:else if preview?.kind === "readme"}
       <p class="mb-3 font-mono text-[11px] text-muted">{preview.name}</p>
       <div
-        class="text-[13px] leading-6 [&_a]:text-accent [&_a]:underline [&_code]:rounded [&_code]:bg-surface [&_code]:px-1 [&_code]:py-0.5 [&_h1]:mt-0 [&_h1]:mb-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-fg [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-accent [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_img]:max-w-full [&_li]:my-0.5 [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-surface [&_pre]:p-3 [&_strong]:text-fg [&_table]:my-2 [&_table]:block [&_table]:overflow-x-auto [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+        class="text-[13px] leading-6 [&_a]:text-accent [&_a]:underline [&_code]:rounded [&_code]:bg-surface [&_code]:px-1 [&_code]:py-0.5 [&_h1]:mt-0 [&_h1]:mb-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-fg [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-accent [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:font-semibold [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded [&_img]:border [&_img]:border-border [&_li]:my-0.5 [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-surface [&_pre]:p-3 [&_strong]:text-fg [&_table]:my-2 [&_table]:block [&_table]:overflow-x-auto [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
       >
         {@html html}
       </div>

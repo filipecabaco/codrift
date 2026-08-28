@@ -8,6 +8,7 @@
     promoteInitiative,
     quitApp,
     rpc,
+    updateStatus,
     MENU_EVENT,
     QUIT_REQUESTED,
     REDRAW_TERMINALS,
@@ -15,9 +16,10 @@
     type DirInfo,
     type Initiative,
     type SidebarSort,
+    type UpdateStatus,
   } from "$lib/api";
   import { conn, health } from "$lib/connection.svelte";
-  import { onPaneRequest, type PaneRequest } from "$lib/stream";
+  import { onFileRequest, onPaneRequest, type FileRequest, type PaneRequest } from "$lib/stream";
   import { workspace as ws, needsInput, type Row } from "$lib/workspace.svelte";
   import {
     ACTION_LABELS,
@@ -45,6 +47,7 @@
   import NewInitiative from "$lib/NewInitiative.svelte";
   import AgentPicker from "$lib/AgentPicker.svelte";
   import Settings, { type SettingsSection } from "$lib/Settings.svelte";
+  import UpdateNotice from "$lib/UpdateNotice.svelte";
   import { initTheme } from "$lib/theme.svelte";
   import { initFonts } from "$lib/fonts.svelte";
   import { initTitlebar, overlayed, titlebar } from "$lib/titlebar.svelte";
@@ -362,6 +365,7 @@
     | { kind: "new_initiative" }
     | { kind: "agent_picker" }
     | { kind: "settings"; section: SettingsSection }
+    | { kind: "update" }
     | null;
   let modal = $state<Modal>(null);
 
@@ -381,6 +385,59 @@
     status = msg;
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => (status = null), 4000);
+  }
+
+  // ── Updates ────────────────────────────────────────────────────────────────
+  //
+  // Offered once per version, and then never again by itself: dismissing moves
+  // the notice to a badge at the end of the footer, where it stays out of the
+  // way until the user goes looking for it. The dismissal is per version, so the
+  // *next* release still gets one dialog rather than inheriting the shrug.
+  const UPDATE_DISMISSED_KEY = "codrift:update-dismissed";
+  let update = $state<UpdateStatus | null>(null);
+  let updateDismissed = $state<string | null>(null);
+
+  const updateBadge = $derived(
+    update?.available && update.latest === updateDismissed ? update.latest : null,
+  );
+
+  function readDismissed(): string | null {
+    try {
+      return localStorage.getItem(UPDATE_DISMISSED_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  function dismissUpdate() {
+    const version = update?.latest;
+    modal = null;
+    if (!version) return;
+    updateDismissed = version;
+    try {
+      localStorage.setItem(UPDATE_DISMISSED_KEY, version);
+    } catch {
+      // Private-mode storage refuses writes; the badge still shows this session.
+    }
+  }
+
+  /** `announce` is false for the boot probe, which must not steal focus silently. */
+  async function checkForUpdates(announce = true) {
+    try {
+      update = await updateStatus();
+    } catch {
+      // A version probe is never worth an error toast — see `update_status`.
+      return;
+    }
+    if (update.available && (announce || update.latest !== updateDismissed)) {
+      modal = { kind: "update" };
+    } else if (announce) {
+      toast(
+        update.error
+          ? `Couldn't check for updates: ${update.error}`
+          : `Codrift ${update.current} is up to date.`,
+      );
+    }
   }
 
   async function load() {
@@ -1078,6 +1135,9 @@
         break;
       case "setup":
         await runSetup();
+        break;
+      case "check_updates":
+        await checkForUpdates();
         break;
       case "start_orchestration":
         if (!selectedInitiative) return toast("Select an initiative first.");
@@ -1918,6 +1978,8 @@
       keymap = DEFAULT_KEYMAP;
     }
     await load();
+    updateDismissed = readDismissed();
+    void checkForUpdates(false);
   });
 
   $effect(() => {
@@ -1959,6 +2021,20 @@
   // Agents asking for a human. The frame arrives after the `agent_started` that
   // created the terminal, so `ws` already knows the agent by the time we look.
   $effect(() => onPaneRequest((req) => openAgentPane(req)));
+
+  // An agent pinned a file worth looking at. The pin is a link in the context
+  // folder, so the file is already a context file by the time this arrives —
+  // `load()` first, because the sidebar has not listed it yet.
+  $effect(() =>
+    onFileRequest(async ({ initiativeId, name, reason }: FileRequest) => {
+      // Just the one initiative's file list, not a whole `load()`: the pin is
+      // the only thing that changed, and `load()` refetches every initiative's
+      // agents on the way past.
+      await ws.refreshContextFiles(initiativeId);
+      openContextFile(initiativeId, name);
+      toast(reason ? `${name} — ${reason}` : `Opened ${name}`);
+    }),
+  );
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
@@ -2319,6 +2395,20 @@
         {h.label}
       </span>
     {/each}
+    <!-- What "Later" leaves behind. In the footer rather than floating over the
+         corner: everything above this is a terminal, and a fixed pill would sit
+         on top of an agent's output for as long as the user ignored it.
+         `sticky` keeps it in the corner when the hint row scrolls. -->
+    {#if updateBadge}
+      <button
+        class="sticky right-0 ml-auto flex shrink-0 items-center gap-1.5 bg-surface pl-3 text-accent hover:underline"
+        title={`Codrift ${updateBadge} is available — click to update`}
+        onclick={() => (modal = { kind: "update" })}
+      >
+        <span aria-hidden="true">↑</span>
+        Update to {updateBadge}
+      </button>
+    {/if}
   </footer>
 </div>
 
@@ -2350,6 +2440,12 @@
           : `${selectedInitiative!.name} starts ${choice}`,
       );
     }}
+    onClose={() => (modal = null)}
+  />
+{:else if modal?.kind === "update" && update}
+  <UpdateNotice
+    status={update}
+    onDismiss={dismissUpdate}
     onClose={() => (modal = null)}
   />
 {:else if modal?.kind === "new_initiative"}

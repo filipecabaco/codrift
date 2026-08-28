@@ -19,6 +19,7 @@ defmodule Codrift.MCP.Handler do
     - `get_initiative_agents` — running agents filtered by initiative, with status
     - `start_agent` — spawn an agent in a directory
     - `open_terminal` — put a shell in front of the user for a step only they can do
+    - `open_file` — pin a file of interest into the initiative and open it
     - `send_to_agent` — send input to a running agent
     - `get_agent_output` — fetch recent output from an agent
     - `broadcast_to_initiative` — send the same prompt to all agents in an initiative
@@ -294,6 +295,41 @@ defmodule Codrift.MCP.Handler do
             }
           },
           "required" => ["initiative_id"]
+        }
+      },
+      %{
+        "name" => "open_file",
+        "description" =>
+          "Open a file in front of the user and keep it: it is linked into the " <>
+            "initiative's context folder, so it stays one keypress away in the " <>
+            "sidebar for the rest of the initiative. Use it for the file the work " <>
+            "actually turns on — the config that explains the bug, the schema " <>
+            "everything else refers back to — rather than for every file you read. " <>
+            "The link points at the real file, so later edits show through. " <>
+            "Pinning the same file twice is a no-op. The path must be inside one " <>
+            "of the initiative's directories.",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "initiative_id" => %{"type" => "string"},
+            "path" => %{
+              "type" => "string",
+              "description" =>
+                "Path to the file, absolute or `~`-relative. Must resolve inside " <>
+                  "one of the initiative's directories."
+            },
+            "name" => %{
+              "type" => "string",
+              "description" =>
+                "What to call it in the context folder. Defaults to the file's own " <>
+                  "name, prefixed with its parent directory if that is already taken."
+            },
+            "reason" => %{
+              "type" => "string",
+              "description" => "One line telling the user why this file matters."
+            }
+          },
+          "required" => ["initiative_id", "path"]
         }
       },
       %{

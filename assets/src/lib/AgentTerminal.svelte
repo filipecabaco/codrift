@@ -17,28 +17,68 @@
   function useGpuRenderer(t: Terminal) {
     try {
       const webgl = new WebglAddon();
-      // On context loss, fall back to Canvas (not the DOM renderer, which WebKit
-      // won't repaint) so the terminal keeps painting after switches.
-      webgl.onContextLoss(() => {
-        webgl.dispose();
-        try {
-          t.loadAddon(new CanvasAddon());
-        } catch {
-          /* DOM renderer */
-        }
-        // A fresh renderer starts with an empty canvas: everything already on
-        // the screen lives in xterm's buffer, not in the surface that just went
-        // away. Without this the pane stays blank until something happens to
-        // write to it — which, for an agent waiting on input, is never.
-        t.refresh(0, t.rows - 1);
-      });
+      webgl.onContextLoss(() => recoverFromContextLoss(t, webgl));
       t.loadAddon(webgl);
     } catch {
+      loadCanvasRenderer(t);
+    }
+  }
+
+  /**
+   * Take the terminal off the WebGL context WebKit just took away.
+   *
+   * This is the "the pane went blank after I switched windows" bug. WKWebView
+   * throws the GPU surface away whenever it decides the window is not on screen
+   * — another app in front, another Space, the machine asleep — and reports it
+   * as `webglcontextlost`. It only happens to a pane that has rendered once,
+   * which is why it looked like it needed an agent to be *running* at the time.
+   *
+   * Recovering has one rule that is not obvious, and getting it wrong is what
+   * made the pane blank rather than merely slower: **do not dispose the addon
+   * from inside its own event.** `WebglAddon.dispose()` called synchronously
+   * from `onContextLoss` clears a disposable store the addon is still firing
+   * over, and throws `Cannot read properties of undefined (reading
+   * '_isDisposed')`. That throw ended the handler early, so the Canvas fallback
+   * was never loaded — while the WebGL renderer had already removed its canvas.
+   * The terminal was left with no renderer at all: an empty `.xterm-screen`, no
+   * `.xterm-rows`, and nothing able to bring it back, because every repaint path
+   * here (coming back into view, window focus, the refresh action) ends in
+   * `term.refresh`, which needs a renderer to draw with.
+   *
+   * So: leave the event dispatch first, and load the fallback whether or not the
+   * dispose succeeded — a blank pane for the rest of the session is a far worse
+   * outcome than a leaked addon.
+   *
+   * One strike is permanent, by choice: a fresh WebglAddon would lose its
+   * context on the next window switch just the same, and Canvas renders
+   * correctly (it is only marginally slower). Not the DOM renderer, which is
+   * the thing WebKit won't composite — see `useGpuRenderer`.
+   */
+  function recoverFromContextLoss(t: Terminal, webgl: WebglAddon) {
+    setTimeout(() => {
       try {
-        t.loadAddon(new CanvasAddon());
+        webgl.dispose();
       } catch {
-        /* DOM renderer */
+        /* see above — this throwing must not cost us the fallback */
       }
+      loadCanvasRenderer(t);
+      // A fresh renderer starts with an empty surface: everything already on the
+      // screen lives in xterm's buffer, not in the canvas that just went away.
+      // Without this the pane stays blank until something happens to write to it
+      // — which, for an agent waiting on input, is never.
+      try {
+        t.refresh(0, t.rows - 1);
+      } catch {
+        /* the pane was torn down while we were recovering it */
+      }
+    }, 0);
+  }
+
+  function loadCanvasRenderer(t: Terminal) {
+    try {
+      t.loadAddon(new CanvasAddon());
+    } catch {
+      /* DOM renderer — xterm's own default, and better than no renderer */
     }
   }
 

@@ -569,6 +569,19 @@ class Workspace {
 
   async #ensureContextFiles(id: string) {
     if (this.contextFiles[id]) return;
+    await this.refreshContextFiles(id);
+  }
+
+  /**
+   * Re-read one initiative's context files, cache or no cache.
+   *
+   * `#ensureContextFiles` reads once and keeps the answer — the list only
+   * changes when something writes to the folder, which is rare enough that
+   * re-listing on every sidebar render would be waste. But `open_file` *is*
+   * something writing to the folder, and without this the pin it just made was
+   * missing from the sidebar until the next reload.
+   */
+  async refreshContextFiles(id: string) {
     try {
       const res = await rpc<{ files: string[] }>("list_context_files", { initiative_id: id });
       this.contextFiles = { ...this.contextFiles, [id]: res.files };
