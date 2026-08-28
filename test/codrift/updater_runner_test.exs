@@ -30,7 +30,7 @@ defmodule Codrift.UpdaterRunnerTest do
     end
   end
 
-  describe "swap_script/2" do
+  describe "swap_script/3" do
     @app "/Applications/Codrift.app"
     @staged "/Users/x/.codrift/update/Codrift.app"
 
@@ -50,8 +50,12 @@ defmodule Codrift.UpdaterRunnerTest do
       assert script =~ "|| { mv '#{@app}.old' '#{@app}'; exit 1; }"
     end
 
+    # The relaunch is the last thing the script does and the only thing the user
+    # sees, and its form is per-platform, so both are pinned here rather than
+    # only whichever one the suite happens to be running on.
     test "reopens the app it just replaced" do
-      assert Runner.swap_script(@app, @staged) =~ "open -n '#{@app}'"
+      assert Runner.swap_script(@app, @staged, {:unix, :darwin}) =~ "open -n '#{@app}'"
+      assert Runner.swap_script(@app, @staged, {:unix, :linux}) =~ "'#{@app}' >/dev/null 2>&1 &"
     end
 
     # Paths come from the environment and from GitHub asset names. Neither is
@@ -62,9 +66,14 @@ defmodule Codrift.UpdaterRunnerTest do
     end
   end
 
-  describe "brew_script/2" do
+  describe "brew_script/3" do
     test "upgrades and then reopens, after waiting for this process to exit" do
-      script = Runner.brew_script("/opt/homebrew/bin/brew", "/Applications/Codrift.app")
+      script =
+        Runner.brew_script(
+          "/opt/homebrew/bin/brew",
+          "/Applications/Codrift.app",
+          {:unix, :darwin}
+        )
 
       assert script =~ "kill -0 #{System.pid()}"
       assert script =~ "'/opt/homebrew/bin/brew' upgrade codrift"

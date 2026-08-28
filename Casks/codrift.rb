@@ -23,14 +23,23 @@ cask "codrift" do
     strategy :github_latest
   end
 
+  # A leftover install of the old formula owns a `codrift` symlink in the same
+  # Homebrew bin the stanza below writes to, so the install would fail on the
+  # collision. Say which one to remove rather than let brew report a bare
+  # "Binary already exists".
+  conflicts_with formula: "filipecabaco/codrift/codrift-cli"
   depends_on macos: :ventura
-  # The DMG carries only the GUI — Contents/MacOS/codrift is the Tauri shell and
-  # Contents/MacOS/desktop the Burrito sidecar, neither of which is the headless
-  # CLI. So `binary` has nothing to point at, and without this the documented
-  # `codrift mcp install` was a command that brew never installed.
-  depends_on formula: "filipecabaco/codrift/codrift-cli"
 
   app "Codrift.app"
+  # Contents/MacOS/desktop is the Burrito-wrapped sidecar: a complete release of
+  # the same Elixir application the headless CLI is built from, which runs
+  # `Codrift.CLI.Main` when it is handed argv (see `Codrift.start/2`). Pointing
+  # at it is what makes this cask a single package. It used to `depends_on` a
+  # `codrift-cli` formula, and brew then downloaded the same ~15 MB release
+  # twice — once inside the DMG and once as a tarball — and, since brew does not
+  # upgrade a cask's formula dependencies, let the two drift to different
+  # versions.
+  binary "#{appdir}/Codrift.app/Contents/MacOS/desktop", target: "codrift"
 
   # Codrift ships unsigned (no Apple Developer ID yet). Homebrew quarantines
   # downloaded artifacts, and Gatekeeper then refuses to open an unsigned,
@@ -69,11 +78,14 @@ cask "codrift" do
     The skills cover the shared memory store, initiatives, orchestration and
     the GitHub/Linear/GitLab integrations. Add -g to install them globally.
 
-    Upgrading: the `codrift` command ships in the codrift-cli formula, and
-    `brew upgrade codrift` bumps only the cask — brew does not upgrade a cask's
-    formula dependencies. Upgrade both, or the app moves while the CLI keeps
-    reporting the old version:
+    The `codrift` command is a symlink into Codrift.app, so one upgrade moves
+    both:
 
-      brew upgrade codrift codrift-cli
+      brew upgrade codrift
+
+    If you installed the old codrift-cli formula, remove it — it shadows this
+    command on PATH and keeps reporting its own version:
+
+      brew uninstall codrift-cli
   EOS
 end

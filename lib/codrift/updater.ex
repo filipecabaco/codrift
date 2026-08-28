@@ -31,6 +31,15 @@ defmodule Codrift.Updater do
   """
   @type manager :: :homebrew | :self | :unknown
 
+  @typedoc """
+  Who owns the `codrift` command on PATH.
+
+  `:bundled` is the shipped arrangement: the command is a symlink into
+  `Codrift.app`, so it *is* the app and updating the app updates it. `:missing`
+  when there is no `codrift` on PATH at all; nothing to upgrade.
+  """
+  @type cli_manager :: manager | :bundled | :missing
+
   @doc "Returns the version compiled into the running release."
   @spec current_version() :: version
   def current_version do
@@ -177,11 +186,11 @@ defmodule Codrift.Updater do
 
   Prefers `RELEASE_ROOT`, which the mix release boot script derives from the
   real location of `bin/codrift` (following the symlink that landed on PATH).
-  That is the only source of truth: the same CLI is installed to
-  `~/.local/share/codrift` by install.sh and to a Homebrew Cellar prefix by the
-  `codrift-cli` formula, and writing to the wrong one leaves the binary that is
-  actually on PATH untouched — an update that reports success and changes
-  nothing. Falls back to install.sh's location outside a release (dev, tests).
+  That is the only source of truth: a standalone CLI can sit in
+  `~/.local/share/codrift` (install.sh on Linux) or in a Homebrew Cellar prefix,
+  and writing to the wrong one leaves the binary that is actually on PATH
+  untouched — an update that reports success and changes nothing. Falls back to
+  install.sh's location outside a release (dev, tests).
   """
   @spec install_dir() :: String.t()
   def install_dir, do: install_dir(System.get_env("RELEASE_ROOT"))
@@ -257,32 +266,51 @@ defmodule Codrift.Updater do
 
   @doc """
   Who owns the `codrift` command on PATH — which is a different question from
-  `app_manager/1`, because the app and the CLI ship as a cask and a formula that
-  can be installed independently (and `install.sh` installs both outside brew).
+  `app_manager/1`, because the command and the app need not be the same install.
 
-  `:missing` when there is no `codrift` on PATH at all; nothing to upgrade.
+  `:bundled` is what both shipped installers now produce: the command is a
+  symlink into the `.app`, whose sidecar is a complete release of this code, so
+  there is no second copy to move and the app's own update carries it. That
+  replaced a separate `codrift-cli` formula/tarball which downloaded the same
+  ~15 MB release a second time. `:self` and `:homebrew` remain for a CLI
+  installed on its own — a Linux tarball, or a leftover from that formula.
   """
-  @spec cli_manager() :: manager | :missing
+  @spec cli_manager() :: cli_manager
   def cli_manager do
     case System.find_executable("codrift") do
       nil -> :missing
-      path -> if "Cellar" in Path.split(resolve_link(path)), do: :homebrew, else: :self
+      path -> cli_manager(resolve_link(path))
     end
   end
 
-  @doc """
-  The `brew upgrade` line that moves a Homebrew install forward, naming only the
-  packages brew actually owns.
+  @doc "`cli_manager/0` with the resolved command path passed in, so it can be tested."
+  @spec cli_manager(String.t()) :: cli_manager
+  def cli_manager(path) do
+    cond do
+      bundled_cli?(path) -> :bundled
+      "Cellar" in Path.split(path) -> :homebrew
+      true -> :self
+    end
+  end
 
-  The cask `depends_on` the formula but `brew upgrade codrift` bumps the cask
-  alone — brew does not upgrade a cask's formula dependencies — so both names
-  have to appear, which is what `Casks/codrift.rb`'s caveats tell users too.
+  # A path inside a `.app` is the bundle's own sidecar. Matched on the bundle
+  # rather than on the exact executable name so this keeps holding if the
+  # sidecar is ever renamed or moved within Contents/.
+  defp bundled_cli?(path) do
+    Enum.any?(Path.split(path), &String.ends_with?(&1, ".app"))
+  end
+
+  @doc """
+  The `brew upgrade` line that moves a Homebrew install forward.
+
+  One name, because there is one package: the cask ships the app and the
+  `codrift` command as a symlink into it. This used to have to name the
+  `codrift-cli` formula as well — brew does not upgrade a cask's formula
+  dependencies, so a plain `brew upgrade codrift` left the CLI behind and the
+  two drifted apart.
   """
   @spec brew_upgrade_command() :: String.t()
-  def brew_upgrade_command do
-    names = ["codrift"] ++ if(cli_manager() == :homebrew, do: ["codrift-cli"], else: [])
-    "brew upgrade " <> Enum.join(names, " ")
-  end
+  def brew_upgrade_command, do: "brew upgrade codrift"
 
   @doc "Absolute path to `brew`, or `nil` when it is not installed/on PATH."
   @spec brew_executable() :: String.t() | nil
@@ -323,7 +351,7 @@ defmodule Codrift.Updater do
   @spec external_package_manager(String.t()) :: {:ok, String.t()} | :error
   def external_package_manager(dir) do
     if "Cellar" in Path.split(dir) do
-      {:ok, "brew upgrade codrift codrift-cli"}
+      {:ok, brew_upgrade_command()}
     else
       :error
     end
@@ -333,10 +361,10 @@ defmodule Codrift.Updater do
   Returns `{:ok, path}` when the `codrift` that PATH resolves to lives outside
   `dir`, i.e. an update to `dir` will not be the one that runs.
 
-  Two installers write this command — install.sh to `~/.local/bin` and the
-  `codrift-cli` formula to Homebrew's `bin` — and whichever comes first on PATH
-  wins. Updating the loser is silent: `codrift version` keeps reporting the old
-  number and the update looks broken.
+  More than one thing can write this command — the cask's symlink into the app,
+  install.sh's `~/.local/bin`, a leftover Homebrew formula — and whichever comes
+  first on PATH wins. Updating the loser is silent: `codrift version` keeps
+  reporting the old number and the update looks broken.
   """
   @spec shadowing_binary(String.t()) :: {:ok, String.t()} | :none
   def shadowing_binary(dir) do

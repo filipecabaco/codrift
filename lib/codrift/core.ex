@@ -12,9 +12,10 @@ defmodule Codrift.Core do
 
   alias Codrift.Config.Keybindings
   alias Codrift.Config.Settings
-  alias Codrift.Initiative.{DirEntry, Store}
+  alias Codrift.Initiative.{DirEntry, Pinned, Store}
   alias Codrift.MCP.Handler
   alias Codrift.OAuth.Config, as: OAuthConfig
+  alias Codrift.Updater.Runner
   alias Codrift.Web.EventRelay
   alias Codrift.Worktree.Inventory
 
@@ -152,7 +153,7 @@ defmodule Codrift.Core do
     with {:ok, initiative} <- Store.get(id),
          allowed = Enum.map(initiative.dirs, &DirEntry.effective_path/1),
          {:ok, pinned} <-
-           Codrift.Initiative.Pinned.pin(
+           Pinned.pin(
              Store.context_path(id),
              allowed,
              path,
@@ -1043,15 +1044,15 @@ defmodule Codrift.Core do
   # and executed, and that is not a decision to take from a request body.
   def call("start_update", _args) do
     with {:ok, %{version: version, assets: assets}} <- Codrift.Updater.fetch_latest_release(),
-         {:ok, _stage} <- Codrift.Updater.Runner.start(version, assets) do
-      {:ok, Codrift.Updater.Runner.status()}
+         {:ok, _stage} <- Runner.start(version, assets) do
+      {:ok, Runner.status()}
     else
       {:error, :busy} -> {:error, "an update is already running"}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  def call("update_progress", _args), do: {:ok, Codrift.Updater.Runner.status()}
+  def call("update_progress", _args), do: {:ok, Runner.status()}
 
   def call(name, args) do
     if name in Handler.tool_names() do

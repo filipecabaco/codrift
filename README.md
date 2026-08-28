@@ -38,15 +38,23 @@ brew tap filipecabaco/codrift https://github.com/filipecabaco/codrift
 brew install --cask codrift
 ```
 
-That installs `Codrift.app` **and** the headless `codrift` command — the cask
-depends on the `codrift-cli` formula in the same tap, so `codrift mcp install`
-works straight after. To install only the CLI (headless boxes, CI, Linux):
+That installs `Codrift.app` **and** the headless `codrift` command, so
+`codrift mcp install` works straight after. It is one download: the command is a
+symlink into the app bundle, whose sidecar is a complete release of the same
+code and runs the CLI when handed arguments. Upgrades move both:
 
 ```bash
-brew install filipecabaco/codrift/codrift-cli
+brew upgrade codrift
 ```
 
-Upgrades come through `brew upgrade --cask codrift`.
+> Installed the old `codrift-cli` formula? Remove it with
+> `brew uninstall codrift-cli` — it shadows the cask's command on PATH and keeps
+> reporting its own version. The formula is gone from the tap; brew used to
+> download the same ~15 MB release twice because of it.
+
+For headless boxes, CI or Linux, where there is no app to link into, take the
+`codrift-cli-<version>-<target>.tar.gz` from the release and extract it, or run
+the installer below — it does the same thing.
 
 > **Note:** Codrift is not yet code-signed or notarized. The cask strips the
 > download quarantine on install so the app opens normally; if macOS still

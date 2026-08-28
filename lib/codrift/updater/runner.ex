@@ -38,6 +38,9 @@ defmodule Codrift.Updater.Runner do
 
   @type stage :: :idle | :running | :done | :failed
 
+  @typedoc "What `:os.type/0` returns. `:os` exports the function but not a type for it."
+  @type os :: {:unix | :win32, atom()}
+
   @doc "Starts the runner. One per node; registered under its own module name."
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []),
@@ -263,10 +266,13 @@ defmodule Codrift.Updater.Runner do
     {:ok, image}
   end
 
-  # The app and the `codrift` command are separate installs that drift apart if
-  # only one moves — which is the same complaint the cask's caveats make about
-  # `brew upgrade codrift` on its own. Never fatal: a failed CLI update must not
-  # cost the user the app update they asked for.
+  # Only a CLI installed on its own needs this. The shipped arrangement is
+  # `:bundled` — the command is a symlink into the `.app` whose sidecar is a
+  # complete release of this code — so replacing the bundle above has already
+  # moved it, and downloading a tarball on top would resurrect exactly the
+  # second copy that arrangement exists to avoid. `:homebrew` is brew's to move.
+  # Never fatal: a failed CLI update must not cost the user the app update they
+  # asked for.
   defp update_cli(version, log) do
     case Updater.cli_manager() do
       :self ->
@@ -318,15 +324,15 @@ defmodule Codrift.Updater.Runner do
   exit, *then* upgrade, *then* reopen — is the whole reason the update works at
   all, and it is not reachable from a test through `start/2` without a network.
   """
-  @spec brew_script(String.t(), String.t()) :: String.t()
-  def brew_script(brew, app) do
+  @spec brew_script(String.t(), String.t(), os()) :: String.t()
+  def brew_script(brew, app, os \\ :os.type()) do
     """
     #!/bin/sh
     #{wait_for_exit()}
     #{quote_sh(brew)} upgrade #{brew_targets()}
     status=$?
     echo "brew exited with ${status}"
-    #{relaunch(app)}
+    #{relaunch(app, os)}
     """
   end
 
@@ -338,12 +344,12 @@ defmodule Codrift.Updater.Runner do
   @doc """
   The script that moves the downloaded bundle into place and reopens Codrift.
 
-  Public for the same reason as `brew_script/2`. The two `mv`s are deliberate:
+  Public for the same reason as `brew_script/3`. The two `mv`s are deliberate:
   the live bundle is only ever renamed aside, never deleted, so a failed second
   move can put it back rather than leave the user with no Codrift at all.
   """
-  @spec swap_script(String.t(), String.t()) :: String.t()
-  def swap_script(app, staged) do
+  @spec swap_script(String.t(), String.t(), os()) :: String.t()
+  def swap_script(app, staged, os \\ :os.type()) do
     """
     #!/bin/sh
     #{wait_for_exit()}
@@ -354,7 +360,7 @@ defmodule Codrift.Updater.Runner do
     # at all if the second move is the one that fails.
     mv #{quote_sh(staged)} #{quote_sh(app)} || { mv #{quote_sh(app <> ".old")} #{quote_sh(app)}; exit 1; }
     rm -rf #{quote_sh(app <> ".old")}
-    #{relaunch(app)}
+    #{relaunch(app, os)}
     """
   end
 
@@ -373,12 +379,11 @@ defmodule Codrift.Updater.Runner do
     |> String.trim_trailing()
   end
 
-  defp relaunch(app) do
-    case :os.type() do
-      {:unix, :darwin} -> "open -n #{quote_sh(app)}"
-      _ -> "#{quote_sh(app)} >/dev/null 2>&1 &"
-    end
-  end
+  # The `os` argument is what makes both branches assertable off their own
+  # platform: CI runs the suite on Linux, where a hardcoded `open -n` would be
+  # unreachable and the macOS handoff would go untested.
+  defp relaunch(app, {:unix, :darwin}), do: "open -n #{quote_sh(app)}"
+  defp relaunch(app, _os), do: "#{quote_sh(app)} >/dev/null 2>&1 &"
 
   defp staged_download(name), do: Path.join(work_dir(), name)
   defp work_dir, do: Path.join(Paths.data_dir(), "update")

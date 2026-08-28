@@ -12,6 +12,7 @@ defmodule Codrift.CoreOpenFileTest do
   use ExUnit.Case, async: false
 
   alias Codrift.Core
+  alias Codrift.MCP.Handler
 
   @moduletag :tmp_dir
 
@@ -78,6 +79,6 @@ defmodule Codrift.CoreOpenFileTest do
   end
 
   test "is exposed as an MCP tool" do
-    assert "open_file" in Codrift.MCP.Handler.tool_names()
+    assert "open_file" in Handler.tool_names()
   end
 end

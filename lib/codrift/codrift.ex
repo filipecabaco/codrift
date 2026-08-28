@@ -17,6 +17,14 @@ defmodule Codrift do
 
   Run `mix codrift.mcp.install` to register the server with Claude Code.
 
+  ## Headless CLI
+
+  `start/2` is also where the shipped `codrift` command enters. The bundle's
+  Burrito sidecar is a complete release of this code, so the command on PATH is
+  a symlink to it rather than a separate install; given argv it runs
+  `Codrift.CLI.Main` and halts instead of starting the supervision tree. See
+  `cli_argv/0`.
+
   ## Live WebSocket
 
   `ws /ws` carries the live surface both ways for the whole workspace: agent
@@ -28,6 +36,8 @@ defmodule Codrift do
 
   require Logger
 
+  alias Burrito.Util.Args
+  alias Codrift.CLI.Main, as: CLI
   alias Codrift.Initiative.{DirEntry, Store}
   alias Codrift.MCP.Handler
   alias Codrift.MCP.SSESession
@@ -39,7 +49,38 @@ defmodule Codrift do
   plug(Codrift.Plugs.LocalGuard)
 
   @impl true
-  def start(_type, _args) do
+  def start(type, args) do
+    case cli_argv() do
+      [] -> start_supervised(type, args)
+      argv -> run_cli(argv)
+    end
+  end
+
+  # The shipped bundle already carries a complete release of this same code, so
+  # the `codrift` command Homebrew and install.sh put on PATH is a symlink to
+  # this sidecar rather than a second, byte-for-byte-equivalent download of it.
+  # Argv is what tells the two callers apart: Tauri spawns the sidecar with
+  # none, and the symlink passes the user's through untouched.
+  #
+  # Guarded on `running_standalone?/0` so this can only ever trigger for a
+  # Burrito-wrapped build. A plain release boot (`mix ex_tauri.dev`, `bin/desktop
+  # daemon`) has its own plain arguments, and reading those as CLI verbs would
+  # turn a normal start into a usage message.
+  defp cli_argv do
+    if Burrito.Util.running_standalone?(), do: Args.argv(), else: []
+  end
+
+  @spec run_cli([String.t()]) :: no_return()
+  defp run_cli(argv) do
+    CLI.run(argv)
+    # `halt/1`, not `System.stop/0`: the application controller is inside this
+    # very callback, so a graceful stop would wait on it returning and deadlock.
+    # An integer status flushes outstanding output first, which the commands
+    # that print JSON for an agent to parse depend on.
+    System.halt(0)
+  end
+
+  defp start_supervised(_type, _args) do
     if desktop_sidecar?() do
       # When launched as the Tauri desktop app, the process inherits macOS's
       # minimal launchd PATH (no ~/.local/bin, mise shims, homebrew…), so agent

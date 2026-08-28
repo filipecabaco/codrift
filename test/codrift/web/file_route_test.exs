@@ -12,6 +12,7 @@ defmodule Codrift.Web.FileRouteTest do
   import Plug.Test
 
   alias Codrift.Core
+  alias Codrift.Initiative.Store
 
   @moduletag :tmp_dir
 
@@ -79,7 +80,7 @@ defmodule Codrift.Web.FileRouteTest do
   # Where agents drop screenshots. It is not in `dirs`, but `list_context_files`
   # offers it, so the pane would otherwise list a picture it could not show.
   test "serves an image from the initiative's context folder", %{initiative_id: id} do
-    context = Codrift.Initiative.Store.context_path(id)
+    context = Store.context_path(id)
     path = Path.join(context, "screenshot.png")
     File.write!(path, @png)
 

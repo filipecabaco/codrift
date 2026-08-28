@@ -13,6 +13,10 @@ defmodule Codrift.CLI.MainTest do
   """
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureIO
+
+  alias Codrift.CLI.Main
+
   @repo_root Path.expand("../../..", __DIR__)
 
   # `Main`'s dispatch clauses, read from source: the verbs it answers to.
@@ -51,7 +55,7 @@ defmodule Codrift.CLI.MainTest do
 
   describe "usage" do
     test "lists open alongside the other commands" do
-      output = ExUnit.CaptureIO.capture_io(fn -> Codrift.CLI.Main.run([]) end)
+      output = capture_io(fn -> Main.run([]) end)
 
       assert output =~ "codrift open"
       assert output =~ "codrift pane"
