@@ -41,3 +41,52 @@ defmodule Codrift.Test.CrashExitAdapter do
   @impl true
   def parse_status(_output), do: nil
 end
+
+defmodule Codrift.Test.PtyCrashExitAdapter do
+  @moduledoc """
+  Test adapter whose PTY process exits with code 127.
+
+  The PTY path is the one that mattered: erlexec reports the raw `waitpid`
+  status word, so 127 arrives as 32512 unless it is decoded.
+  """
+  @behaviour Codrift.Agent
+
+  @impl true
+  def cmd, do: System.find_executable("sh") || "/bin/sh"
+  @impl true
+  def mode, do: :pty
+  @impl true
+  def args(_dir, _opts), do: ["-c", "exit 127"]
+  @impl true
+  def args_continue(_dir), do: []
+  @impl true
+  def env(_dir), do: []
+  @impl true
+  def session_persistable?, do: false
+  @impl true
+  def tui?, do: false
+  @impl true
+  def parse_status(_output), do: nil
+end
+
+defmodule Codrift.Test.PtySignalExitAdapter do
+  @moduledoc "Test adapter whose PTY process kills itself with SIGTERM."
+  @behaviour Codrift.Agent
+
+  @impl true
+  def cmd, do: System.find_executable("sh") || "/bin/sh"
+  @impl true
+  def mode, do: :pty
+  @impl true
+  def args(_dir, _opts), do: ["-c", "kill -TERM $$"]
+  @impl true
+  def args_continue(_dir), do: []
+  @impl true
+  def env(_dir), do: []
+  @impl true
+  def session_persistable?, do: false
+  @impl true
+  def tui?, do: false
+  @impl true
+  def parse_status(_output), do: nil
+end

@@ -11,7 +11,9 @@ defmodule Codrift.AgentProcessTest do
     adapter = Keyword.get(opts, :adapter, EchoAdapter)
 
     start_supervised!(
-      {AgentProcess, [id: id, initiative_id: "test-init", dir: dir, adapter: adapter]}
+      {AgentProcess,
+       [id: id, initiative_id: "test-init", dir: dir, adapter: adapter] ++
+         Keyword.take(opts, [:command, :extra_args])}
     )
   end
 
@@ -131,6 +133,42 @@ defmodule Codrift.AgentProcessTest do
     test "non-zero exit sets status to :crashed" do
       pid = start_agent(adapter: Codrift.Test.CrashExitAdapter)
       assert await_status(pid, :crashed)
+    end
+
+    # erlexec reports the raw `waitpid` status word, so an exit code of 127
+    # arrives as 32512 — which is the number the terminal used to print back.
+    test "a PTY exit code is decoded from the raw wait status" do
+      id = "pty-crash-#{:erlang.unique_integer([:positive])}"
+      pid = start_agent(id: id, adapter: Codrift.Test.PtyCrashExitAdapter)
+
+      assert await_status(pid, :crashed)
+
+      log = File.read!(Codrift.Paths.agent_log("test-init", id))
+      assert log =~ "[agent exited with code 127]"
+      refute log =~ "32512"
+    end
+
+    test "a signalled agent is named by its signal and counts as stopped" do
+      id = "pty-signal-#{:erlang.unique_integer([:positive])}"
+      pid = start_agent(id: id, adapter: Codrift.Test.PtySignalExitAdapter)
+
+      assert await_status(pid, :stopped)
+
+      assert File.read!(Codrift.Paths.agent_log("test-init", id)) =~
+               "[agent terminated by SIGTERM]"
+    end
+
+    # A shell exits with whatever its last command returned, so a non-zero code
+    # says nothing about the terminal — closing one is just closing one.
+    test "a terminal is :stopped whatever its shell exits with" do
+      pid =
+        start_agent(
+          adapter: Codrift.Agent.Adapters.Terminal,
+          command: System.find_executable("sh") || "/bin/sh",
+          extra_args: ["-c", "exit 127"]
+        )
+
+      assert await_status(pid, :stopped)
     end
   end
 

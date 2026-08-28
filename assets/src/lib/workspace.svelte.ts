@@ -115,12 +115,14 @@ export function isDead(status: string): boolean {
 }
 
 /**
- * An agent that exited cleanly is done: its row closes and its pane falls back
- * to the initiative overview, the way closing a terminal tab works. A crash
- * (non-zero exit) stays visible — the exit code and whatever the agent printed
- * on its way out are the whole reason to look — until it is dismissed with the
- * delete key. The backend keeps both queryable for orchestrators either way;
- * this is only about what the sidebar shows.
+ * An agent whose session simply ended is done: its row closes and its pane falls
+ * back to the initiative overview, the way closing a terminal tab works. A crash
+ * stays visible — the exit code and whatever the agent printed on its way out
+ * are the whole reason to look — until it is dismissed with the delete key.
+ *
+ * Which of the two an exit was is the backend's call, not this one's: a shell
+ * exits with whatever its last command returned, and a CLI that took SIGINT was
+ * asked to quit. Both arrive here as `stopped`.
  */
 function closesOnExit(agent: { status: string; mode?: string }): boolean {
   // `once` agents (orchestration turns) go back to :idle after each run and are

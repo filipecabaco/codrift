@@ -8,7 +8,9 @@ defmodule Codrift.OAuth do
 
   RFC 7636 — no client secret stored or shipped:
   1. `start_flow/1` → returns `{:ok, %{flow: :pkce_browser, auth_url: url}}`.
-  2. Provider redirects to `127.0.0.1:43117/oauth/callback/{service}`.
+  2. Provider redirects to `127.0.0.1:43117/oauth/callback/{oauth app}` — the
+     registered app's name, which is the service's own unless it shares an app
+     (see `Codrift.OAuth.Config.callback_name/1`).
   3. `handle_callback/3` exchanges code + verifier, saves the token.
 
   ### Device Flow (GitHub)
@@ -70,13 +72,15 @@ defmodule Codrift.OAuth do
   @doc """
   Handles the PKCE callback from the provider.
 
-  Exchanges `code + verifier` and saves the resulting token.
+  Exchanges `code + verifier` and saves the resulting token. `app` is the last
+  segment of the redirect URI, which names the registered OAuth app — the
+  service being connected comes from `state`, and is returned on success.
   """
   @spec handle_callback(String.t(), String.t(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
-  def handle_callback(service, code, state) do
-    with {:ok, expected_service, verifier} <- StateStore.pop(state),
-         :ok <- verify_service(expected_service, service),
+  def handle_callback(app, code, state) do
+    with {:ok, service, verifier} <- StateStore.pop(state),
+         :ok <- verify_callback(service, app),
          {:ok, config} <- Config.get(service),
          {:ok, client_id} <- Config.resolve_client_id(config, service),
          {:ok, token_data} <- exchange_code(config, code, client_id, verifier, service),
@@ -234,10 +238,16 @@ defmodule Codrift.OAuth do
     end
   end
 
-  defp verify_service(expected, actual) when expected == actual, do: :ok
-
-  defp verify_service(expected, actual),
-    do: {:error, "state/service mismatch: expected #{expected}, got #{actual}"}
+  # The path segment names the OAuth *app*, which for a service sharing an app
+  # with another is not the service's own name. The service comes from the
+  # state — the one value in the callback an attacker cannot choose — so what
+  # is checked is that this service really does call back here.
+  defp verify_callback(service, app) do
+    case Config.callback_name(service) do
+      ^app -> :ok
+      expected -> {:error, "state/service mismatch: expected #{expected}, got #{app}"}
+    end
+  end
 
   # ── Device Flow ───────────────────────────────────────────────────────────────
 
