@@ -59,9 +59,37 @@ defmodule Codrift.OAuth.ConfigTest do
       assert Config.redirect_uri("linear") == "http://127.0.0.1:43117/oauth/callback/linear"
     end
 
-    test "is per-service, so two providers never share a callback path" do
-      uris = Enum.map(Config.supported_services(), &Config.redirect_uri/1)
-      assert uris == Enum.uniq(uris)
+    # A provider will only redirect to a URI its registered app holds, so the
+    # callback path has to key off the app. Linear Projects is the same Linear
+    # app as Linear — asking for /oauth/callback/linear_projects is what Linear
+    # rejected as "Invalid redirect_uri parameter for the application".
+    test "services sharing one registered app share its callback" do
+      assert Config.redirect_uri("linear_projects") == Config.redirect_uri("linear")
+      assert Config.callback_name("linear_projects") == "linear"
+    end
+
+    test "a service with an app of its own calls back on its own name" do
+      for service <- Config.supported_services(), service != "linear_projects" do
+        assert Config.callback_name(service) == service
+      end
+    end
+
+    # Two services may only share a callback when the same registered app sits
+    # behind both. Anything else routes a code minted by one provider onto
+    # another provider's path.
+    test "services sharing a callback are the same registered app" do
+      Config.supported_services()
+      |> Enum.group_by(&Config.callback_name/1)
+      |> Enum.each(fn {_callback, services} ->
+        apps =
+          Enum.map(services, fn service ->
+            {:ok, config} = Config.get(service)
+            {config[:auth_url], config.client_id}
+          end)
+
+        assert Enum.uniq(apps) == [hd(apps)],
+               "#{Enum.join(services, ", ")} share a callback but not an OAuth app"
+      end)
     end
   end
 

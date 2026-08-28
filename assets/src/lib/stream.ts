@@ -155,12 +155,12 @@ function dispatch(frame: Record<string, unknown>) {
       statusSubs.forEach((fn) => fn(agentId, frame.status as AgentStatus));
       break;
     case "stopped": {
-      // The backend's own distinction: a clean exit is `stopped`, anything else
-      // `crashed`. Reporting both as "stopped" hid crashes until the next
-      // refresh — and the UI now treats the two differently.
-      const code = (frame.exit_code as number) ?? 0;
-      statusSubs.forEach((fn) => fn(agentId, code === 0 ? "stopped" : "crashed"));
-      stoppedSubs.get(agentId)?.forEach((fn) => fn(code));
+      // Deliberately *not* a status update. `stopped` vs `crashed` is the
+      // backend's verdict and arrives in the `status` frame just before this
+      // one; re-deriving it here from the exit code called every terminal that
+      // ever ran a failing command a crash, because a shell's exit status is
+      // whatever its last command returned.
+      stoppedSubs.get(agentId)?.forEach((fn) => fn((frame.exit_code as number) ?? 0));
       break;
     }
   }

@@ -98,7 +98,11 @@ Required scopes: `repo`, `read:org`, `project` (for Projects v2).
 export LINEAR_CLIENT_ID="your-linear-client-id"
 ```
 
-`linear` and `linear_projects` share the same client ID and token.
+`linear` and `linear_projects` are one registered app: they share the client
+ID, the token, and the single callback URL above. There is no second URL to
+register for Projects — Linear only redirects to a URI this app holds, and
+asking it for one it does not is answered with *Invalid redirect_uri
+parameter for the application*.
 
 ### Env var fallback
 

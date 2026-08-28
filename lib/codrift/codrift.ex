@@ -411,6 +411,8 @@ defmodule Codrift do
     end
   end)
 
+  # `:service` is the last segment of the registered redirect URI, so it names
+  # the OAuth *app*. Which service is being connected comes out of the state.
   get("/oauth/callback/:service", fn conn ->
     service = conn.params["service"]
     code = conn.params["code"]
@@ -431,11 +433,15 @@ defmodule Codrift do
         |> Plug.Conn.send_resp(400, oauth_error_html(service, "Missing code or state parameter"))
 
       true ->
+        # The page names the service that was connected, not the path segment:
+        # those differ whenever two services share one registered OAuth app,
+        # and "Connected linear" on the Linear *Projects* flow reads as the
+        # wrong thing having happened.
         case OAuth.handle_callback(service, code, state) do
-          {:ok, _service} ->
+          {:ok, connected} ->
             conn
             |> Plug.Conn.put_resp_content_type("text/html")
-            |> Plug.Conn.send_resp(200, oauth_success_html(service))
+            |> Plug.Conn.send_resp(200, oauth_success_html(connected))
 
           {:error, reason} ->
             conn

@@ -14,7 +14,14 @@ defmodule Codrift.OAuth.Config do
 
   ## Registering apps
 
-  PKCE services — redirect URI: `http://127.0.0.1:43117/oauth/callback/<service>`
+  PKCE services — redirect URI:
+  `http://127.0.0.1:43117/oauth/callback/<oauth app>`
+
+  The last segment names the registered *app*, not the service. Two services can
+  be two views of one provider account behind one app — `linear` and
+  `linear_projects` are — and a provider only ever redirects to a URI that app
+  registered. Such a service carries `:oauth_app`, and shares the callback of
+  the service it names; everything else calls back on its own name.
 
   The literal loopback IP, not `localhost`: Bandit binds IPv4 `127.0.0.1` only
   (see `config/config.exs`), while `localhost` may resolve to `::1` first. RFC
@@ -61,6 +68,11 @@ defmodule Codrift.OAuth.Config do
       token_url: "https://api.linear.app/oauth/token",
       client_id_env: "LINEAR_CLIENT_ID",
       client_id: "17a8b9b39ebdd14c9c2e600f1ac51141",
+      # The same registered Linear app as "linear" — same client ID, so the same
+      # redirect URI is the only one it will accept. Asking it to redirect to
+      # /oauth/callback/linear_projects is what Linear turns down as "Invalid
+      # redirect_uri parameter for the application".
+      oauth_app: "linear",
       scopes: "read"
     },
     "gitlab" => %{
@@ -104,9 +116,29 @@ defmodule Codrift.OAuth.Config do
   @spec supported_services() :: [String.t()]
   def supported_services, do: @services |> Map.keys() |> Enum.sort()
 
-  @doc "Returns the redirect URI for a PKCE service."
+  @doc """
+  Returns the redirect URI a PKCE service's provider will call back on.
+
+  Keyed by the registered OAuth app rather than the service, because that is
+  what the provider matches against. See `callback_name/1`.
+  """
   @spec redirect_uri(String.t()) :: String.t()
-  def redirect_uri(service), do: "http://127.0.0.1:#{@port}/oauth/callback/#{service}"
+  def redirect_uri(service),
+    do: "http://127.0.0.1:#{@port}/oauth/callback/#{callback_name(service)}"
+
+  @doc """
+  The path segment a service's callback arrives on.
+
+  A service's own name, unless it shares a registered app with another service —
+  then the app's name, since the redirect URI belongs to the app.
+  """
+  @spec callback_name(String.t()) :: String.t()
+  def callback_name(service) do
+    case get(service) do
+      {:ok, %{oauth_app: app}} -> app
+      _ -> service
+    end
+  end
 
   @doc """
   Builds the PKCE authorization URL for a service.

@@ -31,9 +31,14 @@ defmodule Codrift.AgentProcess do
   ## Exit status
 
   When the underlying CLI exits, the GenServer stays alive so the transcript
-  remains queryable: status becomes `:stopped` on a clean exit (code 0) and
-  `:crashed` on a non-zero exit, so supervisors can tell a finished agent
-  from a dead one.
+  remains queryable: status becomes `:stopped` when the session simply ended and
+  `:crashed` when the CLI died, so supervisors can tell a finished agent from a
+  dead one.
+
+  "Ended" is wider than "exited 0". A process killed by SIGINT/SIGTERM/SIGHUP
+  was asked to stop, and a shell has no exit status of its own — `exit` returns
+  whatever the last command did — so any terminal exit is just a closed
+  terminal. See `clean_exit?/2`.
 
   ## Roles
 
@@ -382,18 +387,14 @@ defmodule Codrift.AgentProcess do
 
   # PTY process exited (erlexec monitor message)
   def handle_info({:DOWN, ospid, :process, _pid, reason}, %{exec_ospid: ospid} = state) do
-    exit_code =
-      case reason do
-        {:exit_status, code} when is_integer(code) -> code
-        {_status, code} when is_integer(code) -> code
-        _ -> 0
-      end
+    exit_status = decode_exit(reason)
 
     Logger.info(
-      "Agent #{state.id} (#{state.adapter}) PTY process #{ospid} exited: #{inspect(reason)}, code=#{exit_code}"
+      "Agent #{state.id} (#{state.adapter}) PTY process #{ospid} exited: " <>
+        "#{inspect(reason)}, #{inspect(exit_status)}"
     )
 
-    handle_exit(state, exit_code)
+    handle_exit(state, exit_status)
   end
 
   # Port output (interactive / once modes)
@@ -407,16 +408,22 @@ defmodule Codrift.AgentProcess do
     {:noreply, %{state | port: nil, status: :idle, conversation_started: true}}
   end
 
+  # A failed turn is still only a turn: the agent goes back to :idle and is
+  # reused, so the status it broadcasts is :idle and not :crashed. Saying so
+  # out loud matters now that the UI takes the status from the status frame
+  # rather than reading it back out of the exit code.
   def handle_info({port, {:exit_status, code}}, %{port: port, mode: :once} = state) do
-    error = "\n[agent exited with code #{code}]\n"
-    state = push_buffer(state, error)
+    state = push_buffer(state, exit_message({:status, code}))
     for {sub, _} <- state.subscribers, do: send(sub, {:agent_stopped, state.id, code})
-    {:noreply, %{state | port: nil, status: :idle, conversation_started: true}}
+
+    state = transition(%{state | port: nil, conversation_started: true}, :idle)
+    {:noreply, state}
   end
 
-  # Port exit in :interactive mode
+  # Port exit in :interactive mode. A Port already reports the *decoded* exit
+  # code, unlike the raw wait status erlexec hands back — see `decode_exit/1`.
   def handle_info({port, {:exit_status, code}}, %{port: port, mode: :interactive} = state) do
-    handle_exit(state, code)
+    handle_exit(state, {:status, code})
   end
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
@@ -558,19 +565,83 @@ defmodule Codrift.AgentProcess do
     end
   end
 
+  # Signals that mean "someone asked this to stop" rather than "this broke":
+  # a quit keystroke, the stop button, a closing window. A CLI that takes one
+  # of these did not crash, so its pane closes the same way a clean exit does.
+  # Anything else — SIGSEGV, SIGABRT, SIGKILL — is a death worth showing.
+  @quit_signals [:sigint, :sigterm, :sighup, :sigquit]
+
+  # erlexec's monitor reports the raw `waitpid` status word, not an exit code:
+  # a CLI that exits 127 arrives as `{:exit_status, 32512}` (127 <<< 8), which
+  # is the number the terminal printed back as "[agent exited with code 32512]".
+  # `:exec.status/1` splits the word into the two things that can actually have
+  # happened — a code the process chose, or the signal that killed it — and the
+  # signal number is carried alongside its name because only the number can be
+  # turned back into an exit code (see `exit_code/1`).
+  defp decode_exit({:exit_status, raw}) when is_integer(raw) do
+    case :exec.status(raw) do
+      {:signal, signal, _core} -> {:signal, signal, Bitwise.band(raw, 0x7F)}
+      {:status, code} -> {:status, code}
+    end
+  end
+
+  # `:normal` (a clean exit) and anything erlexec grows later.
+  defp decode_exit(_reason), do: {:status, 0}
+
+  # The number subscribers and the UI are given. A signalled process never chose
+  # one, so it takes the shell's convention: 128 + the signal number.
+  defp exit_code({:status, code}), do: code
+  defp exit_code({:signal, _signal, number}), do: 128 + number
+
+  # What lands in the transcript. `nil` for a clean exit — there is nothing to
+  # say about a process that finished.
+  defp exit_message({:status, 0}), do: nil
+  defp exit_message({:status, code}), do: "\n[agent exited with code #{code}]\n"
+
+  defp exit_message({:signal, signal, number}),
+    do: "\n[agent terminated by #{signal_label(signal, number)}]\n"
+
+  # `:exec.status/1` names the signals it knows and leaves the rest numeric.
+  defp signal_label(signal, _number) when is_atom(signal),
+    do: signal |> Atom.to_string() |> String.upcase()
+
+  defp signal_label(_signal, number), do: "signal #{number}"
+
+  # Whether an exit was the end of a session or the end of an agent, which is
+  # not something an exit code alone can be read back into.
+  #
+  # A shell has no exit status of its own: `exit` hands back whatever the last
+  # command returned, so one mistyped command earlier in the session is why
+  # closing a terminal reported a failure. Closing a terminal is always just
+  # closing a terminal.
+  defp clean_exit?(%{adapter: Codrift.Agent.Adapters.Terminal}, _exit_status), do: true
+  defp clean_exit?(_state, {:status, code}), do: code == 0
+  defp clean_exit?(_state, {:signal, signal, _number}), do: signal in @quit_signals
+
   # Keeps the GenServer alive after the CLI exits so the buffer and status
-  # stay queryable. A non-zero exit is surfaced as :crashed (distinct from a
-  # clean :stopped) so orchestrators and the UI can tell them apart.
-  defp handle_exit(state, code) do
+  # stay queryable. An exit that means the agent broke is surfaced as :crashed
+  # (distinct from a clean :stopped) so orchestrators and the UI can tell them
+  # apart — the UI closes the pane on one and keeps it on screen on the other.
+  defp handle_exit(state, exit_status) do
     state =
-      if code != 0,
-        do: push_buffer(state, "\n[agent exited with code #{code}]\n"),
-        else: state
+      case exit_message(exit_status) do
+        nil -> state
+        message -> push_buffer(state, message)
+      end
 
-    for {sub, _} <- state.subscribers, do: send(sub, {:agent_stopped, state.id, code})
+    final_status = if clean_exit?(state, exit_status), do: :stopped, else: :crashed
 
-    final_status = if code == 0, do: :stopped, else: :crashed
-    {:noreply, %{state | exec_pid: nil, exec_ospid: nil, port: nil, status: final_status}}
+    # The status goes out *before* `:agent_stopped`, because it is the only
+    # frame carrying the clean/crashed verdict — a listener re-deriving it from
+    # the exit code would call every terminal that ever ran a failing command
+    # a crash.
+    state =
+      transition(%{state | exec_pid: nil, exec_ospid: nil, port: nil}, final_status)
+
+    for {sub, _} <- state.subscribers,
+        do: send(sub, {:agent_stopped, state.id, exit_code(exit_status)})
+
+    {:noreply, state}
   end
 
   # Bounded ring: push to the rear, evict from the front until both caps hold.
