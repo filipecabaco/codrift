@@ -174,8 +174,9 @@ Installs into Claude Code, Codex, Cursor, Gemini CLI, Copilot and Opencode.
 | `Ctrl+P` | Command palette |
 | `Ctrl+B` | Collapse / expand sidebar |
 | `⇅` in the sidebar header | Order initiatives by created / recent / name / status |
-| `⌘D` / `⌘⇧D` | Split the content area side by side / stacked |
+| `⌘D` / `⌘⇧D` | Split the focused pane right / down — repeatable, nesting, auto-balanced |
 | `⌘W` | Close the focused pane |
+| `⌘K` | Clear the focused terminal (macOS) |
 | `Ctrl+,` | Settings — workspace folder, appearance, launch profiles, integrations |
 | `Ctrl+Q` | Quit |
 

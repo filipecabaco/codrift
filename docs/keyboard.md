@@ -36,18 +36,30 @@ keymap, so they are fixed.
 
 | Key | Action |
 |-----|--------|
-| `⌘D` | Split the content area side by side (press again to collapse the split) |
-| `⌘⇧D` | Split the content area stacked top/bottom |
-| `⌘⌃=` | Balance the split back to 50/50 |
-| `⌘W` | Close the focused pane (the other one takes over the whole area) |
+| `⌘D` | Split the focused pane to the right |
+| `⌘⇧D` | Split the focused pane downwards |
+| `⌘⌃=` | Balance every pane back to the same size |
+| `⌘W` | Close the focused pane (its neighbour takes over the space) |
+| `⌘K` | Clear the focused terminal (macOS only — see below) |
 | `Ctrl+B` | Collapse / expand the sidebar |
 
-Drag the divider between the two panes to resize them, and the divider on the
-sidebar's edge to resize the sidebar. When split, each pane also shows a `✕`.
+Both split keys are repeatable and they nest: `⌘D` always halves the pane you
+are in, so `⌘D` inside a `⌘⇧D` gives a column beside a stack rather than
+flattening one into the other. Every split re-balances the whole layout, so four
+panes are four equal quarters however you got there — no slivers.
 
-`⌘W` is the one combo here that insists on the platform's own modifier: on
+Drag any divider to resize the panes either side of it, and the divider on the
+sidebar's edge to resize the sidebar. With more than one pane open, each shows a
+`✕`, and right-clicking one opens the split commands where the split is.
+
+`⌘W` is one of two combos here that insist on the platform's own modifier: on
 macOS `⌃W` stays with the terminal, where it is delete-word-backwards. On Linux
-and Windows it is `Ctrl+W`, and that collision comes with the platform.
+and Windows it is `Ctrl+W`, and that collision comes with the platform. `⌘K` is
+the other, and it goes further — it is macOS-only, because `⌃K` is
+kill-to-end-of-line in every readline and there is no version of taking it that
+does not cost more than it gives. Elsewhere, clear the terminal from the View
+menu. Clearing empties the pane's view only: the agent keeps running and the
+server still holds the transcript, so a refresh brings it back.
 
 Closing a pane is a layout decision — the agent it was showing keeps running and
 stays in the sidebar. Stopping one is `d`, which confirms first.

@@ -332,6 +332,21 @@ export const MENU_EVENT = "codrift:menu";
  */
 export const REDRAW_TERMINALS = "codrift:redraw-terminals";
 
+/**
+ * Asks the terminal showing `agentId` to paste `text` into it.
+ *
+ * Broadcast for the same reason as `REDRAW_TERMINALS`, plus one of its own: a
+ * paste has to go through xterm rather than straight down the socket, because
+ * only xterm knows whether the program on the other end turned bracketed-paste
+ * mode on. See the drop handler in AgentTerminal.
+ */
+export const PASTE_INTO_AGENT = "codrift:paste-into-agent";
+export type PasteRequest = { agentId: string; text: string };
+
+/** Asks the terminal showing `agentId` to clear its buffer — ⌘K. */
+export const CLEAR_TERMINAL = "codrift:clear-terminal";
+export type AgentTarget = { agentId: string };
+
 export type AssignedItem = {
   service: string;
   id: string;

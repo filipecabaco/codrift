@@ -53,8 +53,10 @@ defmodule Codrift.Config.Keybindings do
 
   The desktop app also owns a few positional window-management combos, which are
   not actions and so are not rebindable here: the primary modifier with a digit
-  (`⌘1`, `⌘2`, …) jumps straight to a pane, `⌘D` / `⌘⇧D` splits, `⌘⌃=` balances
-  the split, and `⌘W` closes the focused pane.
+  (`⌘1`, `⌘2`, …) jumps straight to a pane, `⌘D` / `⌘⇧D` splits the focused pane
+  right / down, `⌘⌃=` balances every pane, and `⌘W` closes the focused one.
+  `⌘K` clears the focused terminal — macOS only, because `⌃K` is
+  kill-to-end-of-line in every readline and the terminal keeps it elsewhere.
 
   ## Key spec format
 

@@ -141,13 +141,17 @@ export function pathsToInput(paths: string[]): string {
   return usable.length ? `${usable.map(quote).join(" ")} ` : "";
 }
 
-/** Dropped text as terminal input. */
+/**
+ * Dropped text as terminal input.
+ *
+ * Returns the bare text. Wrapping it as a paste — the `\x1b[200~`…`\x1b[201~`
+ * envelope that stops a multi-line drop submitting on its first newline — is
+ * `term.paste`'s job, not ours: whether those markers may be sent at all
+ * depends on the program having turned bracketed-paste mode on, which is state
+ * only xterm tracks.
+ */
 export function textToInput(text: string): string {
   // Strip every control character except newline, so dragged text can't smuggle
   // escape sequences into the agent's terminal.
-  const clean = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "");
-  if (!clean.includes("\n")) return clean;
-  // Multi-line text is a paste, not typing: bracket it so the agent's prompt
-  // inserts it whole instead of submitting on the first newline.
-  return `\x1b[200~${clean}\x1b[201~`;
+  return text.replace(/\r\n?/g, "\n").replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "");
 }

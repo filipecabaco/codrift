@@ -130,10 +130,17 @@ fn main() {
 
             start_server(app.handle(), &token, died.clone());
 
-            match await_our_server(&token, &died) {
+            // Off the main thread. `setup` runs inside
+            // applicationDidFinishLaunching on macOS, so waiting for the sidecar
+            // here stalls the AppKit run loop: the window never paints and macOS
+            // files the process as a hang after ~5s. A first launch reliably costs
+            // that much, because Burrito unpacks the ERTS tree before the release
+            // can bind its port.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || match await_our_server(&token, &died) {
                 Ok(()) => start_heartbeat(),
-                Err(reason) => show_startup_error(app.handle(), &reason),
-            }
+                Err(reason) => show_startup_error(&handle, &reason),
+            });
             Ok(())
         })
         // Intercept menu events (especially CMD+Q on macOS)
@@ -265,6 +272,11 @@ fn sort_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<S
 ///    and `⌘⌃=` appear here on purpose, forwarding to the same handlers the page
 ///    would have run, so the split commands finally have a visible name. `⌘1`…`⌘9`
 ///    are deliberately *absent*: the page uses them to jump between panes.
+///
+///    Where an accelerator does duplicate a keymap default — `⌘,` for Settings,
+///    `⌘P` for the palette — it names the *same* action, so the menu and the
+///    page agree and the dev server (which has no menu bar to swallow it) still
+///    works from the binding alone.
 fn build_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let sep = || PredefinedMenuItem::separator(handle);
 
@@ -344,7 +356,20 @@ fn build_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<
             &command(handle, "balance_split", "Balance Panes", Some("CmdOrCtrl+Control+="))?,
             &command(handle, "close_pane", "Close Pane", Some("Shift+CmdOrCtrl+W"))?,
             &sep()?,
-            &command(handle, "palette", "Command Palette", Some("CmdOrCtrl+K"))?,
+            // macOS only, and deliberately: ⌃K is kill-to-end-of-line in every
+            // readline, so on Linux and Windows the terminal keeps it and this
+            // item is menu-only.
+            &command(
+                handle,
+                "clear_terminal",
+                "Clear Terminal",
+                if cfg!(target_os = "macos") { Some("Cmd+K") } else { None },
+            )?,
+            &sep()?,
+            // Matches the default `palette` binding rather than shadowing it
+            // with a second key. ⌘K used to be here, which quietly took the one
+            // combo a terminal wants for clearing its own screen.
+            &command(handle, "palette", "Command Palette", Some("CmdOrCtrl+P"))?,
         ],
     )?;
 
