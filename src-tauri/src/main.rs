@@ -138,7 +138,10 @@ fn main() {
             // can bind its port.
             let handle = app.handle().clone();
             std::thread::spawn(move || match await_our_server(&token, &died) {
-                Ok(()) => start_heartbeat(),
+                Ok(()) => {
+                    load_app(&handle);
+                    start_heartbeat();
+                }
                 Err(reason) => show_startup_error(&handle, &reason),
             });
             Ok(())
@@ -590,6 +593,35 @@ fn parse_instance(response: &str) -> Option<String> {
     let rest = &response[start..];
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+/// Load the app now that our own backend is the one answering on the port.
+///
+/// The window is declared in `tauri.conf.json`, so it starts loading
+/// `http://localhost:43117/index.html` the instant the process launches — always
+/// before the sidecar has bound the port (a packaged build unpacks its ERTS tree
+/// first, so the gap is seconds, not milliseconds). Nothing retries that first
+/// navigation: it fails against a closed port and the window stays blank, or it
+/// succeeds against a *foreign* server and paints its bare "not found" body, for
+/// the rest of the session. `await_our_server` is the only moment the shell knows
+/// the page will get the real app, so the navigation belongs here.
+///
+/// Unconditional: a provisional load that never committed leaves nothing to
+/// inspect, so there is no reliable way to ask whether the first attempt worked.
+/// Reloading a one-second-old SPA costs nothing; opening blank costs the session.
+fn load_app(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    match format!("http://{HOST}:{PORT}/index.html").parse::<tauri::Url>() {
+        Ok(url) => {
+            if let Err(err) = window.navigate(url) {
+                eprintln!("Could not load the Codrift UI: {}", err);
+            }
+        }
+        Err(err) => eprintln!("Could not build the Codrift UI url: {}", err),
+    }
 }
 
 /// Replace whatever the window loaded with a readable explanation. Without this
