@@ -148,7 +148,7 @@ export function pathsToInput(paths: string[]): string {
  * envelope that stops a multi-line drop submitting on its first newline — is
  * `term.paste`'s job, not ours: whether those markers may be sent at all
  * depends on the program having turned bracketed-paste mode on, which is state
- * only xterm tracks.
+ * only the terminal tracks.
  */
 export function textToInput(text: string): string {
   // Strip every control character except newline, so dragged text can't smuggle

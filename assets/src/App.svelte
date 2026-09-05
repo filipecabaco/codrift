@@ -16,6 +16,7 @@
     PASTE_INTO_AGENT,
     type PasteRequest,
     REDRAW_TERMINALS,
+    TERMINAL_INPUT_CLASS,
     type Agent,
     type DirInfo,
     type Initiative,
@@ -139,7 +140,7 @@
    *
    * Panes are laid out absolutely from these rather than by nesting flex
    * containers, because a nested container is rebuilt when the tree around it
-   * changes — and rebuilding a pane throws away its xterm, which cannot be
+   * changes — and rebuilding a pane throws away its terminal, which cannot be
    * restored (see the terminal layer's own note). Absolute boxes let every pane
    * stay a sibling of every other, so splitting one never disturbs the rest.
    *
@@ -320,7 +321,7 @@
 
   function termTextarea(): HTMLElement | null {
     // Scope to the active pane so focus lands on the right terminal when split.
-    return document.querySelector(`#pane-${activePane} .xterm-helper-textarea`);
+    return document.querySelector(`#pane-${activePane} .${TERMINAL_INPUT_CLASS}`);
   }
   // Null means the view has nothing focusable, so ⇥ stays on the sidebar.
   function mainFocusTarget(): HTMLElement | null {
@@ -576,7 +577,7 @@
     return v;
   }
 
-  // One agent, one pane. Two panes bound to the same agent mount two xterms over
+  // One agent, one pane. Two panes bound to the same agent mount two terminals over
   // a single PTY — the same stream painted twice, which is what made a split look
   // broken. Whichever pane claims the agent wins; the other falls back to the
   // initiative overview, giving a split "move it here" semantics.
@@ -1542,7 +1543,7 @@
     contextMenu = { x: event.clientX, y: event.clientY, label: "Pane actions", entries };
   }
 
-  // Handed to the terminal rather than pushed down the socket: only xterm knows
+  // Handed to the terminal rather than pushed down the socket: only it knows
   // whether the program accepts a bracketed paste, and that envelope is what
   // tells a CLI a pasted path from a typed one — see AgentTerminal's drop zone.
   async function pasteIntoTerminal(agentId: string) {
@@ -1973,7 +1974,7 @@
     );
   }
 
-  // Anything that swallows keys for itself: a form field, or xterm's hidden
+  // Anything that swallows keys for itself: a form field, or the terminal's hidden
   // textarea — the terminal is a text surface like any other, and every key it
   // can use has to reach it.
   function typingTarget(): boolean {
@@ -1995,12 +1996,12 @@
   const IS_MAC = /Mac/i.test(navigator.userAgent);
   const PRIMARY_MOD = IS_MAC ? "⌘" : "⌃";
 
-  // A real text field, as opposed to xterm's hidden textarea — which is a text
-  // surface for key routing only: it holds no caret the user can move, so the
-  // editing combos a field would want mean nothing there.
+  // A real text field, as opposed to the terminal's hidden textarea — which is a
+  // text surface for key routing only: it holds no caret the user can move, so
+  // the editing combos a field would want mean nothing there.
   function editableTarget(): boolean {
     const ae = document.activeElement as HTMLElement | null;
-    if (!ae || ae.classList.contains("xterm-helper-textarea")) return false;
+    if (!ae || ae.classList.contains(TERMINAL_INPUT_CLASS)) return false;
     return typingTarget();
   }
 
@@ -2039,7 +2040,7 @@
     runAction(action);
   }
 
-  // Capture phase so xterm can't swallow them: Tab, pane shortcuts, and every
+  // Capture phase so the terminal can't swallow them: Tab, pane shortcuts, and every
   // modifier combo (⌃P, ⌃B…), which the terminal would otherwise eat.
   function onCaptureKeydown(e: KeyboardEvent) {
     if (modal || editing) return; // overlays install their own capture handlers
@@ -2617,7 +2618,7 @@
 
       <!-- Persistent terminal layer.
            It lives outside the tab branch on purpose: rendering it under
-           `tab === "context"` destroyed the xterm on every switch to Diff or
+           `tab === "context"` destroyed the terminal on every switch to Diff or
            Tree, and rebuilding it cannot restore a TUI. While unmounted the
            agent has no subscriber, so lib/stream.ts drops its output on the
            floor; on return all we could do was replay a raw byte log recorded at
@@ -2630,7 +2631,7 @@
            textarea out of the focus order.
 
            No {#key} either: a terminal persists and reconnects when the agent
-           changes, avoiding WebGL-context churn that broke the UI. -->
+           changes, avoiding the rebuild churn that broke the UI. -->
       {#if init && view.agentId}
         <div
           class={["absolute inset-0", view.tab === "context" ? "" : "invisible"]}

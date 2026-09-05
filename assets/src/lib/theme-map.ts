@@ -34,7 +34,7 @@ export type Palette = {
   removeFg: string;
   selection: string;
   dark: boolean;
-  /** 16 ANSI colours + fg/bg/cursor for xterm. */
+  /** 16 ANSI colours + fg/bg/cursor for the terminal. */
   terminal: Record<string, string>;
 };
 

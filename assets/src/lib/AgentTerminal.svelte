@@ -1,17 +1,42 @@
+<script module lang="ts">
+  import { Ghostty } from "ghostty-web";
+  import wasmUrl from "ghostty-web/ghostty-vt.wasm?url";
+  import { routeWindowOpenToBrowser } from "$lib/api";
+
+  /**
+   * A private VT core per terminal. Deliberately not shared.
+   *
+   * `init()` fetches the core from a base64 `data:` URL inlined in the bundle,
+   * which our CSP blocks (`connect-src 'self'`) and which it offers no way to
+   * point elsewhere. `Ghostty.load` takes a path, so it gets the copy Vite emits
+   * as an ordinary same-origin asset. The inlined one still rides along in the
+   * bundle, unreachable behind the path check inside `load`.
+   *
+   * Sharing one core between panes looks free — it holds no per-terminal state —
+   * and it is not. Two terminals freed and rebuilt against one WASM heap wedge
+   * the tab: 100% of a core, forever, in a loop no JS frame appears in, which is
+   * what a theme change does to a split. Closing a pane is fine, and one pane
+   * rebuilding alone is fine; it takes the second allocation after the second
+   * free. An instance apiece costs a compile per terminal and cannot corrupt a
+   * sibling. See coder/ghostty-web#141 for the shape of it.
+   */
+  const ghosttyCore = () => Ghostty.load(wasmUrl);
+
+  // ghostty-web detects URLs itself and opens them with `window.open`, which this
+  // webview does not implement — and it registers those providers from `open()`,
+  // ahead of anything we could add. So the redirect has to happen on window.open.
+  routeWindowOpenToBrowser();
+</script>
+
 <script lang="ts">
-  import { Terminal } from "@xterm/xterm";
-  import { FitAddon } from "@xterm/addon-fit";
-  import { WebglAddon } from "@xterm/addon-webgl";
-  import { CanvasAddon } from "@xterm/addon-canvas";
-  import { WebLinksAddon } from "@xterm/addon-web-links";
-  import "@xterm/xterm/css/xterm.css";
+  import { FitAddon, Terminal } from "ghostty-web";
   import { untrack } from "svelte";
   import {
     type AgentTarget,
     CLEAR_TERMINAL,
-    openUrl,
     PASTE_INTO_AGENT,
     REDRAW_TERMINALS,
+    TERMINAL_INPUT_CLASS,
     type PasteRequest,
   } from "$lib/api";
   import { fetchReplay, onAgentOutput, sendKeys, sendResize } from "$lib/stream";
@@ -32,6 +57,7 @@
   let pane: HTMLDivElement;
   let el: HTMLDivElement;
   let dropping = $state(false);
+  let loadError = $state<string | undefined>(undefined);
 
   let term: Terminal | undefined;
   let fit: FitAddon | undefined;
@@ -40,14 +66,14 @@
   // left is dropped rather than painted into this one.
   let gen = 0;
   /**
-   * True while the replay is being parsed, which mutes xterm's replies to it.
+   * True while the replay is being parsed, which mutes the terminal's replies.
    *
    * A terminal answers questions: DSR (`\x1b[6n`) with a cursor position, OSC 11
-   * with the background colour. xterm answers them the moment it PARSES them —
-   * it cannot know it is reading a log rather than a live stream. So every
-   * reconnect re-asked and re-answered every question in the replay, and the
-   * program that asked had finished reading long ago, leaving its own replies
-   * typed into the prompt: `11;rgb:2e2e/3434/4040;1R`, once per reattach.
+   * with the background colour. It answers them the moment it PARSES them — it
+   * cannot know it is reading a log rather than a live stream. So every reconnect
+   * re-asked and re-answered every question in the replay, and the program that
+   * asked had finished reading long ago, leaving its own replies typed into the
+   * prompt: `11;rgb:2e2e/3434/4040;1R`, once per reattach.
    *
    * Nothing may be reported about a screen that has already been drawn, so the
    * replies are dropped rather than sent. Live output is unaffected: it is held
@@ -61,76 +87,56 @@
 
   // ── Renderer ───────────────────────────────────────────────────────────────
 
-  // WKWebView won't composite xterm's DOM renderer — output stays invisible
-  // until something forces a native repaint. A GPU renderer is the fix.
-  function loadRenderer(t: Terminal) {
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => recoverRenderer(t, webgl));
-      t.loadAddon(webgl);
-    } catch {
-      loadCanvas(t);
-    }
-  }
-
-  function loadCanvas(t: Terminal) {
-    try {
-      t.loadAddon(new CanvasAddon());
-    } catch {
-      /* xterm's DOM renderer: worse, but not nothing */
-    }
-  }
-
-  // WKWebView throws the GPU surface away whenever it decides the window is off
-  // screen. Dispose on the NEXT tick — `dispose()` from inside `onContextLoss`
-  // throws, and that throw used to skip the fallback, leaving no renderer at all
-  // — then repaint, since a new renderer starts empty. Canvas for good: a fresh
-  // WebglAddon would lose its context the same way on the next window switch.
-  function recoverRenderer(t: Terminal, webgl: WebglAddon) {
-    setTimeout(() => {
-      try {
-        webgl.dispose();
-      } catch {
-        /* must not cost us the fallback */
-      }
-      loadCanvas(t);
-      try {
-        t.refresh(0, t.rows - 1);
-      } catch {
-        /* torn down mid-recovery */
-      }
-    }, 0);
+  /**
+   * Draw every cell again, onto a backing store built from scratch.
+   *
+   * This is the answer to two problems that happen to share a cure.
+   *
+   * WKWebView drops the contents of a surface it has decided is off screen, and
+   * raises no event doing it. ghostty-web's render loop cannot recover from that
+   * on its own: it runs every frame, but asks for the DIRTY rows, and a screen
+   * nobody has written to has none — so the loop faithfully paints nothing and
+   * the pane stays blank until something forces a full redraw. Reassigning
+   * `canvas.width` (which `renderer.resize` does) is what makes WebKit allocate a
+   * new surface, and `forceAll` is what fills it.
+   *
+   * It also puts the canvas back on the device pixel grid. ghostty-web sizes the
+   * backing store twice whenever the grid or the font changes: the renderer sets
+   * it in device pixels and scales the context to match, then the terminal
+   * overwrites `canvas.width` in CSS pixels — which also resets the transform. On
+   * a Retina display that leaves every cell drawn at half resolution, so the text
+   * comes back blurry after the first divider drag.
+   */
+  function repaint() {
+    const t = term;
+    const renderer = t?.renderer;
+    if (!t || !renderer || !t.wasmTerm) return;
+    renderer.resize(t.cols, t.rows);
+    renderer.render(t.wasmTerm, true, t.getViewportY(), t);
   }
 
   // ── Input ──────────────────────────────────────────────────────────────────
 
   // ⇧⏎ / ⌥⏎ insert a newline instead of submitting: coding CLIs read ESC+CR as
   // "newline, don't send", the same pair iTerm2 and VS Code bind for it.
+  //
+  // The return value is INVERTED from xterm.js: here `true` means "handled, stop"
+  // where xterm.js reads it as "carry on" (coder/ghostty-web#192). Returning
+  // xterm's values would swallow every keystroke in the pane.
   function multilineEnter(t: Terminal) {
     t.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown" || e.key !== "Enter") return true;
-      if (e.ctrlKey || e.metaKey || !(e.shiftKey || e.altKey)) return true;
-      e.preventDefault();
+      if (e.key !== "Enter") return false;
+      if (e.ctrlKey || e.metaKey || !(e.shiftKey || e.altKey)) return false;
       sendKeys(agentId, "\x1b\r");
-      return false;
+      return true;
     });
-  }
-
-  // ⌘/⌃-click opens a URL in the real browser — via the backend, since the Tauri
-  // webview has no window.open. A plain click still places the selection.
-  function linkOpener(t: Terminal) {
-    t.loadAddon(
-      new WebLinksAddon((e, uri) => {
-        if (e.metaKey || e.ctrlKey) void openUrl(uri).catch(() => {});
-      }),
-    );
   }
 
   // ── Sizing ─────────────────────────────────────────────────────────────────
 
   // FitAddon divides the measured box by the cell size, so a box that has not
-  // been laid out yet proposes a 1×1 grid — which reflows the buffer to one
-  // column, and no later refit puts the wrapped lines back.
+  // been laid out yet proposes a 2×1 grid — which reflows the buffer to two
+  // columns, and no later refit puts the wrapped lines back.
   function fitSafe() {
     if (!term || !el) return;
     const box = el.getBoundingClientRect();
@@ -169,12 +175,6 @@
 
   // ── Painting ───────────────────────────────────────────────────────────────
 
-  function paint() {
-    if (!term) return;
-    fitSafe();
-    term.refresh(0, term.rows - 1);
-  }
-
   /** Nothing on screen: every row in the buffer is blank. */
   function isBlank(t: Terminal): boolean {
     const buf = t.buffer.active;
@@ -184,16 +184,19 @@
     return true;
   }
 
-  // The refresh action: WKWebView drops surfaces for reasons that raise no
-  // event, and then only dragging the window edge brings the pane back.
-  //
-  // Unless the BUFFER is what is empty — every step here draws from it, so
-  // repainting nothing faithfully paints nothing. That is a replay that never
-  // landed, and only refetching helps. Guarded on blankness because a reconnect
-  // resets the terminal, and the replay holds less than the scrollback does.
+  /**
+   * The refresh action: WKWebView drops surfaces for reasons that raise no
+   * event, and then only dragging the window edge brings the pane back.
+   *
+   * Unless the BUFFER is what is empty — every step here draws from it, so
+   * repainting nothing faithfully paints nothing. That is a replay that never
+   * landed, and only refetching helps. Guarded on blankness because a reconnect
+   * resets the terminal, and the replay holds less than the scrollback does.
+   */
   export function redraw() {
     if (!term || !visible) return;
-    paint();
+    fitSafe();
+    repaint();
     if (isBlank(term)) connect(agentId);
     else forceRepaint(agentId);
   }
@@ -209,10 +212,10 @@
    * Attach to `agent`, replay what it has printed, then go live.
    *
    * The replay is the PAST, so nothing newer may be on screen when it lands. The
-   * HTTP round trip lets live frames arrive first, and `write()` is queued, so
-   * "after the forEach" can still be parsed before the replay. Hence: subscribe
-   * first so no frame is missed, hold live frames in `pending`, and release them
-   * from xterm's parse callback — the one point where the replay is on screen.
+   * HTTP round trip lets live frames arrive first, and the write callback is
+   * deferred a frame, so "after the forEach" can still land before the replay is
+   * on screen. Hence: subscribe first so no frame is missed, hold live frames in
+   * `pending`, and release them from the write callback.
    */
   function connect(agent: string) {
     disconnect();
@@ -246,6 +249,7 @@
         const queued = pending ?? [];
         pending = undefined;
         queued.forEach((draw) => draw());
+        repaint();
         forceRepaint(agent);
       };
 
@@ -277,59 +281,118 @@
 
   // The terminal is themed from the same VS Code theme as the rest of the app,
   // all 16 ANSI colours included, so agent output belongs to the theme rather
-  // than fighting it. `terminal` carries exactly xterm's own colour names.
-  function xtermTheme() {
+  // than fighting it. `terminal` carries exactly the theme's own colour names.
+  function terminalTheme() {
     const t = themeState.palette.terminal;
     return { ...t, cursorAccent: t.background };
   }
 
+  /**
+   * The theme the terminal was BUILT with, which is the only one it can wear.
+   *
+   * ghostty-web resolves colours when it constructs the WASM terminal: every
+   * cell then carries its own RGB, so `renderer.setTheme` afterwards only
+   * repaints the ground between cells and the text stays in the old palette
+   * (coder/ghostty-web#125, #121). Re-theming means a new terminal — affordable
+   * here, since a pane already knows how to rebuild itself from the replay, and
+   * the cost is the scrollback older than the replay window.
+   *
+   * Debounced, because the theme picker previews on every arrow key and each
+   * preview would otherwise cost a WASM terminal and a replay fetch.
+   */
+  let themeKey = $state(untrack(() => JSON.stringify(themeState.palette.terminal)));
+
+  $effect(() => {
+    const key = JSON.stringify(themeState.palette.terminal);
+    if (key === untrack(() => themeKey)) return;
+    const timer = setTimeout(() => (themeKey = key), 250);
+    return () => clearTimeout(timer);
+  });
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  // Built once, disposed once. Theme and font are read untracked because they
-  // are only the *initial* options — tracked, a theme change would land in this
-  // effect's dependencies and tear the terminal down to restyle it.
+  // Built once per theme, disposed once. Font is read untracked because it is
+  // only the *initial* size — it can be changed in place, and tracked here a
+  // font tweak would tear the terminal down to restyle it.
   $effect(() => {
-    const t = new Terminal(
-      untrack(() => ({
-        fontFamily: fontState.stack,
-        fontSize: fontState.size,
-        theme: xtermTheme(),
-        cursorBlink: true,
-        scrollback: 5000,
-      })),
-    );
-    fit = new FitAddon();
-    t.loadAddon(fit);
-    t.open(el);
-    loadRenderer(t);
-    linkOpener(t);
-    multilineEnter(t);
-    // Both read `agentId` at fire time, so they survive the pane changing agent.
-    t.onData((data) => {
-      if (!replaying) sendKeys(agentId, data);
-    });
-    t.onResize(({ cols, rows }) => pushResize(cols, rows));
-    term = t;
+    themeKey; // a new palette needs a new terminal — see above
+    let cancelled = false;
+    let built: Terminal | undefined;
+    let ro: ResizeObserver | undefined;
 
-    const ro = new ResizeObserver(() => fitSafe());
-    ro.observe(el);
+    // `.catch` rather than a second `.then` argument: an onRejected handler does
+    // not see what the onFulfilled beside it threw, and `open()` throws — that
+    // would have gone out as an unhandled rejection, leaving a blank pane and no
+    // way to tell it from one that simply painted nothing.
+    ghosttyCore()
+      .then((ghostty) => {
+        if (cancelled) return;
+        const t = new Terminal({
+          ghostty,
+          ...untrack(() => ({
+            fontFamily: fontState.stack,
+            fontSize: fontState.size,
+            theme: terminalTheme(),
+            cursorBlink: true,
+            // Ghostty budgets scrollback in BYTES, not lines, however the option
+            // is named on this side (coder/ghostty-web#140) — the old 5000 would
+            // have bought about a screenful. 4MB is a few tens of thousands of
+            // lines, and well under Ghostty's own 10MB default per surface.
+            scrollback: 4_000_000,
+          })),
+        });
+
+        // `open()` focuses, which is wrong for a pane mounting behind another tab
+        // or while a form field has the caret — put focus back where it was.
+        const previous = document.activeElement as HTMLElement | null;
+        t.open(el);
+        if (previous && previous !== document.body) previous.focus?.();
+        else if (!untrack(() => visible)) t.blur();
+
+        fit = new FitAddon();
+        t.loadAddon(fit);
+        multilineEnter(t);
+        // Both read `agentId` at fire time, so they survive the pane changing agent.
+        t.onData((data) => {
+          if (!replaying) sendKeys(agentId, data);
+        });
+        t.onResize(({ cols, rows }) => {
+          repaint();
+          pushResize(cols, rows);
+        });
+        built = t;
+        term = t;
+
+        ro = new ResizeObserver(() => fitSafe());
+        ro.observe(el);
+
+        // The reattach effect below has already run and found no terminal, so
+        // this first connection is ours to make. The deferred repaint is for the
+        // first frame: `open()` drew once already, but into a surface the webview
+        // had not laid out yet.
+        fitSafe();
+        connect(agentId);
+        requestAnimationFrame(() => {
+          if (!cancelled) repaint();
+        });
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) loadError = e instanceof Error ? e.message : String(e);
+      });
 
     return () => {
-      ro.disconnect();
+      cancelled = true;
+      ro?.disconnect();
       clearTimeout(resizeTimer);
       disconnect();
-      try {
-        t.dispose();
-      } catch {
-        /* the WebGL addon can throw from a deferred render while disposing */
-      }
+      built?.dispose();
       term = undefined;
       fit = undefined;
     };
   });
 
   // Reattach whenever the pane changes agent. Never a remount: rebuilding the
-  // terminal costs a GPU context and a fresh unlaid-out fit, which is what left
+  // terminal costs a WASM terminal and a fresh unlaid-out fit, which is what left
   // panes blank or clipped.
   $effect(() => {
     const agent = agentId;
@@ -339,38 +402,40 @@
     connect(agent);
   });
 
-  // Restyle in place: no reconnect, no reload, scrollback intact. A different
-  // cell size changes how many rows and columns fit, so refit and let onResize
-  // tell the PTY.
+  // The font restyles in place: no reconnect, no reload, scrollback intact. A
+  // different cell size changes how many rows and columns fit, so refit and let
+  // onResize tell the PTY. (The theme cannot go this way — see `themeKey`.)
   $effect(() => {
-    const theme = xtermTheme();
     const family = fontState.stack;
     const size = fontState.size;
     if (!term) return;
-    term.options.theme = theme;
     term.options.fontFamily = family;
     term.options.fontSize = size;
     fitSafe();
+    repaint();
   });
 
   // Coming back into view: the box never collapsed, so nothing to reconnect, but
-  // xterm doesn't paint a terminal it can't see. Twice, because this runs in the
-  // same flush that removed the `invisible` class and a renderer asked to draw
-  // before layout drops the frame — the "blank until you click it" case.
+  // the surface it was drawn on may not have survived being hidden. Twice,
+  // because this runs in the same flush that removed the `invisible` class and a
+  // renderer asked to draw before layout drops the frame — the "blank until you
+  // click it" case.
   $effect(() => {
     if (!visible) return;
-    paint();
-    const frame = requestAnimationFrame(paint);
+    fitSafe();
+    repaint();
+    const frame = requestAnimationFrame(() => {
+      fitSafe();
+      repaint();
+    });
     return () => cancelAnimationFrame(frame);
   });
 
   // focus/visibilitychange: WKWebView drops the contents of an off-screen
   // surface, and nothing writes afterwards, so an idle agent comes back blank.
-  // The custom events are broadcasts because App.svelte renders terminals inside
-  // a snippet and holds no reference to them — see lib/api.ts.
   $effect(() => {
-    const repaint = () => {
-      if (visible && term) term.refresh(0, term.rows - 1);
+    const onFocus = () => {
+      if (visible) repaint();
     };
     const onPaste = (e: Event) => {
       const req = (e as CustomEvent<PasteRequest>).detail;
@@ -384,14 +449,16 @@
       term.clear();
       term.focus();
     };
-    window.addEventListener("focus", repaint);
-    document.addEventListener("visibilitychange", repaint);
+    // A broadcast because App.svelte renders terminals inside a snippet and holds
+    // no reference to them — see lib/api.ts.
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     window.addEventListener(REDRAW_TERMINALS, redraw);
     window.addEventListener(PASTE_INTO_AGENT, onPaste);
     window.addEventListener(CLEAR_TERMINAL, onClear);
     return () => {
-      window.removeEventListener("focus", repaint);
-      document.removeEventListener("visibilitychange", repaint);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
       window.removeEventListener(REDRAW_TERMINALS, redraw);
       window.removeEventListener(PASTE_INTO_AGENT, onPaste);
       window.removeEventListener(CLEAR_TERMINAL, onClear);
@@ -405,8 +472,8 @@
    * bracketed-paste mode on, and that envelope is the entire signal a CLI has to
    * tell a pasted path from a typed one: Claude Code shows a dropped image as
    * `[Image #1]`, where the same bytes through `sendKeys` land as the literal
-   * path. xterm has to do it — a shell that never asked for bracketed paste must
-   * not be handed a literal `[200~`, and only xterm knows which it is.
+   * path. The terminal has to do it — a shell that never asked for bracketed
+   * paste must not be handed a literal `[200~`, and only it knows which it is.
    */
   $effect(() =>
     registerDropZone(pane, {
@@ -422,18 +489,32 @@
   );
 </script>
 
-<!-- Padding on the wrapper, never on `el`: FitAddon measures el under
-     `box-sizing: border-box`, which INCLUDES its padding while only subtracting
-     `.xterm`'s (0), so `p-1.5` there fitted a grid to 12px that did not exist.
-     Terminal background rather than canvas, because a character grid rarely
-     divides the pane exactly and the remainder should read as where the terminal
-     ends, not as dead space stuck to it. -->
+<!-- Padding on the wrapper, never on `el`: FitAddon measures el's clientWidth and
+     subtracts el's own padding, so padding here is already outside the measured
+     box while padding there would be counted twice. Terminal background rather
+     than canvas, because a character grid rarely divides the pane exactly and the
+     remainder should read as where the terminal ends, not as dead space stuck to
+     it. -->
 <div
   class="relative size-full overflow-hidden p-1.5"
   style="background: {themeState.palette.terminal.background}"
   bind:this={pane}
 >
-  <div class="size-full" bind:this={el}></div>
+  <!-- ghostty-web makes this element the terminal: it sets `contenteditable` and
+       `tabindex` here and hangs keydown, paste and composition off it, so THIS is
+       what `document.activeElement` becomes — not the textarea it also creates.
+       Hence the marker class here, which is how App.svelte tells a terminal from
+       a real text field. `caret-transparent` because contenteditable draws a
+       blinking DOM caret in the corner, and the only cursor that means anything
+       is the one the renderer paints on the canvas. -->
+  <div class="size-full caret-transparent {TERMINAL_INPUT_CLASS}" bind:this={el}></div>
+  {#if loadError}
+    <div class="absolute inset-0 z-10 flex items-center justify-center p-4">
+      <span class="rounded-md border border-border bg-surface px-3 py-1.5 text-[12px] text-fg">
+        Terminal engine failed to load: {loadError}
+      </span>
+    </div>
+  {/if}
   {#if dropping}
     <!-- pointer-events-none keeps this out of the hit test: the drop has to reach
          the pane underneath, not the hint drawn on top of it. -->
