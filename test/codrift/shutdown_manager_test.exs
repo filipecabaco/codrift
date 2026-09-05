@@ -83,4 +83,67 @@ defmodule Codrift.ShutdownManagerTest do
     pump(socket)
     refute_receive :stopped, 400
   end
+
+  describe "the orphan check" do
+    # The one case the heartbeat cannot see: it never started. Without this a
+    # sidecar whose shell died before it could connect sat on :43117 forever —
+    # seven were found running at once, going back three versions.
+    test "stops a sidecar that was never heartbeated and has lost its parent" do
+      start_manager(orphan_grace: 0, orphan_check: fn -> true end)
+
+      assert_receive :stopped, 1000
+    end
+
+    test "leaves a slow boot alone while the parent is still there" do
+      start_manager(orphan_grace: 0, orphan_check: fn -> false end)
+
+      refute_receive :stopped, 500
+    end
+
+    test "does not run before the grace has passed" do
+      test = self()
+
+      start_manager(
+        orphan_grace: 10_000,
+        orphan_check: fn ->
+          send(test, :checked)
+          true
+        end
+      )
+
+      refute_receive :checked, 300
+      refute_receive :stopped, 100
+    end
+
+    test "ignores a lost parent once the shell has spoken" do
+      # A connected shell is the heartbeat's business from then on, and only a
+      # sidecar that was never spoken to can be judged by its parent alone.
+      %{socket_path: path} = start_manager(orphan_grace: 300, orphan_check: fn -> true end)
+
+      socket = connect(path)
+      pump(socket)
+
+      refute_receive :stopped, 400
+    end
+  end
+
+  defp start_manager(opts) do
+    test = self()
+    app = "codrift_test_#{System.unique_integer([:positive])}"
+    name = :"shutdown_manager_#{System.unique_integer([:positive])}"
+
+    defaults = [
+      name: name,
+      app_name: app,
+      interval: 50,
+      timeout: 100_000,
+      stall_grace: 100_000,
+      reconnect_grace: 100_000,
+      on_stop: fn -> send(test, :stopped) end
+    ]
+
+    start_supervised!({ShutdownManager, Keyword.merge(defaults, opts)}, id: name)
+
+    %{socket_path: Path.join(System.tmp_dir!(), "tauri_heartbeat_#{app}.sock")}
+  end
 end

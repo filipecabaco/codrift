@@ -92,10 +92,11 @@ defmodule Codrift do
       # (the manager would restart instead of stopping). Log to a file instead so
       # a dead GUI can never wedge the backend's own shutdown path.
       redirect_logs_to_file()
-      # A second sidecar can never share the port, and failing here (rather than
-      # deep inside Bandit's start) is what lets the Rust shell tell the user why.
-      warn_if_port_taken()
     end
+
+    # Before Bandit tries to bind. Not gated on `desktop_sidecar?/0`: the squatter
+    # locks out `mix ex_tauri.dev` exactly as hard as it locks out the shipped app.
+    ensure_port_available()
 
     base = [
       {Registry, keys: :unique, name: Codrift.AgentRegistry},
@@ -184,23 +185,35 @@ defmodule Codrift do
     end
   end
 
-  # Log a precise reason before Bandit's own `:eaddrinuse` crash, which reads as a
-  # generic supervisor failure. The desktop log is the only trace a packaged app
-  # leaves, so it has to name the actual problem.
-  defp warn_if_port_taken do
+  # Take :43117 back from a sidecar whose window is gone, and say precisely why
+  # we cannot when the holder is something we must not kill. Bandit's own
+  # `:eaddrinuse` reads as a generic supervisor failure, and the desktop log is
+  # the only trace a packaged app leaves, so it has to name the real problem.
+  #
+  # Skipped on port 0, which is the test config — there is nothing to contend for
+  # and the suite must not go hunting for processes to signal.
+  defp ensure_port_available do
     port = Keyword.get(Application.get_env(:codrift, :bandit_opts, []), :port, 43_117)
 
-    case :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false], 500) do
-      {:ok, socket} ->
-        :gen_tcp.close(socket)
+    if port > 0 do
+      case Codrift.Sidecar.reclaim_port(port) do
+        :free ->
+          :ok
 
-        Logger.error(
-          "[Codrift] port #{port} is already in use — another Codrift backend is running. " <>
-            "This sidecar will exit; quit the other instance and reopen Codrift."
-        )
+        :reclaimed ->
+          Logger.warning("[Codrift] reclaimed port #{port} from an abandoned Codrift sidecar")
 
-      {:error, _} ->
-        :ok
+        {:blocked, reason} ->
+          Logger.error(
+            "[Codrift] port #{port} is already in use — #{reason}. This backend will exit; " <>
+              "quit the other Codrift and reopen this one."
+          )
+      end
+
+      # The port squatter is only the orphan that happened to win the race for it.
+      # Its siblings keep polling integrations and holding agent processes with no
+      # window, and nothing but an outside process will ever stop them.
+      Codrift.Sidecar.reap_orphans()
     end
   rescue
     _ -> :ok

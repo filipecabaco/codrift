@@ -548,8 +548,12 @@ fn port_conflict_message(saw_foreign_server: bool) -> String {
     if saw_foreign_server {
         format!(
             "Another Codrift backend is already using port {PORT}, so this window has no server \
-             of its own. It is usually a sidecar left running by an older version.\n\n\
-             Quit the other Codrift, or run this in a terminal, then reopen Codrift:\n\n\
+             of its own.\n\n\
+             A backend left over from a closed window is taken back automatically, so this is \
+             most likely a second Codrift that still has a window of its own — quit it and \
+             reopen this one.\n\n\
+             If there is no other window, $TMPDIR/codrift_desktop.log says why the port could \
+             not be reclaimed. As a last resort:\n\n\
              pkill -f 'burrito/desktop_.*/erts-.*/bin/beam.smp'"
         )
     } else {

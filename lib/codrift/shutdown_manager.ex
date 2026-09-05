@@ -3,13 +3,30 @@ defmodule Codrift.ShutdownManager do
   Heartbeat-based shutdown for the Tauri desktop sidecar.
 
   The Rust shell connects to a Unix domain socket and writes a byte every 100ms.
-  Two things end this backend:
+  Three things end this backend:
 
     * the connection closing and nothing reconnecting — the kernel closes a dead
       process's sockets, so this is the unambiguous "window gone" signal, and the
       one a crash or force-quit actually trips;
     * bytes stopping for `timeout` while the connection stays open — the backstop
-      for a shell that is alive but wedged.
+      for a shell that is alive but wedged;
+    * no heartbeat ever arriving *and* this process having been reparented to
+      init — see "the orphan check" below.
+
+  ## The orphan check
+
+  Every signal above is a heartbeat that stopped, which leaves one case
+  uncovered: a heartbeat that never started. The startup grace deliberately
+  makes that state immortal (a slow boot must not kill itself), so a sidecar
+  whose shell died before it could connect — or whose socket a second sidecar
+  unlinked, the stale-socket bug this module now guards against — held `:43117`
+  until the machine was rebooted. Seven of them were found running at once,
+  going back three versions.
+
+  `Codrift.Sidecar.orphan?/0` closes it from the other end: the shell is the only
+  thing that spawns a packaged sidecar, so a PPID of 1 proves the window is gone
+  no matter what the socket says. It shells out, so it runs only after
+  `:orphan_grace` has passed with no heartbeat, and is throttled after that.
 
   Drop-in replacement for `ExTauri.ShutdownManager` with three correctness fixes.
 
@@ -50,6 +67,12 @@ defmodule Codrift.ShutdownManager do
   # How long the socket may stay closed before the window counts as gone. The
   # Rust shell retries every 100ms, so this only has to outlast a reconnect.
   @default_reconnect_grace 3_000
+  # How long a sidecar may go without ever being heartbeated before the orphan
+  # check starts asking whether it still has a shell. Comfortably past the Rust
+  # side's own 30s wait for the port, so a slow first launch is never suspected.
+  @default_orphan_grace 60_000
+  # The check forks `ps`, so it is throttled well below the heartbeat interval.
+  @orphan_check_interval 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: opts[:name] || __MODULE__)
@@ -63,6 +86,8 @@ defmodule Codrift.ShutdownManager do
     timeout = setting(opts, :timeout, :heartbeat_timeout, @default_heartbeat_timeout)
     stall_grace = Keyword.get(opts, :stall_grace, @default_stall_grace)
     reconnect_grace = Keyword.get(opts, :reconnect_grace, @default_reconnect_grace)
+    orphan_grace = Keyword.get(opts, :orphan_grace, @default_orphan_grace)
+    orphan_check = Keyword.get(opts, :orphan_check, &Codrift.Sidecar.orphan?/0)
     on_stop = Keyword.get(opts, :on_stop, fn -> System.stop(0) end)
 
     # Socket name mirrors what the Rust shell connects to: ExTauri's installer
@@ -75,20 +100,7 @@ defmodule Codrift.ShutdownManager do
 
     remove_stale_socket(socket_path)
 
-    {:ok, listen_socket} =
-      :gen_tcp.listen(0, [
-        :binary,
-        {:ifaddr, {:local, socket_path}},
-        {:active, false},
-        {:reuseaddr, true}
-      ])
-
-    File.chmod(socket_path, 0o600)
-    manager = self()
-
-    Task.Supervisor.start_child(Codrift.TaskSupervisor, fn ->
-      accept_loop(listen_socket, manager)
-    end)
+    listen_socket = listen(socket_path)
 
     Logger.info("[Codrift.ShutdownManager] heartbeat monitoring on #{socket_path}")
 
@@ -96,6 +108,7 @@ defmodule Codrift.ShutdownManager do
      %{
        listen_socket: listen_socket,
        socket_path: socket_path,
+       started_at: System.monotonic_time(:millisecond),
        last_heartbeat: System.monotonic_time(:millisecond),
        next_check: schedule_check(interval),
        # Stays false until the Rust shell has connected at least once. While
@@ -108,8 +121,41 @@ defmodule Codrift.ShutdownManager do
        timeout: timeout,
        stall_grace: stall_grace,
        reconnect_grace: reconnect_grace,
+       orphan_grace: orphan_grace,
+       orphan_check: orphan_check,
+       # When the orphan check last forked `ps`, so it can be throttled.
+       last_orphan_check: nil,
        on_stop: on_stop
      }}
+  end
+
+  # Returns nil rather than raising when the socket cannot be bound. The old
+  # `{:ok, socket} =` turned "another backend is listening on this path" into a
+  # crash loop that took the whole supervision tree down with it; degrading to a
+  # manager with no listener keeps the orphan check — the one signal that does
+  # not need the socket — alive to stop the process properly.
+  defp listen(socket_path) do
+    opts = [:binary, {:ifaddr, {:local, socket_path}}, {:active, false}, {:reuseaddr, true}]
+
+    case :gen_tcp.listen(0, opts) do
+      {:ok, listen_socket} ->
+        File.chmod(socket_path, 0o600)
+        manager = self()
+
+        Task.Supervisor.start_child(Codrift.TaskSupervisor, fn ->
+          accept_loop(listen_socket, manager)
+        end)
+
+        listen_socket
+
+      {:error, reason} ->
+        Logger.error(
+          "[Codrift.ShutdownManager] could not listen on #{socket_path} (#{inspect(reason)}) — " <>
+            "no heartbeat will be received; falling back to the orphan check"
+        )
+
+        nil
+    end
   end
 
   @impl true
@@ -132,9 +178,27 @@ defmodule Codrift.ShutdownManager do
   def handle_cast(:client_gone, state), do: {:noreply, state}
 
   @impl true
+  # Startup grace: a heartbeat that has never arrived is the still-booting case,
+  # so the timeout must never fire here. Only losing the parent shell — which no
+  # slow boot can do — is proof enough to stop.
   def handle_info(:check_heartbeat, %{connected: false} = state) do
-    # Startup grace: never shut down before the first heartbeat ever arrives.
-    {:noreply, rearm(state)}
+    now = System.monotonic_time(:millisecond)
+
+    cond do
+      not orphan_check_due?(state, now) ->
+        {:noreply, rearm(state)}
+
+      state.orphan_check.() ->
+        Logger.warning(
+          "[Codrift.ShutdownManager] no heartbeat has ever arrived and this process has been " <>
+            "reparented to init — the window that spawned it is gone, stopping"
+        )
+
+        initiate_shutdown(state)
+
+      true ->
+        {:noreply, rearm(%{state | last_orphan_check: now})}
+    end
   end
 
   def handle_info(:check_heartbeat, state) do
@@ -185,8 +249,11 @@ defmodule Codrift.ShutdownManager do
 
   @impl true
   def terminate(_reason, state) do
-    :gen_tcp.close(state.listen_socket)
-    cleanup_socket(state.socket_path)
+    if state.listen_socket do
+      :gen_tcp.close(state.listen_socket)
+      cleanup_socket(state.socket_path)
+    end
+
     :ok
   end
 
@@ -194,6 +261,14 @@ defmodule Codrift.ShutdownManager do
     do: opts[key] || Application.get_env(:ex_tauri, env_key, default)
 
   defp rearm(state), do: %{state | next_check: schedule_check(state.interval)}
+
+  # Only after the grace has passed with nothing heard, and only every
+  # @orphan_check_interval after that — the check forks `ps`, while the heartbeat
+  # interval is half a second.
+  defp orphan_check_due?(state, now) do
+    now - state.started_at > state.orphan_grace and
+      (is_nil(state.last_orphan_check) or now - state.last_orphan_check >= @orphan_check_interval)
+  end
 
   # Returns the moment the check is due, which is what makes a late one — a
   # frozen VM — detectable when it finally runs.
