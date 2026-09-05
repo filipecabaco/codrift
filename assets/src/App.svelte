@@ -11,7 +11,12 @@
     updateStatus,
     MENU_EVENT,
     QUIT_REQUESTED,
+    type AgentTarget,
+    CLEAR_TERMINAL,
+    PASTE_INTO_AGENT,
+    type PasteRequest,
     REDRAW_TERMINALS,
+    TERMINAL_INPUT_CLASS,
     type Agent,
     type DirInfo,
     type Initiative,
@@ -54,8 +59,18 @@
 
   // Each pane is an independent viewport onto an initiative — its own agent,
   // tab, open context file and tree selection. The sidebar drives whichever
-  // pane is active. Max two panes (a single split, one level deep).
+  // pane is active. Panes nest arbitrarily; see `PaneNode`.
   type PaneView = {
+    /**
+     * Identity that survives the tree being rebuilt around it.
+     *
+     * Every split and close returns a *new* tree, so nothing may be addressed
+     * by position or by object identity across one — but the `<main>` element a
+     * pane owns has to be the same element afterwards or its terminal is
+     * destroyed. The id is what the keyed `{#each}` and the tree walkers both
+     * hold on to.
+     */
+    id: number;
     initiativeId: string | null;
     agentId: string | null;
     tab: "context" | "diff" | "tree";
@@ -75,7 +90,9 @@
      */
     chooser: boolean;
   };
+  let paneSeq = 0;
   const newView = (): PaneView => ({
+    id: ++paneSeq,
     initiativeId: null,
     agentId: null,
     tab: "context",
@@ -85,13 +102,80 @@
     dirPath: null,
     chooser: false,
   });
-  let panes = $state<PaneView[]>([newView()]);
+  /**
+   * The layout as a binary tree, the way every tiling terminal models it.
+   *
+   * A `split` node divides its box in two along `dir` at `fraction`; `a` is the
+   * left/top side, `b` the right/bottom. Splitting a pane replaces *that leaf*
+   * with a split node holding it — so ⌘D always halves the pane you are in and
+   * can be pressed forever, and a ⌘D inside a ⌘⇧D nests rather than flattening.
+   *
+   * A flat list cannot express that: it can only hold one row or one column.
+   */
+  type PaneNode =
+    | { kind: "leaf"; view: PaneView }
+    | {
+        kind: "split";
+        dir: "vertical" | "horizontal";
+        /** Size of side `a` as a fraction (0..1) of this node's box. */
+        fraction: number;
+        a: PaneNode;
+        b: PaneNode;
+      };
+
+  let tree = $state<PaneNode>({ kind: "leaf", view: newView() });
   let activePane = $state(0);
-  // Split divider: null = single pane; otherwise the orientation plus the first
-  // pane's size as a fraction (0..1) of the content area.
-  let split = $state<{ dir: "vertical" | "horizontal"; fraction: number } | null>(null);
+
+  type Rect = { x: number; y: number; w: number; h: number };
+  /** A resize handle: the split it drives, plus the box that split divides. */
+  type Seam = {
+    node: Extract<PaneNode, { kind: "split" }>;
+    dir: "vertical" | "horizontal";
+    box: Rect;
+  };
+
+  /**
+   * The tree flattened into what the DOM needs: a rectangle per pane and a
+   * handle per split, both in fractions of the content box.
+   *
+   * Panes are laid out absolutely from these rather than by nesting flex
+   * containers, because a nested container is rebuilt when the tree around it
+   * changes — and rebuilding a pane throws away its terminal, which cannot be
+   * restored (see the terminal layer's own note). Absolute boxes let every pane
+   * stay a sibling of every other, so splitting one never disturbs the rest.
+   *
+   * Pre-order (a before b) means the list reads left-to-right, top-to-bottom —
+   * the order ⌘1…⌘9 and the sidebar's pane strip both want.
+   */
+  const geometry = $derived.by(() => {
+    const slots: { view: PaneView; rect: Rect }[] = [];
+    const seams: Seam[] = [];
+    const walk = (n: PaneNode, r: Rect) => {
+      if (n.kind === "leaf") {
+        slots.push({ view: n.view, rect: r });
+        return;
+      }
+      seams.push({ node: n, dir: n.dir, box: r });
+      if (n.dir === "vertical") {
+        const w = r.w * n.fraction;
+        walk(n.a, { ...r, w });
+        walk(n.b, { x: r.x + w, y: r.y, w: r.w - w, h: r.h });
+      } else {
+        const h = r.h * n.fraction;
+        walk(n.a, { ...r, h });
+        walk(n.b, { x: r.x, y: r.y + h, w: r.w, h: r.h - h });
+      }
+    };
+    walk(tree, { x: 0, y: 0, w: 1, h: 1 });
+    return { slots, seams };
+  });
+
+  const panes = $derived(geometry.slots.map((s) => s.view));
   // The pane the sidebar and keyboard actions currently target.
   const active = $derived(panes[activePane] ?? panes[0]);
+
+  const flattenViews = (n: PaneNode): PaneView[] =>
+    n.kind === "leaf" ? [n.view] : [...flattenViews(n.a), ...flattenViews(n.b)];
 
   /**
    * Panes belong to an initiative, not to the window.
@@ -103,29 +187,27 @@
    * and it is exactly as you left it. An initiative you never split opens as a
    * single pane, and stays that way no matter what the previous one looked like.
    *
-   * `layoutInit` names the initiative the live `panes` / `activePane` / `split`
-   * currently describe. `layouts` holds every *other* initiative's, so the live
-   * three are always the authority for the one on screen — see `paneStrips`,
-   * which has to overlay them onto the map to read the truth.
+   * `layoutInit` names the initiative the live `tree` / `activePane` currently
+   * describe. `layouts` holds every *other* initiative's, so the live pair is
+   * always the authority for the one on screen — see `paneStrips`, which has to
+   * overlay them onto the map to read the truth.
    */
-  type Layout = { panes: PaneView[]; activePane: number; split: typeof split };
+  type Layout = { tree: PaneNode; activePane: number };
   let layouts = $state<Record<string, Layout>>({});
   let layoutInit = $state<string | null>(null);
 
   function useInitiative(id: string | null) {
     if (id === layoutInit) return;
-    if (layoutInit) layouts[layoutInit] = { panes, activePane, split };
+    if (layoutInit) layouts[layoutInit] = { tree, activePane };
     layoutInit = id;
 
     const saved = id ? layouts[id] : null;
     if (saved) {
-      panes = saved.panes;
+      tree = saved.tree;
       activePane = saved.activePane;
-      split = saved.split;
     } else {
-      panes = [{ ...newView(), initiativeId: id }];
+      tree = { kind: "leaf", view: { ...newView(), initiativeId: id } };
       activePane = 0;
-      split = null;
     }
   }
 
@@ -199,18 +281,19 @@
    *
    * Only split initiatives get one: with a single pane there is nothing to
    * choose between, and a one-chip strip would be chrome that says nothing. The
-   * live `panes`/`activePane`/`split` are layered over `layouts` because the
-   * map's entry for the current initiative is a snapshot from the last switch —
-   * stale by construction, and the strip has to show what is on screen now.
+   * live `tree`/`activePane` are layered over `layouts` because the map's entry
+   * for the current initiative is a snapshot from the last switch — stale by
+   * construction, and the strip has to show what is on screen now.
    */
   const paneStrips = $derived.by<Record<string, PaneChip[]>>(() => {
     const all: Record<string, Layout> = { ...layouts };
-    if (layoutInit) all[layoutInit] = { panes, activePane, split };
+    if (layoutInit) all[layoutInit] = { tree, activePane };
 
     const out: Record<string, PaneChip[]> = {};
     for (const [id, l] of Object.entries(all)) {
-      if (!l.split || l.panes.length < 2) continue;
-      out[id] = l.panes.map((p, i) => ({
+      const views = flattenViews(l.tree);
+      if (views.length < 2) continue;
+      out[id] = views.map((p, i) => ({
         ...paneChip(p),
         active: id === layoutInit && i === l.activePane,
       }));
@@ -238,7 +321,7 @@
 
   function termTextarea(): HTMLElement | null {
     // Scope to the active pane so focus lands on the right terminal when split.
-    return document.querySelector(`#pane-${activePane} .xterm-helper-textarea`);
+    return document.querySelector(`#pane-${activePane} .${TERMINAL_INPUT_CLASS}`);
   }
   // Null means the view has nothing focusable, so ⇥ stays on the sidebar.
   function mainFocusTarget(): HTMLElement | null {
@@ -319,36 +402,64 @@
   }
 
   /**
+   * The pane adjacent to the active one in `dir`, or -1 if there is none.
+   *
+   * Answered from the pane rectangles rather than from the tree: with arbitrary
+   * nesting, "the pane to the right" is a question about the screen, not about
+   * who your sibling happens to be — a pane's right-hand neighbour is often in a
+   * different branch entirely. Candidates must lie on that side *and* overlap on
+   * the perpendicular axis; the nearest wins, ties going to whichever starts
+   * closest to the current pane's own edge.
+   */
+  function neighbour(dir: "left" | "right" | "up" | "down"): number {
+    const rects = geometry.slots.map((s) => s.rect);
+    const cur = rects[activePane];
+    if (!cur) return -1;
+    const horiz = dir === "left" || dir === "right";
+    const EPS = 1e-6;
+
+    let best = -1;
+    let bestGap = Infinity;
+    let bestOffset = Infinity;
+    rects.forEach((r, i) => {
+      if (i === activePane) return;
+      const gap =
+        dir === "left"
+          ? cur.x - (r.x + r.w)
+          : dir === "right"
+            ? r.x - (cur.x + cur.w)
+            : dir === "up"
+              ? cur.y - (r.y + r.h)
+              : r.y - (cur.y + cur.h);
+      if (gap < -EPS) return; // overlapping or on the wrong side
+      const spanA = horiz ? [cur.y, cur.y + cur.h] : [cur.x, cur.x + cur.w];
+      const spanB = horiz ? [r.y, r.y + r.h] : [r.x, r.x + r.w];
+      if (Math.min(spanA[1], spanB[1]) - Math.max(spanA[0], spanB[0]) <= EPS) return;
+      const offset = Math.abs(spanB[0] - spanA[0]);
+      if (gap < bestGap - EPS || (gap < bestGap + EPS && offset < bestOffset)) {
+        best = i;
+        bestGap = gap;
+        bestOffset = offset;
+      }
+    });
+    return best;
+  }
+
+  /**
    * Directional focus across the whole window.
    *
-   * The sidebar sits left of the content; a split adds a second pane either
-   * beside pane 0 (`dir: "vertical"`, a vertical divider) or below it
-   * (`dir: "horizontal"`). Moving past the last thing in a direction does
-   * nothing rather than wrapping — in a two-item row a wrap is indistinguishable
-   * from not moving, and it would make ⌘← unreliable as "get me out of here",
-   * which is the job it inherited from ⌘⎋.
+   * The sidebar sits left of the content, so ⌃← walks panes until there are no
+   * more and then leaves for the sidebar — the "get me out of here" job it
+   * inherited from ⌘⎋. Every other direction stops at the edge rather than
+   * wrapping: a wrap is indistinguishable from not moving when there are only
+   * two panes in that row.
    */
   function moveFocus(dir: "left" | "right" | "up" | "down") {
-    const sideBySide = split?.dir === "vertical";
-    const stacked = split?.dir === "horizontal";
-
-    if (dir === "left") {
-      if (paneFocus !== "main") return;
-      if (sideBySide && activePane === 1) enterPane(0);
-      else leaveToSidebar();
-      return;
-    }
-
-    if (dir === "right") {
-      if (paneFocus === "sidebar") enterPane(activePane);
-      else if (sideBySide && activePane === 0) enterPane(1);
-      return;
-    }
-
-    // Up and down only mean something when the panes are stacked.
-    if (!stacked || paneFocus !== "main") return;
-    if (dir === "up" && activePane === 1) enterPane(0);
-    if (dir === "down" && activePane === 0) enterPane(1);
+    if (dir === "right" && paneFocus === "sidebar") return enterPane(activePane);
+    if (paneFocus !== "main") return;
+    const idx = neighbour(dir);
+    if (idx >= 0) enterPane(idx);
+    else if (dir === "left") leaveToSidebar();
   }
   function setTab(tab: PaneView["tab"]) {
     active.tab = tab;
@@ -466,7 +577,7 @@
     return v;
   }
 
-  // One agent, one pane. Two panes bound to the same agent mount two xterms over
+  // One agent, one pane. Two panes bound to the same agent mount two terminals over
   // a single PTY — the same stream painted twice, which is what made a split look
   // broken. Whichever pane claims the agent wins; the other falls back to the
   // initiative overview, giving a split "move it here" semantics.
@@ -862,8 +973,8 @@
    * This is the one place the UI moves focus on someone else's behalf, so it
    * tries hard not to destroy what the user was doing: it never displaces the
    * pane they are sitting in. With a single pane it splits and lands in the new
-   * one; already split, it takes the pane the user isn't in. A pane that already
-   * holds this agent is simply re-entered, so an agent that asks twice doesn't
+   * one; already split, it takes the next pane along. A pane that already holds
+   * this agent is simply re-entered, so an agent that asks twice doesn't
    * accumulate splits.
    *
    * The reason is toasted rather than shown in a dialog on purpose: the point is
@@ -881,16 +992,15 @@
     // initiative the user has never opened acquires a split with a dead half the
     // first time one of its agents asks for them.
     const here = panes[activePane];
-    if (idx === -1 && !split && !here.agentId && !here.wantFile && here.tab === "context") {
+    const alone = panes.length === 1;
+    if (idx === -1 && alone && !here.agentId && !here.wantFile && here.tab === "context") {
       idx = activePane;
     }
 
-    if (idx === -1 && !split) {
-      panes = [panes[activePane], { ...newView(), initiativeId }];
-      split = { dir: "vertical", fraction: 0.5 };
-      idx = 1;
+    if (idx === -1 && alone) {
+      idx = openSplit("vertical", { ...newView(), initiativeId });
     } else if (idx === -1) {
-      idx = activePane === 0 ? 1 : 0;
+      idx = (activePane + 1) % panes.length;
     }
 
     const v = panes[idx];
@@ -1393,6 +1503,60 @@
     ];
   }
 
+  /**
+   * Right-click inside a pane: the split commands, where the split is.
+   *
+   * ⌘D and ⌘⇧D are the fast path, but nothing on screen says they exist — the
+   * status bar hint only appears once an initiative is selected, and the native
+   * menu bar is three levels away from the pane you want to divide. Like the
+   * sidebar's menu, this selects first: every command acts on a pane, so it has
+   * to act on the one that was clicked.
+   */
+  function openPaneMenu(event: MouseEvent, idx: number) {
+    event.preventDefault();
+    activePane = idx;
+
+    const view = panes[idx];
+    const entries: MenuEntry[] = [
+      { label: "Split Right", hint: `${PRIMARY_MOD}D`, run: () => splitPane("vertical") },
+      { label: "Split Down", hint: `${PRIMARY_MOD}⇧D`, run: () => splitPane("horizontal") },
+    ];
+    if (view?.agentId) {
+      entries.push(separator, {
+        label: "Paste",
+        hint: `${PRIMARY_MOD}V`,
+        run: () => void pasteIntoTerminal(view.agentId!),
+      });
+    }
+    entries.push(
+      separator,
+      { label: "Balance Panes", hint: "⌘⌃=", disabled: panes.length < 2, run: balanceSplit },
+      {
+        label: "Close Pane",
+        hint: `${PRIMARY_MOD}W`,
+        disabled: panes.length < 2,
+        danger: true,
+        run: () => closePane(idx),
+      },
+    );
+
+    contextMenu = { x: event.clientX, y: event.clientY, label: "Pane actions", entries };
+  }
+
+  // Handed to the terminal rather than pushed down the socket: only it knows
+  // whether the program accepts a bracketed paste, and that envelope is what
+  // tells a CLI a pasted path from a typed one — see AgentTerminal's drop zone.
+  async function pasteIntoTerminal(agentId: string) {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) return;
+      const detail: PasteRequest = { agentId, text };
+      window.dispatchEvent(new CustomEvent(PASTE_INTO_AGENT, { detail }));
+    } catch {
+      toast("Clipboard is not available.");
+    }
+  }
+
   function openTreeMenu(event: MouseEvent, path: string, isFile: boolean) {
     event.preventDefault();
     contextMenu = {
@@ -1437,10 +1601,11 @@
     integrations: () => openSettings("integrations"),
     sync_context: () => syncImportedContext(),
     focus_next_waiting: () => focusNextWaiting(),
-    split_vertical: () => toggleSplit("vertical"),
-    split_horizontal: () => toggleSplit("horizontal"),
+    clear_terminal: () => clearActiveTerminal(),
+    split_vertical: () => splitPane("vertical"),
+    split_horizontal: () => splitPane("horizontal"),
     balance_split: () => balanceSplit(),
-    close_pane: () => closePane(activePane),
+    close_pane: () => closeActivePane(),
     help_docs: () => void openUrl(DOCS_URL),
     help_keys: () => void (modal = { kind: "palette" }),
     help_issue: () => void openUrl(ISSUES_URL),
@@ -1619,29 +1784,70 @@
 
   // ── Panes: split / balance / collapse ─────────────────────────────────────────
 
-  // Toggle a split in the given orientation. With no split, open a second pane
-  // onto the same initiative. Splitting again in the SAME orientation collapses
-  // back to the active pane; splitting in the other just re-orients.
-  function toggleSplit(dir: "vertical" | "horizontal") {
-    if (split) {
-      if (split.dir === dir) {
-        const keep = panes[activePane] ?? panes[0];
-        panes = [keep];
-        activePane = 0;
-        split = null;
-      } else {
-        split = { ...split, dir };
-      }
-      return;
-    }
+  const leafCount = (n: PaneNode): number =>
+    n.kind === "leaf" ? 1 : leafCount(n.a) + leafCount(n.b);
+
+  /**
+   * Re-weight every split so all panes come out the same size.
+   *
+   * Each side is weighted by how many panes it holds, which is what makes the
+   * result independent of how the splits happen to nest: ⌘D ⌘D ⌘D gives four
+   * equal columns whether you split the same pane four times or fanned out.
+   * Run after every split and close, so the layout never accumulates the
+   * halving-of-a-half slivers that make repeated splitting unusable.
+   */
+  function equalize(n: PaneNode): PaneNode {
+    if (n.kind === "leaf") return n;
+    const a = equalize(n.a);
+    const b = equalize(n.b);
+    return { ...n, a, b, fraction: leafCount(a) / (leafCount(a) + leafCount(b)) };
+  }
+
+  /** Rebuild the tree with pane `id`'s leaf replaced by whatever `make` returns. */
+  function replaceLeaf(n: PaneNode, id: number, make: (leaf: PaneNode) => PaneNode): PaneNode {
+    if (n.kind === "leaf") return n.view.id === id ? make(n) : n;
+    return { ...n, a: replaceLeaf(n.a, id, make), b: replaceLeaf(n.b, id, make) };
+  }
+
+  /** Drop pane `id`'s leaf, promoting its sibling into the parent's place. */
+  function dropLeaf(n: PaneNode, id: number): PaneNode | null {
+    if (n.kind === "leaf") return n.view.id === id ? null : n;
+    const a = dropLeaf(n.a, id);
+    if (!a) return n.b;
+    const b = dropLeaf(n.b, id);
+    if (!b) return a;
+    return { ...n, a, b };
+  }
+
+  // Halve the active pane and put `fresh` in the new half; returns its index.
+  function openSplit(dir: "vertical" | "horizontal", fresh: PaneView): number {
+    tree = equalize(
+      replaceLeaf(tree, active.id, (leaf) => ({
+        kind: "split",
+        dir,
+        fraction: 0.5,
+        a: leaf,
+        b: { kind: "leaf", view: fresh },
+      })),
+    );
+    return panes.findIndex((p) => p.id === fresh.id);
+  }
+
+  /**
+   * ⌘D / ⌘⇧D: split the focused pane right or down, as many times as you like.
+   *
+   * Always additive. It used to be a toggle — a second ⌘D collapsed the split
+   * and threw away a pane — which made the one keystroke everyone reaches for
+   * both "give me another pane" and "destroy one", decided by state the user
+   * could not see. Closing is ⌘W, which says so.
+   */
+  function splitPane(dir: "vertical" | "horizontal") {
     // The new pane inherits the initiative but NOT the agent. Copying agentId
     // pointed both panes at one session — two terminals rendering the same
     // stream, which is never what a split is for. Instead it asks what it should
     // hold, so a split lands on something useful in one step.
-    const source = panes[activePane];
-    panes = [source, { ...newView(), initiativeId: source.initiativeId, chooser: true }];
-    activePane = 1;
-    split = { dir, fraction: 0.5 };
+    const fresh: PaneView = { ...newView(), initiativeId: active.initiativeId, chooser: true };
+    activePane = openSplit(dir, fresh);
     // Not just `paneFocus = "main"`: that flipped the label without moving the
     // caret, so the keyboard stayed on <body> and the chooser — the whole
     // content of the pane that was just opened — could only be answered with the
@@ -1651,37 +1857,53 @@
   }
 
   function balanceSplit() {
-    if (split) split = { ...split, fraction: 0.5 };
+    tree = equalize(tree);
+  }
+
+  // ⌘K on the focused pane. Only the pane's own view is cleared — the agent is
+  // untouched and the server still holds the transcript, so a reconnect brings
+  // it back. That is what ⌘K means in a terminal: clear the screen, not the log.
+  function clearActiveTerminal() {
+    const agentId = active?.agentId;
+    if (!agentId) return toast("No terminal in this pane.");
+    const detail: AgentTarget = { agentId };
+    window.dispatchEvent(new CustomEvent(CLEAR_TERMINAL, { detail }));
   }
 
   /**
-   * Close one pane and keep the other; the survivor becomes the single view.
+   * Close one pane; its sibling subtree expands to fill the space.
    *
    * The agent in the closed pane is left running — closing a pane is a layout
    * decision, and the sidebar still lists the agent for whenever it is wanted
    * back. Stopping one is `delete`, and it asks first.
    */
   function closePane(idx: number) {
-    if (!split) return;
-    panes = [panes[idx === 0 ? 1 : 0]];
-    activePane = 0;
-    split = null;
-    // The keyboard was in the pane that just went away, so put it somewhere
-    // visible rather than leaving it on <body>, where bare keys run as global
-    // shortcuts with nothing on screen saying so.
-    enterPane(0);
+    if (panes.length < 2) return;
+    const wasActive = activePane;
+    const next = dropLeaf(tree, panes[idx].id);
+    if (!next) return;
+    tree = equalize(next);
+    // Panes after the closed one shift down by one; follow that so the ring
+    // stays on the pane it was already on.
+    const survivor = Math.min(wasActive > idx ? wasActive - 1 : wasActive, panes.length - 1);
+    // Only a closed pane forces the keyboard to move, and then onto whatever
+    // slid into its place — leaving it on <body> is what let bare keys run as
+    // global shortcuts with nothing on screen saying so. Closing some *other*
+    // pane (the ✕, or the menu on a pane you are not in) must not yank focus.
+    if (wasActive === idx) enterPane(survivor);
+    else activePane = survivor;
   }
 
   // ⌘W on the focused pane. With nothing split there is no pane to close, and
   // silently closing the window instead — the other thing ⌘W means — would be a
   // destructive answer to a layout keystroke.
   function closeActivePane() {
-    if (!split) return toast(`Only one pane — ${PRIMARY_MOD}D splits it.`);
+    if (panes.length < 2) return toast(`Only one pane — ${PRIMARY_MOD}D splits it.`);
     closePane(activePane);
   }
 
-  // Shared drag handler for both dividers: the sidebar's (width in px) and the
-  // split's (fraction of the content box).
+  // Shared drag handler for both kinds of divider: the sidebar's (width in px)
+  // and a split's (fraction of the box that split divides).
   function startDrag(onMove: (e: PointerEvent) => void) {
     return (e: PointerEvent) => {
       e.preventDefault();
@@ -1694,13 +1916,20 @@
     };
   }
 
-  const startSplitDrag = startDrag((ev) => {
-    if (!split || !contentEl) return;
-    const r = contentEl.getBoundingClientRect();
-    const f =
-      split.dir === "vertical" ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height;
-    split = { ...split, fraction: Math.min(0.85, Math.max(0.15, f)) };
-  });
+  // `seam.node` is a live reference into `tree`, so the fraction is written
+  // where the layout reads it; `seam.box` maps the pointer from the whole
+  // content area back into the sub-box that one split governs.
+  function startSeamDrag(seam: Seam) {
+    return startDrag((ev) => {
+      if (!contentEl) return;
+      const r = contentEl.getBoundingClientRect();
+      const within =
+        seam.dir === "vertical"
+          ? ((ev.clientX - r.left) / r.width - seam.box.x) / seam.box.w
+          : ((ev.clientY - r.top) / r.height - seam.box.y) / seam.box.h;
+      seam.node.fraction = Math.min(0.9, Math.max(0.1, within));
+    });
+  }
 
   const startSidebarDrag = startDrag((ev) => {
     if (!bodyEl) return;
@@ -1709,14 +1938,18 @@
   });
 
   // Window-management shortcuts, handled as raw events rather than through the
-  // remappable keymap: ⌘D / ⌘⇧D split, ⌘⌃= balances.
+  // remappable keymap: ⌘D splits right, ⌘⇧D splits down, ⌘⌃= balances, ⌘K clears.
   function paneShortcut(e: KeyboardEvent): (() => void) | null {
     const primary = e.metaKey || e.ctrlKey;
     if (!primary) return null;
     const key = e.key.toLowerCase();
     if (e.metaKey && e.ctrlKey && (key === "=" || key === "+")) return balanceSplit;
+    // ⌘K clears the terminal, as it does in Terminal.app and iTerm2. Mac-only,
+    // for the same reason as ⌘W below: ⌃K is kill-to-end-of-line in every
+    // readline, and taking it would cost every user that.
+    if (key === "k" && IS_MAC && e.metaKey && !e.ctrlKey) return clearActiveTerminal;
     if (key === "d" && !(e.metaKey && e.ctrlKey))
-      return () => toggleSplit(e.shiftKey ? "horizontal" : "vertical");
+      return () => splitPane(e.shiftKey ? "horizontal" : "vertical");
     // The one combo here that insists on the *platform's* modifier rather than
     // either. ⌃W is delete-word-backwards in every readline and half the TUIs an
     // agent runs; on a Mac there is no reason to take it, since ⌘W is what the
@@ -1741,7 +1974,7 @@
     );
   }
 
-  // Anything that swallows keys for itself: a form field, or xterm's hidden
+  // Anything that swallows keys for itself: a form field, or the terminal's hidden
   // textarea — the terminal is a text surface like any other, and every key it
   // can use has to reach it.
   function typingTarget(): boolean {
@@ -1763,12 +1996,12 @@
   const IS_MAC = /Mac/i.test(navigator.userAgent);
   const PRIMARY_MOD = IS_MAC ? "⌘" : "⌃";
 
-  // A real text field, as opposed to xterm's hidden textarea — which is a text
-  // surface for key routing only: it holds no caret the user can move, so the
-  // editing combos a field would want mean nothing there.
+  // A real text field, as opposed to the terminal's hidden textarea — which is a
+  // text surface for key routing only: it holds no caret the user can move, so
+  // the editing combos a field would want mean nothing there.
   function editableTarget(): boolean {
     const ae = document.activeElement as HTMLElement | null;
-    if (!ae || ae.classList.contains("xterm-helper-textarea")) return false;
+    if (!ae || ae.classList.contains(TERMINAL_INPUT_CLASS)) return false;
     return typingTarget();
   }
 
@@ -1807,7 +2040,7 @@
     runAction(action);
   }
 
-  // Capture phase so xterm can't swallow them: Tab, pane shortcuts, and every
+  // Capture phase so the terminal can't swallow them: Tab, pane shortcuts, and every
   // modifier combo (⌃P, ⌃B…), which the terminal would otherwise eat.
   function onCaptureKeydown(e: KeyboardEvent) {
     if (modal || editing) return; // overlays install their own capture handlers
@@ -1902,7 +2135,8 @@
     }
     if (deleteHint) hints.push({ spec: k("delete"), label: deleteHint });
     if (selectedInitiative) hints.push({ spec: `${PRIMARY_MOD}D`, label: "Split" });
-    if (split) hints.push({ spec: `${PRIMARY_MOD}W`, label: "Close pane" }, { spec: "⌘⌃=", label: "Balance" });
+    if (panes.length > 1)
+      hints.push({ spec: `${PRIMARY_MOD}W`, label: "Close pane" }, { spec: "⌘⌃=", label: "Balance" });
     hints.push(palette);
     return hints;
   });
@@ -2174,47 +2408,76 @@
       ></div>
     {/if}
 
-    <!-- Content area: one pane, or two split by a draggable divider. -->
-    <div
-      bind:this={contentEl}
-      class={["flex min-h-0 min-w-0 flex-1", split?.dir === "horizontal" ? "flex-col" : "flex-row"]}
-    >
-      {@render pane(panes[0], 0)}
-      {#if split}
+    <!-- Content area: every pane is a direct child, placed by the rectangle the
+         split tree computes for it. Absolute rather than nested flex containers,
+         so splitting one pane never reparents another — a reparented pane is
+         rebuilt, and a rebuilt pane loses its terminal for good.
+
+         Unkeyed on purpose, so panes are matched by position. Keying by pane id
+         looks more correct and is worse where it counts: every initiative has
+         its own pane ids, so switching initiatives would key-miss on all of them
+         and tear down every terminal, when the old view could simply reconnect.
+         That churn is what left panes blank or clipped. By position, a switch
+         costs a reconnect; the price is that splitting a pane with panes after
+         it reconnects those too. -->
+    <div bind:this={contentEl} class="relative min-h-0 min-w-0 flex-1">
+      {#each geometry.slots as slot, idx}
+        {@render pane(slot.view, idx, slot.rect)}
+      {/each}
+      {#each geometry.seams as seam, i (i)}
         <div
           role="separator"
-          aria-orientation={split.dir === "vertical" ? "vertical" : "horizontal"}
+          aria-orientation={seam.dir === "vertical" ? "vertical" : "horizontal"}
           aria-label="Resize split"
           class={[
-            "shrink-0 bg-border hover:bg-accent/60",
-            split.dir === "vertical" ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize",
+            "absolute z-20 bg-border hover:bg-accent/60",
+            seam.dir === "vertical" ? "w-px cursor-col-resize" : "h-px cursor-row-resize",
           ]}
-          onpointerdown={startSplitDrag}
-        ></div>
-        {@render pane(panes[1], 1)}
-      {/if}
+          style={seam.dir === "vertical"
+            ? `left:${(seam.box.x + seam.box.w * seam.node.fraction) * 100}%; top:${seam.box.y * 100}%; height:${seam.box.h * 100}%`
+            : `top:${(seam.box.y + seam.box.h * seam.node.fraction) * 100}%; left:${seam.box.x * 100}%; width:${seam.box.w * 100}%`}
+          onpointerdown={startSeamDrag(seam)}
+        >
+          <!-- The seam is a hairline, but a 1px pointer target is not a target.
+               This widens the grab area without widening the line. -->
+          <div
+            class={[
+              "absolute",
+              seam.dir === "vertical" ? "-left-1 -right-1 inset-y-0" : "-top-1 -bottom-1 inset-x-0",
+            ]}
+          ></div>
+        </div>
+      {/each}
     </div>
   </div>
 
-  {#snippet pane(view: PaneView, idx: number)}
+  {#snippet pane(view: PaneView, idx: number, rect: Rect)}
     {@const init = ws.initiatives.find((i) => i.id === view.initiativeId) ?? null}
     <main
       id={"pane-" + idx}
       class={[
-        "relative min-h-0 min-w-0 overflow-hidden bg-canvas",
-        split && activePane === idx ? "ring-1 ring-inset ring-accent/30" : "",
+        "absolute overflow-hidden bg-canvas",
+        panes.length > 1 && activePane === idx ? "ring-1 ring-inset ring-accent/30" : "",
         view.agentId && view.tab === "context" && paneFocus === "main" && activePane === idx
           ? "ring-1 ring-inset ring-accent/60"
           : "",
       ]}
-      style={split ? (idx === 0 ? `flex: 0 0 ${split.fraction * 100}%` : "flex: 1 1 0%") : "flex: 1 1 0%"}
+      style="left:{rect.x * 100}%; top:{rect.y * 100}%; width:{rect.w * 100}%; height:{rect.h * 100}%"
       onpointerdowncapture={() => (activePane = idx)}
+      oncontextmenu={(e) => {
+        // The tree draws its own menu for the row under the pointer; letting
+        // this one fire too would replace it with the pane's.
+        if ((e.target as HTMLElement).closest("[data-tree-pane]")) return;
+        openPaneMenu(e, idx);
+      }}
     >
       {#if panes.length > 1}
         <!-- Pane number, so ⌘1/⌘2 have something to aim at. Drawn only when
              there is more than one pane — a lone pane needs no label — and it
              names its own shortcut rather than just counting, which is the
-             difference between a label and a hint. Click-through, so it can sit
+             difference between a label and a hint. Past the ninth pane there is
+             no shortcut left to name, so it goes back to counting rather than
+             advertising a ⌘10 that does nothing. Click-through, so it can sit
              over a terminal without stealing the corner. -->
         <div
           class={[
@@ -2224,10 +2487,10 @@
               : "bg-surface/80 text-muted",
           ]}
         >
-          {PRIMARY_MOD}{idx + 1}
+          {idx < 9 ? `${PRIMARY_MOD}${idx + 1}` : idx + 1}
         </div>
       {/if}
-      {#if split}
+      {#if panes.length > 1}
         <button
           class="absolute right-1 top-1 z-10 rounded bg-surface/80 px-1 text-[11px] text-muted hover:text-fg"
           title="Close pane"
@@ -2355,7 +2618,7 @@
 
       <!-- Persistent terminal layer.
            It lives outside the tab branch on purpose: rendering it under
-           `tab === "context"` destroyed the xterm on every switch to Diff or
+           `tab === "context"` destroyed the terminal on every switch to Diff or
            Tree, and rebuilding it cannot restore a TUI. While unmounted the
            agent has no subscriber, so lib/stream.ts drops its output on the
            floor; on return all we could do was replay a raw byte log recorded at
@@ -2368,7 +2631,7 @@
            textarea out of the focus order.
 
            No {#key} either: a terminal persists and reconnects when the agent
-           changes, avoiding WebGL-context churn that broke the UI. -->
+           changes, avoiding the rebuild churn that broke the UI. -->
       {#if init && view.agentId}
         <div
           class={["absolute inset-0", view.tab === "context" ? "" : "invisible"]}

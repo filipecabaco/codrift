@@ -293,6 +293,24 @@ export function openUrl(url: string): Promise<unknown> {
   return rpc("open_url", { url });
 }
 
+/**
+ * Point `window.open` at the system browser.
+ *
+ * The webview does not implement it, so anything reaching for it — our own code
+ * or a library's, such as ghostty-web's built-in URL and OSC 8 link providers —
+ * silently does nothing. Routing it through the backend is what opening a link
+ * means in a desktop app anyway. Idempotent: only the first call replaces it.
+ */
+export function routeWindowOpenToBrowser(): void {
+  const w = window as Window & { __codriftWindowOpen?: true };
+  if (w.__codriftWindowOpen) return;
+  w.__codriftWindowOpen = true;
+  window.open = (url?: string | URL): null => {
+    if (url) void openUrl(String(url)).catch(() => {});
+    return null;
+  };
+}
+
 type TauriGlobal = { core?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> } };
 
 export async function quitApp(): Promise<void> {
@@ -331,6 +349,32 @@ export const MENU_EVENT = "codrift:menu";
  * reaches whichever exist without App.svelte having to hold a reference to each.
  */
 export const REDRAW_TERMINALS = "codrift:redraw-terminals";
+
+/**
+ * Asks the terminal showing `agentId` to paste `text` into it.
+ *
+ * Broadcast for the same reason as `REDRAW_TERMINALS`, plus one of its own: a
+ * paste has to go through the terminal rather than straight down the socket,
+ * because only it knows whether the program on the other end turned
+ * bracketed-paste mode on. See the drop handler in AgentTerminal.
+ */
+export const PASTE_INTO_AGENT = "codrift:paste-into-agent";
+export type PasteRequest = { agentId: string; text: string };
+
+/** Asks the terminal showing `agentId` to clear its buffer — ⌘K. */
+export const CLEAR_TERMINAL = "codrift:clear-terminal";
+export type AgentTarget = { agentId: string };
+
+/**
+ * Marks the element the terminal takes focus on.
+ *
+ * Key routing has to tell it from a real text field: it is a text surface for
+ * routing only, holding no caret the user can move, so the editing combos a
+ * field would want mean nothing there. And it looks exactly like one from the
+ * outside — the terminal is a focused `contenteditable`, so `isContentEditable`
+ * answers true. The class is the only handle the DOM offers to tell them apart.
+ */
+export const TERMINAL_INPUT_CLASS = "codrift-terminal-input";
 
 export type AssignedItem = {
   service: string;

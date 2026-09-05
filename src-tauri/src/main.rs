@@ -130,10 +130,20 @@ fn main() {
 
             start_server(app.handle(), &token, died.clone());
 
-            match await_our_server(&token, &died) {
-                Ok(()) => start_heartbeat(),
-                Err(reason) => show_startup_error(app.handle(), &reason),
-            }
+            // Off the main thread. `setup` runs inside
+            // applicationDidFinishLaunching on macOS, so waiting for the sidecar
+            // here stalls the AppKit run loop: the window never paints and macOS
+            // files the process as a hang after ~5s. A first launch reliably costs
+            // that much, because Burrito unpacks the ERTS tree before the release
+            // can bind its port.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || match await_our_server(&token, &died) {
+                Ok(()) => {
+                    load_app(&handle);
+                    start_heartbeat();
+                }
+                Err(reason) => show_startup_error(&handle, &reason),
+            });
             Ok(())
         })
         // Intercept menu events (especially CMD+Q on macOS)
@@ -265,6 +275,11 @@ fn sort_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<S
 ///    and `⌘⌃=` appear here on purpose, forwarding to the same handlers the page
 ///    would have run, so the split commands finally have a visible name. `⌘1`…`⌘9`
 ///    are deliberately *absent*: the page uses them to jump between panes.
+///
+///    Where an accelerator does duplicate a keymap default — `⌘,` for Settings,
+///    `⌘P` for the palette — it names the *same* action, so the menu and the
+///    page agree and the dev server (which has no menu bar to swallow it) still
+///    works from the binding alone.
 fn build_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let sep = || PredefinedMenuItem::separator(handle);
 
@@ -344,7 +359,20 @@ fn build_menu<R: tauri::Runtime>(handle: &tauri::AppHandle<R>) -> tauri::Result<
             &command(handle, "balance_split", "Balance Panes", Some("CmdOrCtrl+Control+="))?,
             &command(handle, "close_pane", "Close Pane", Some("Shift+CmdOrCtrl+W"))?,
             &sep()?,
-            &command(handle, "palette", "Command Palette", Some("CmdOrCtrl+K"))?,
+            // macOS only, and deliberately: ⌃K is kill-to-end-of-line in every
+            // readline, so on Linux and Windows the terminal keeps it and this
+            // item is menu-only.
+            &command(
+                handle,
+                "clear_terminal",
+                "Clear Terminal",
+                if cfg!(target_os = "macos") { Some("Cmd+K") } else { None },
+            )?,
+            &sep()?,
+            // Matches the default `palette` binding rather than shadowing it
+            // with a second key. ⌘K used to be here, which quietly took the one
+            // combo a terminal wants for clearing its own screen.
+            &command(handle, "palette", "Command Palette", Some("CmdOrCtrl+P"))?,
         ],
     )?;
 
@@ -523,8 +551,12 @@ fn port_conflict_message(saw_foreign_server: bool) -> String {
     if saw_foreign_server {
         format!(
             "Another Codrift backend is already using port {PORT}, so this window has no server \
-             of its own. It is usually a sidecar left running by an older version.\n\n\
-             Quit the other Codrift, or run this in a terminal, then reopen Codrift:\n\n\
+             of its own.\n\n\
+             A backend left over from a closed window is taken back automatically, so this is \
+             most likely a second Codrift that still has a window of its own — quit it and \
+             reopen this one.\n\n\
+             If there is no other window, $TMPDIR/codrift_desktop.log says why the port could \
+             not be reclaimed. As a last resort:\n\n\
              pkill -f 'burrito/desktop_.*/erts-.*/bin/beam.smp'"
         )
     } else {
@@ -561,6 +593,35 @@ fn parse_instance(response: &str) -> Option<String> {
     let rest = &response[start..];
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+/// Load the app now that our own backend is the one answering on the port.
+///
+/// The window is declared in `tauri.conf.json`, so it starts loading
+/// `http://localhost:43117/index.html` the instant the process launches — always
+/// before the sidecar has bound the port (a packaged build unpacks its ERTS tree
+/// first, so the gap is seconds, not milliseconds). Nothing retries that first
+/// navigation: it fails against a closed port and the window stays blank, or it
+/// succeeds against a *foreign* server and paints its bare "not found" body, for
+/// the rest of the session. `await_our_server` is the only moment the shell knows
+/// the page will get the real app, so the navigation belongs here.
+///
+/// Unconditional: a provisional load that never committed leaves nothing to
+/// inspect, so there is no reliable way to ask whether the first attempt worked.
+/// Reloading a one-second-old SPA costs nothing; opening blank costs the session.
+fn load_app(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    match format!("http://{HOST}:{PORT}/index.html").parse::<tauri::Url>() {
+        Ok(url) => {
+            if let Err(err) = window.navigate(url) {
+                eprintln!("Could not load the Codrift UI: {}", err);
+            }
+        }
+        Err(err) => eprintln!("Could not build the Codrift UI url: {}", err),
+    }
 }
 
 /// Replace whatever the window loaded with a readable explanation. Without this
