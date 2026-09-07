@@ -1,14 +1,14 @@
 cask "codrift" do
-  version "0.3.0"
+  version "0.3.1"
 
   on_arm do
-    sha256 "cb44e6720849fa00b5bfdd9e798aca0093cff1ba41b8e5739de9e9ee1edbd5b7"
+    sha256 "dadac4c5d45666bb5c6e290d15c78575ba1d84f546765b91fce3ad9520577a12"
 
     url "https://github.com/filipecabaco/codrift/releases/download/v#{version}/Codrift_#{version}_aarch64.dmg",
         verified: "github.com/filipecabaco/codrift/"
   end
   on_intel do
-    sha256 "1b12d12152d1fecfd9d83d74dff2cd871b0fc615e1b1e91000b07f0f97508c1a"
+    sha256 "bcae554fe66be1d625b8377cd55613324bd1444301d653e8df5a01345778db8f"
 
     url "https://github.com/filipecabaco/codrift/releases/download/v#{version}/Codrift_#{version}_x64.dmg",
         verified: "github.com/filipecabaco/codrift/"
