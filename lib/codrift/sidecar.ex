@@ -22,6 +22,32 @@ defmodule Codrift.Sidecar do
       which is the case `Codrift.ShutdownManager`'s heartbeat cannot see (a
       heartbeat that never arrived is indistinguishable from a slow boot).
 
+  ## Whose sidecar is it
+
+  The unpack directory is named for the *release*, and `desktop` is ex_tauri's
+  default, so it is not ours alone: another Burrito app generated the same way
+  unpacks beside us under `.burrito/desktop_erts-...`. Four sidecars of one were
+  found on this machine and read here as abandoned Codrifts. Every predicate
+  below that answers on the command line alone therefore answers for both apps,
+  and `reap_orphans/0` — which signals on nothing but that answer — would have
+  SIGTERMed another vendor's running app.
+
+  `identify/1` is the missing half: the release name cannot separate the two,
+  but the payload can, so an eviction candidate has to prove it is carrying
+  Codrift. It has three answers, not two, because the unpack directory of a
+  running sidecar can be deleted out from under it — an upgrade that cleans up
+  after itself leaves the old version running from a path that no longer exists,
+  which is exactly the long-lived orphan this module was written for. "Cannot
+  tell" has to stay distinguishable from "not ours", and the two callers weigh
+  it differently:
+
+    * `reclaim_port/1` evicts on `:unknown`. `:43117` is ours by registration,
+      so a parentless Burrito sidecar squatting it is an old Codrift whichever
+      way its directory went.
+    * `reap_orphans/0` requires `:ours`. It sweeps the whole machine on nothing
+      but a path shape, and leaking one of our own orphans is a far smaller harm
+      than killing someone else's app.
+
   Unix only. On other platforms every predicate answers "not an orphan", which
   degrades to the previous behaviour rather than guessing.
   """
@@ -36,6 +62,16 @@ defmodule Codrift.Sidecar do
   @burrito_marker "/.burrito/desktop_"
   @beam "beam.smp"
 
+  # Burrito unpacks each release into `lib/<app>-<vsn>`, so our own application
+  # directory is what tells a Codrift payload from anyone else's.
+  @release_app "codrift-"
+
+  # argv[0] is the emulator inside the unpack root, which is why this anchors and
+  # matches lazily: `-root` repeats the same directory later on the command line
+  # and a greedy match would read the last copy. The directory segment itself
+  # never contains a space; the path above it does ("Application Support").
+  @unpack_root ~r{^(.*?/\.burrito/desktop_[^/\s]+)/}
+
   # How long a SIGTERMed sidecar gets to release the port. It runs a real
   # application shutdown (agents, worktree locks), so this is not instant.
   @term_grace 5_000
@@ -44,6 +80,14 @@ defmodule Codrift.Sidecar do
 
   @typedoc "Outcome of trying to make the port bindable."
   @type reclaim :: :free | :reclaimed | {:blocked, String.t()}
+
+  @typedoc """
+  Whose release a sidecar is running.
+
+  `:unknown` is a directory that has been deleted while its process kept
+  running, not a guess — see "Whose sidecar is it" above.
+  """
+  @type identity :: :ours | :foreign | :unknown
 
   @doc """
   Makes `port` bindable, evicting an abandoned sidecar if that is what holds it.
@@ -63,9 +107,16 @@ defmodule Codrift.Sidecar do
     do: {:blocked, "could not identify the process listening on #{port}"}
 
   defp reclaim_from(pid, port) do
-    if orphan_sidecar?(pid),
-      do: evict(pid, port),
-      else: {:blocked, "pid #{pid} holds #{port} and is not an abandoned Codrift sidecar"}
+    cond do
+      not orphan_sidecar?(pid) ->
+        {:blocked, "pid #{pid} holds #{port} and is not an abandoned Codrift sidecar"}
+
+      identify(command(pid)) == :foreign ->
+        {:blocked, "pid #{pid} holds #{port} but carries another app's release, not Codrift's"}
+
+      true ->
+        evict(pid, port)
+    end
   end
 
   @doc """
@@ -76,11 +127,15 @@ defmodule Codrift.Sidecar do
   for it; the rest go on polling integrations and holding agent processes with
   no window to show them in. They can only be cleaned up from outside, so a
   starting sidecar does it on everyone's behalf.
+
+  Only sidecars that prove they are Codrift's: nothing here holds a port of ours
+  or answers to us in any way, so a match on the path shape alone is the whole
+  evidence, and it is evidence another Burrito app satisfies too.
   """
   @spec reap_orphans() :: [pos_integer()]
   def reap_orphans do
     burrito_pids()
-    |> Enum.filter(&orphan_sidecar?/1)
+    |> Enum.filter(&(orphan_sidecar?(&1) and identify(command(&1)) == :ours))
     |> Enum.map(fn pid ->
       Logger.warning("[Codrift.Sidecar] stopping abandoned sidecar #{pid} (its window is gone)")
       signal(pid, "TERM")
@@ -109,8 +164,43 @@ defmodule Codrift.Sidecar do
   @spec packaged_sidecar?(String.t() | nil) :: boolean()
   def packaged_sidecar?(nil), do: false
 
-  def packaged_sidecar?(command),
-    do: String.contains?(command, @burrito_marker) and String.contains?(command, @beam)
+  def packaged_sidecar?(command) do
+    String.contains?(command, @burrito_marker) and String.contains?(command, @beam) and
+      not cli_invocation?(command)
+  end
+
+  # Burrito appends a CLI subcommand's own arguments after `-extra`. `codrift
+  # mcp` and friends run out of the same unpack directory and carry the same
+  # payload, so nothing above this line can tell them from a sidecar — and a
+  # command typed in a terminal, or spawned by an editor, is regularly a child
+  # of init with no window it could have lost. The shell's sidecar is spawned
+  # with no subcommand at all, which is exactly what `cli_argv/0` keys on.
+  defp cli_invocation?(command), do: Regex.match?(~r/-extra\s+\S/, command)
+
+  @doc """
+  Whether `command` is running Codrift's release, another app's, or one we can
+  no longer read.
+
+  Answers from the unpack directory the process named in its own argv, so it
+  costs a `File.ls/1` and no `ps`. A directory that is gone answers `:unknown`
+  rather than `:foreign`: the payload was ours or not long before it was
+  deleted, and this cannot say which.
+  """
+  @spec identify(String.t() | nil) :: identity()
+  def identify(nil), do: :unknown
+
+  def identify(command) do
+    case Regex.run(@unpack_root, command) do
+      [_, root] -> classify(File.ls(Path.join(root, "lib")))
+      nil -> :unknown
+    end
+  end
+
+  defp classify({:ok, apps}) do
+    if Enum.any?(apps, &String.starts_with?(&1, @release_app)), do: :ours, else: :foreign
+  end
+
+  defp classify({:error, _}), do: :unknown
 
   defp evict(pid, port) do
     Logger.warning(
